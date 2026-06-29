@@ -32,8 +32,7 @@ function NavLink({
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
-        "group flex items-center rounded-md text-[13.5px] font-medium transition-colors",
-        collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-2.5 py-[7px]",
+        "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13.5px] font-medium transition-colors",
         active
           ? "bg-panel text-foreground shadow-card"
           : "text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
@@ -91,12 +90,7 @@ export function SideNav() {
       )}
     >
       {/* brand + collapse toggle */}
-      <div
-        className={cn(
-          "flex h-14 shrink-0 items-center border-b border-line",
-          collapsed ? "justify-center px-0" : "gap-2.5 px-5",
-        )}
-      >
+      <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-line px-5">
         <BrandLogo className="h-8 w-8 shrink-0 rounded-lg" fillClassName="fill-brand" fallbackBg="bg-brand/12" />
         {!collapsed && (
           <div className="leading-tight">
@@ -109,7 +103,7 @@ export function SideNav() {
       </div>
 
       {/* nav */}
-      <nav className={cn("min-h-0 flex-1 overflow-auto py-3", collapsed ? "px-2" : "px-3")}>
+      <nav className="min-h-0 flex-1 overflow-auto px-3 py-3">
         {NAV_GROUPS.map((group) => {
           const items = group.items.filter((i) => canSee(i, perms));
           if (items.length === 0) return null;
@@ -139,8 +133,8 @@ export function SideNav() {
       {/* user footer */}
       <div
         className={cn(
-          "flex shrink-0 border-t border-line",
-          collapsed ? "flex-col items-center gap-2 px-2 py-3" : "items-center gap-2.5 px-3.5 py-3",
+          "flex shrink-0 border-t border-line px-3.5 py-3",
+          collapsed ? "flex-col items-start gap-2" : "items-center gap-2.5",
         )}
       >
         <div
@@ -166,24 +160,19 @@ export function SideNav() {
       </div>
 
       {/* collapse / expand toggle */}
-      <div className={cn("shrink-0 border-t border-line", collapsed ? "px-2 py-2" : "px-3 py-2")}>
+      <div className="shrink-0 border-t border-line px-3 py-2">
         <button
           onClick={toggle}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={cn(
-            "flex w-full items-center rounded-md py-2 text-[13px] font-medium text-faint transition-colors hover:bg-foreground/[0.05] hover:text-foreground",
-            collapsed ? "justify-center px-0" : "gap-2.5 px-2.5",
-          )}
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-medium text-faint transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >
           {collapsed ? (
             <PanelLeftOpen className="h-[18px] w-[18px] shrink-0" />
           ) : (
-            <>
-              <PanelLeftClose className="h-[18px] w-[18px] shrink-0" />
-              <span>Collapse</span>
-            </>
+            <PanelLeftClose className="h-[18px] w-[18px] shrink-0" />
           )}
+          {!collapsed && <span>Collapse</span>}
         </button>
       </div>
     </aside>
