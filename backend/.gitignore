@@ -1,0 +1,41 @@
+# Environments
+venv/
+env/
+.env/
+.venv/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django stuff:
+*.sqlite3
+*.sqlite3-journal
+
+# User-uploaded media (org branding icons, etc.) + collected static
+media/
+staticfiles/
+
+# VS Code
+.vscode/
+
+# Ignore local config files
+credentials.txt
+dashboard_data.json
+.env
+data.json
+python-installer.exe
+
+# Node
+node_modules/
+
+# Ignore data folders
+data/
+**/data/
+
+# Ignore fabric definitions
+raw_fabric_definitions/
+**/raw_fabric_definitions/

@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets & local environment  (NEVER commit — keep .env.sample as the template)
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.sample
+!.env.local.example
+*.env
+credentials.txt
+# production dump used for local seeding — contains real secrets
+.seed/
+TODO.md
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Proprietary / extracted data  (ETL output and cloned client repos)
+# ─────────────────────────────────────────────────────────────────────────────
+**/data/
+**/raw_fabric_definitions/
+**/dbt_artifacts/
+dashboard_data.json
+data.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env/
+.venv/
+env.bak/
+venv.bak/
+*.sqlite3
+*.sqlite3-journal
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node / Next.js (frontend)
+# ─────────────────────────────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local scratch / working files (replay output, tool dumps, ad-hoc scripts)
+# ─────────────────────────────────────────────────────────────────────────────
+_out/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude skills — keep only index-project, ignore all other local skills
+# ─────────────────────────────────────────────────────────────────────────────
+.claude/skills/*
+!.claude/skills/index-project/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logs & misc
+# ─────────────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editors / OS
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.docx

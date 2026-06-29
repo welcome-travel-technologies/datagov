@@ -1,0 +1,8 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json",
+  "name": "2b215f822e8470825269",
+  "displayName": "📢 Braze Engagement",
+  "displayOption": "FitToWidth",
+  "height": 4000,
+  "width": 1700
+}

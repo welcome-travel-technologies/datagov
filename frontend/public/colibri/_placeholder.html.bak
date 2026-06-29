@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dbt-colibri — not generated yet</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Hanken Grotesk", system-ui, sans-serif;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        background: #fafafa;
+        color: #3a3a3a;
+      }
+      .box {
+        max-width: 540px;
+        padding: 2rem;
+        text-align: center;
+      }
+      code {
+        background: #f0f0f0;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
+      h1 { color: #00a87a; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h1>Colibri dashboard not generated yet</h1>
+      <p>
+        This tab embeds the <strong>exact</strong> dbt-colibri dashboard (dbt-only, static).
+        To populate it, run colibri on your dbt artifacts and drop the result here:
+      </p>
+      <p style="text-align: left">
+        <code>pip install dbt-colibri</code><br /><br />
+        <code>colibri generate --manifest manifest.json --catalog catalog.json</code><br /><br />
+        then copy <code>dist/index.html</code> →
+        <code>public/colibri/index.html</code> (replacing this file).
+      </p>
+      <p>
+        Meanwhile, the <strong>Lineage Graph</strong> tab gives the full cross-tool
+        (dbt&nbsp;↔&nbsp;PowerBI) column lineage built on your live API.
+      </p>
+    </div>
+  </body>
+</html>

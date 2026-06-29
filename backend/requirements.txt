@@ -1,0 +1,32 @@
+Django==6.0.3
+djangorestframework==3.17.0
+django-cors-headers==4.9.0
+django-filter==25.2
+gunicorn==21.2.0
+google-genai==1.68.0
+python-dotenv>=1.1.0
+pydantic-ai-slim[google]
+uvicorn[standard]
+aiohttp==3.11.11
+mistune==3.2.0
+slack_sdk
+slack-blocks-markdown
+django-q2
+croniter  # required by django-q2 for CRON schedule_type (ETL cron jobs); not auto-installed
+psycopg[binary]
+psycopg2-binary
+Pillow
+google-cloud-bigquery
+google-cloud-storage
+pandas-gbq
+db-dtypes
+dbt-artifacts-parser
+sqlglot>=25  # column-level lineage extraction from compiled dbt SQL
+pyyaml
+responses
+pytest
+pytest-django
+pytest-mock
+whitenoise
+django-tailwind
+charset-normalizer>=3.3  # CSV import: cp1252/cp1253 encoding detection

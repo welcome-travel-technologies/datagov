@@ -1,0 +1,15 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json",
+  "name": "c361a5f0c5486c29875b",
+  "displayName": "👤 Users (agg)",
+  "displayOption": "FitToWidth",
+  "height": 7000,
+  "width": 1700,
+  "visualInteractions": [
+    {
+      "source": "f15318632a41aba6592a",
+      "target": "ac9d1d8964809456d046",
+      "type": "NoFilter"
+    }
+  ]
+}

@@ -1,0 +1,1232 @@
+{
+  "description": "Historically problematic AI-assistant questions (timeouts / excessive tool-call loops / tool errors), mined from production chat history. Replay them with the replay_chat harness to regression-test agent changes. See README.md in this folder.",
+  "source": "production ChatMessage.debug_meta on assistant turns where error_count>0 OR tool_call_count>=15, deduped by question, disambiguation-flow/trivial turns excluded.",
+  "criteria": {
+    "min_tool_calls": 15,
+    "include_errors": true,
+    "skip_synthetic": true
+  },
+  "caps_at_test_time": {
+    "tool_calls_limit": 20,
+    "request_limit": 30
+  },
+  "counts": {
+    "total": 74,
+    "by_pattern": {
+      "measure_disambiguation": 11,
+      "tool_error": 3,
+      "where_used_graph_walk": 30,
+      "high_loop_other": 28,
+      "multi_metric_fanout": 2
+    }
+  },
+  "questions": [
+    {
+      "id": "q001",
+      "question": "Transfers Operated {O}",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 4,
+        "duration_ms": 4163,
+        "session_id": 72
+      },
+      "baseline_replay": {
+        "tool_calls": 2,
+        "elapsed_s": 14.9,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q002",
+      "question": "how many transfers we had in 2026 per month",
+      "pattern": "tool_error",
+      "note": "Produced tool-level errors historically (e.g. invalid DAX / bad ids). Should report the error and NOT blindly retry the same call.",
+      "original": {
+        "tool_calls": 12,
+        "errors": 4,
+        "duration_ms": 3776,
+        "session_id": 72
+      },
+      "baseline_replay": {
+        "tool_calls": 9,
+        "elapsed_s": 60.5,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q003",
+      "question": "Which measures are using 13_Driver_App_Events (DAE) data'",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 29,
+        "errors": 1,
+        "duration_ms": 7159,
+        "session_id": 96
+      },
+      "baseline_replay": {
+        "tool_calls": 14,
+        "elapsed_s": 80.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q004",
+      "question": "anything withrs trangfers booked?",
+      "pattern": "tool_error",
+      "note": "Produced tool-level errors historically (e.g. invalid DAX / bad ids). Should report the error and NOT blindly retry the same call.",
+      "original": {
+        "tool_calls": 26,
+        "errors": 1,
+        "duration_ms": 3385,
+        "session_id": 70
+      },
+      "baseline_replay": {
+        "tool_calls": 10,
+        "elapsed_s": 65.3,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q005",
+      "question": "which measures use 13_Driver_App_Events(DAE_",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 22,
+        "errors": 1,
+        "duration_ms": 1566,
+        "session_id": 96
+      },
+      "baseline_replay": {
+        "tool_calls": 21,
+        "elapsed_s": 165.2,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q006",
+      "question": "Transfers {B}",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 1,
+        "duration_ms": 4051,
+        "session_id": 68
+      },
+      "baseline_replay": {
+        "tool_calls": 26,
+        "elapsed_s": 166.4,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q007",
+      "question": "CAN I HAVE PER WEEK 2026 Initial Transfers {B}",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 1,
+        "duration_ms": 1411,
+        "session_id": 74
+      },
+      "baseline_replay": {
+        "tool_calls": 33,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q008",
+      "question": "give me the definiton od destination ivnestments score",
+      "pattern": "tool_error",
+      "note": "Produced tool-level errors historically (e.g. invalid DAX / bad ids). Should report the error and NOT blindly retry the same call.",
+      "original": {
+        "tool_calls": 14,
+        "errors": 1,
+        "duration_ms": 289,
+        "session_id": 71
+      },
+      "baseline_replay": {
+        "tool_calls": 20,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q009",
+      "question": "GFS % Portofolio Great Rides % Cost p Transfer Operated GFS Core below 88% floor GR Core below 25% floor GR Long Tail below 25% floor  Great Rides % (Core) Great Rides % (Longtail) Issue Free Trip Rate Non-welcomers % (Individuals ) Company Non-Welcomer % %Perfect App usage Individual Perfect App Usage % Company  DNS % (Total) DNS % (Individuals) DNS % (Company) Drivers < 4.9 DRS Flag Approval Rate %  Quality Score <70 Preferred Destination Status (%) Removal % <8hrs Removal % <3hrs (LM) Ghost % Drivers  Gold % Drivers   Company Great Rides % Issue Free Rides (Companies)  EM Cost % of GMV EM Cost & Penalties % of GMV Save Rate % EM Missed NAD Cancellations % Saved Removals %  Forecasting Accuracy Individual & Company Drivers Hiring Goal Completion New drivers per recruiter New drivers to Ghost% (60d) New drivers Gold status % (60d) Time to Activation for Individuals (days) Time to Activation for Companies (days) Interviews per driver onboarded Cost per Qualified Lead  GFS (Portfolio) GFS Core below 88% floor Platform Penalties (% of GMV) NAD Cancellations %  Systemic EM-tagged Transfers % % Completion Rate (Auto)Blocking Accuracy  GFS (Portfolio) GFS (Core) GFS (Long Tail) Gread Rides % (Core) Gread Rides % (Long Tail) EM Cost + Penalties / GMV   Destinations Launched Destinations Relaunched GFS (Relaunches) Great Rides (Relaunches)  Driver Exit Rate GFS in Ambassador Dests Great Rides in Ambassador Dests Driver NPS Community Engagement Score Ambassador Destinations Participation (Ambassadors). They exists in Drivewr OIperations",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 73,
+        "errors": 0,
+        "duration_ms": 1905,
+        "session_id": 182
+      },
+      "baseline_replay": {
+        "tool_calls": 50,
+        "elapsed_s": 162.0,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q010",
+      "question": "does any report show right now the number of transfers per booking window and per current lifecycle segment?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 56,
+        "errors": 0,
+        "duration_ms": 10604,
+        "session_id": 87
+      },
+      "baseline_replay": {
+        "tool_calls": 39,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q011",
+      "question": "Is this used in any reports? Transfers 2025",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 30,
+        "errors": 0,
+        "duration_ms": 17314,
+        "session_id": 184
+      },
+      "baseline_replay": {
+        "tool_calls": 21,
+        "elapsed_s": 106.2,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q012",
+      "question": "i want to see a report of gmv per country",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 28,
+        "errors": 0,
+        "duration_ms": 16394,
+        "session_id": 134
+      },
+      "baseline_replay": {
+        "tool_calls": 5,
+        "elapsed_s": 40.8,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q013",
+      "question": "what are the differences between drivers_payout and driver_share",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 42,
+        "errors": 0,
+        "duration_ms": 2389,
+        "session_id": 137
+      },
+      "baseline_replay": {
+        "tool_calls": 5,
+        "elapsed_s": 27.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q014",
+      "question": "What can you tell me about this report and its semantic model then?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 31,
+        "errors": 0,
+        "duration_ms": 8775,
+        "session_id": 140
+      },
+      "baseline_replay": {
+        "tool_calls": 22,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q015",
+      "question": "give me the definition of Converted Leads {created}]DescriptionNumber of converted leads. Filtered by CAA, DDE, DAT, DDR. and explain in which stage we consider a lead converted",
+      "pattern": "multi_metric_fanout",
+      "note": "Asks for many metrics at once; historically one schema call per metric. Definitions are in the front-loaded catalog, so this should need few or no tool calls.",
+      "original": {
+        "tool_calls": 38,
+        "errors": 0,
+        "duration_ms": 978,
+        "session_id": 105
+      },
+      "baseline_replay": {
+        "tool_calls": 14,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q016",
+      "question": "Do we have any metric that calculates how many min we a. tag before p/up or cancellation time b. cancel before p/up time c. increase price before p/up time?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 36,
+        "errors": 0,
+        "duration_ms": 2952,
+        "session_id": 129
+      },
+      "baseline_replay": {
+        "tool_calls": 35,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q017",
+      "question": "What is GMV expected?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 36,
+        "errors": 0,
+        "duration_ms": 1991,
+        "session_id": 138
+      },
+      "baseline_replay": {
+        "tool_calls": 27,
+        "elapsed_s": 138.9,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q018",
+      "question": "does the dimension: attribution channel (DAC) filter correctly the table 22_GFS ?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 34,
+        "errors": 0,
+        "duration_ms": 2578,
+        "session_id": 131
+      },
+      "baseline_replay": {
+        "tool_calls": 4,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q019",
+      "question": "what about Transfer GMV?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 28,
+        "errors": 0,
+        "duration_ms": 8518,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 32,
+        "elapsed_s": 135.0,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q020",
+      "question": "Ok and where is the calculated column Partners Level used?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 29,
+        "errors": 0,
+        "duration_ms": 6125,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 22,
+        "elapsed_s": 75.1,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q021",
+      "question": "what is CAA.converted?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 33,
+        "errors": 0,
+        "duration_ms": 1481,
+        "session_id": 89
+      },
+      "baseline_replay": {
+        "tool_calls": 3,
+        "elapsed_s": 24.6,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q022",
+      "question": "I want to clean up finance powerbi, i want to clean unused measures, ideally to start with unused measures that have similar name to used ones that may make us loss what we need to use",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 32,
+        "errors": 0,
+        "duration_ms": 1959,
+        "session_id": 53
+      },
+      "baseline_replay": {
+        "tool_calls": 63,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q023",
+      "question": "based on 09.2 Drivers' Operations workspace how many transfers we had operated in 2026 per month",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 31,
+        "errors": 0,
+        "duration_ms": 937,
+        "session_id": 52
+      },
+      "baseline_replay": {
+        "tool_calls": 23,
+        "elapsed_s": 95.5,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q024",
+      "question": "who is the owner of Sends %Δ to PP",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 29,
+        "errors": 0,
+        "duration_ms": 1718,
+        "session_id": 170
+      },
+      "baseline_replay": {
+        "tool_calls": 24,
+        "elapsed_s": 110.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q025",
+      "question": "Hey datagov! Is there a field in PowerBI where we can see what is the current Commission strategy per B2B partner (eg 5 euros per transfer or 5 euros per trip etc)",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 29,
+        "errors": 0,
+        "duration_ms": 1167,
+        "session_id": 185
+      },
+      "baseline_replay": {
+        "tool_calls": 2,
+        "elapsed_s": 20.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q026",
+      "question": "Where is this used? Initial Transfers vLY abs.Number",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 28,
+        "errors": 0,
+        "duration_ms": 2091,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 1,
+        "elapsed_s": 14.6,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q027",
+      "question": "does tra.removal rate count reassignments?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 29,
+        "errors": 0,
+        "duration_ms": 562,
+        "session_id": 129
+      },
+      "baseline_replay": {
+        "tool_calls": 16,
+        "elapsed_s": 106.5,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q028",
+      "question": "explain this is more detail, how is active dtae being calculated",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 27,
+        "errors": 0,
+        "duration_ms": 938,
+        "session_id": 178
+      },
+      "baseline_replay": {
+        "tool_calls": 16,
+        "elapsed_s": 102.6,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q029",
+      "question": "In what reports do we use Priority Tiers (P1, P2, P3) to visualise GFS?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 26,
+        "errors": 0,
+        "duration_ms": 1771,
+        "session_id": 101
+      },
+      "baseline_replay": {
+        "tool_calls": 20,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q030",
+      "question": "Where is this used? Count of Hotels",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 26,
+        "errors": 0,
+        "duration_ms": 1268,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 0,
+        "elapsed_s": 2.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q031",
+      "question": "Where is this used? check visuals and other measures Initial Transfers {B} (All Subchannels)",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 26,
+        "errors": 0,
+        "duration_ms": 1147,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 30,
+        "elapsed_s": 91.9,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q032",
+      "question": "is the rep__ds_quotes_analysis_dis table used anywhere in our reports",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 23,
+        "errors": 0,
+        "duration_ms": 3989,
+        "session_id": 167
+      },
+      "baseline_replay": {
+        "tool_calls": 29,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q033",
+      "question": "which reports use DDE.availability_relaxation",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 23,
+        "errors": 0,
+        "duration_ms": 3526,
+        "session_id": 128
+      },
+      "baseline_replay": {
+        "tool_calls": 10,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q034",
+      "question": "Where is this measure used? CVR {O}",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 25,
+        "errors": 0,
+        "duration_ms": 1264,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 27,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q035",
+      "question": "where is this used?%Eligible Requests YoY",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 24,
+        "errors": 0,
+        "duration_ms": 2009,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 28,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q036",
+      "question": "Where is Transfers Hotels {B} usedd?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 24,
+        "errors": 0,
+        "duration_ms": 1677,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 18,
+        "elapsed_s": 114.3,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q037",
+      "question": "what about Pre Arrival Emails Sent?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 24,
+        "errors": 0,
+        "duration_ms": 1527,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 1,
+        "elapsed_s": 5.1,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q038",
+      "question": "where is this used? Quote Transfers (LY)",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 7257,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 14,
+        "elapsed_s": 105.0,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q039",
+      "question": "what is Reliability Rate?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 24,
+        "errors": 0,
+        "duration_ms": 1208,
+        "session_id": 57
+      },
+      "baseline_replay": {
+        "tool_calls": 41,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q040",
+      "question": "give me the definitions for the following metrics: GFS % Portofolio  Great Rides %  Cost p Transfer Operated  GFS Core below 88% floor  GR Core below 25% floor  GR Long Tail below 25% floor",
+      "pattern": "multi_metric_fanout",
+      "note": "Asks for many metrics at once; historically one schema call per metric. Definitions are in the front-loaded catalog, so this should need few or no tool calls.",
+      "original": {
+        "tool_calls": 24,
+        "errors": 0,
+        "duration_ms": 463,
+        "session_id": 55
+      },
+      "baseline_replay": {
+        "tool_calls": 42,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q041",
+      "question": "Where is this used? %Booking Transfers Contribution",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 23,
+        "errors": 0,
+        "duration_ms": 1355,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 17,
+        "elapsed_s": 33.3,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q042",
+      "question": "Where is Partner Level Quotes used? check all visuals and other measures",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 21,
+        "errors": 0,
+        "duration_ms": 2950,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 7,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q043",
+      "question": "What percentage out of all measures in Commercial, Driver Operations and Finance has an owner?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 22,
+        "errors": 0,
+        "duration_ms": 1395,
+        "session_id": 100
+      },
+      "baseline_replay": {
+        "tool_calls": 39,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q044",
+      "question": "how can I measure great rides for new drivers?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 23,
+        "errors": 0,
+        "duration_ms": 278,
+        "session_id": 117
+      },
+      "baseline_replay": {
+        "tool_calls": 9,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q045",
+      "question": "i want to create a report that will show me in how many transfers talon coupon was used any help",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 0,
+        "duration_ms": 4155,
+        "session_id": 179
+      },
+      "baseline_replay": {
+        "tool_calls": 3,
+        "elapsed_s": 34.3,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q046",
+      "question": "List all the KPIs with an owner",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 21,
+        "errors": 0,
+        "duration_ms": 440,
+        "session_id": 100
+      },
+      "baseline_replay": {
+        "tool_calls": 13,
+        "elapsed_s": 180.0,
+        "timed_out": true,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q047",
+      "question": "What about this measure? Total email sent",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 20,
+        "errors": 0,
+        "duration_ms": 1144,
+        "session_id": 127
+      },
+      "baseline_replay": {
+        "tool_calls": 14,
+        "elapsed_s": 151.5,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q048",
+      "question": "can dde.onboarding_specialist filter ddr.city?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 2959,
+        "session_id": 117
+      },
+      "baseline_replay": {
+        "tool_calls": 4,
+        "elapsed_s": 36.7,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q049",
+      "question": "how is driver cvr (processed) being calculated?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 20,
+        "errors": 0,
+        "duration_ms": 757,
+        "session_id": 174
+      },
+      "baseline_replay": {
+        "tool_calls": 1,
+        "elapsed_s": 17.1,
+        "timed_out": false,
+        "tool_errors": 0
+      }
+    },
+    {
+      "id": "q050",
+      "question": "what is the difference of TRA.offered_water_score and TRA.offered_water_ratio?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 20,
+        "errors": 0,
+        "duration_ms": 510,
+        "session_id": 116
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q051",
+      "question": "why is gfs different from new availability?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 0,
+        "duration_ms": 1475,
+        "session_id": 190
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q052",
+      "question": "i meand transfers that were removed and reassigned",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 20,
+        "errors": 0,
+        "duration_ms": 275,
+        "session_id": 129
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q053",
+      "question": "what about this table 06__Booking_scraping?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 0,
+        "duration_ms": 1052,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q054",
+      "question": "clarify how D_Drivers (DDR)'[DDR.real_availability_ratio_last_60] is calculated",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 0,
+        "duration_ms": 1048,
+        "session_id": 178
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q055",
+      "question": "Where is this used? New Travelers =  CALCULATE(DISTINCTCOUNT('02__Transfers'[traveler_id]),  KEEPFILTERS('02__Transfers'[trip_rank]=1))",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 1408,
+        "session_id": 164
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q056",
+      "question": "Where is this measure used? Transfers 2024",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 1201,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q057",
+      "question": "whats is em auto-block impact",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 1190,
+        "session_id": 145
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q058",
+      "question": "so which are they key factors that channge the score of this kpi",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 19,
+        "errors": 0,
+        "duration_ms": 175,
+        "session_id": 120
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q059",
+      "question": "how many transfers we had 2026 per week?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 934,
+        "session_id": 84
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q060",
+      "question": "explain how driver removals dmd works",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 864,
+        "session_id": 129
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q061",
+      "question": "what is activity_tier?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 18,
+        "errors": 0,
+        "duration_ms": 782,
+        "session_id": 97
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q062",
+      "question": "Where is this used? %Operated Trips {O}",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 17,
+        "errors": 0,
+        "duration_ms": 833,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q063",
+      "question": "I am talking about Power BI",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 17,
+        "errors": 0,
+        "duration_ms": 747,
+        "session_id": 148
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q064",
+      "question": "What reports are touched by Savvas Georgiou?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 17,
+        "errors": 0,
+        "duration_ms": 510,
+        "session_id": 133
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q065",
+      "question": "Is this measure used anywhere? Failed Quotes (+2 hours)",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 16,
+        "errors": 0,
+        "duration_ms": 1184,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q066",
+      "question": "what about this measure? Platform failed quotes",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 16,
+        "errors": 0,
+        "duration_ms": 879,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q067",
+      "question": "Again you made a mistake then. Quotes 2024 is used to calculate the calculated column Partners Level Quotes",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 16,
+        "errors": 0,
+        "duration_ms": 693,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q068",
+      "question": "is this column used anywhere? welcome_order_source",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 16,
+        "errors": 0,
+        "duration_ms": 641,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q069",
+      "question": "what is New Drivers {O)?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 16,
+        "errors": 0,
+        "duration_ms": 334,
+        "session_id": 97
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q070",
+      "question": "What about revenue {f}",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 0,
+        "duration_ms": 1026,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q071",
+      "question": "what about Operations Cancellations {O}?",
+      "pattern": "measure_disambiguation",
+      "note": "Bare measure name; historically re-called the schema tool repeatedly on ambiguous matches. Should disambiguate once and stop, not loop.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 0,
+        "duration_ms": 1003,
+        "session_id": 127
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q072",
+      "question": "Datagov, I want to find the Commission of each B2B partners. Which is the field to check?",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 0,
+        "duration_ms": 550,
+        "session_id": 161
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q073",
+      "question": "what is the logic behind talon wallet intial transfers",
+      "pattern": "where_used_graph_walk",
+      "note": "Usage / impact lookup. Historically walked get_lineage hop-by-hop (20-73 calls -> 180s timeout). Should now resolve via where_is_used in a single call.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 0,
+        "duration_ms": 520,
+        "session_id": 179
+      },
+      "baseline_replay": null
+    },
+    {
+      "id": "q074",
+      "question": "what metrics / dimensions are used to track bypassing Welcome flag?",
+      "pattern": "high_loop_other",
+      "note": "High tool-call count for another reason. Should resolve within the 20 tool-call cap without timing out.",
+      "original": {
+        "tool_calls": 15,
+        "errors": 0,
+        "duration_ms": 276,
+        "session_id": 116
+      },
+      "baseline_replay": null
+    }
+  ]
+}

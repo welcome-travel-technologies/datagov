@@ -1,0 +1,182 @@
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   DataGov — datamov "Paper" visual direction, Welcome brand.
+   Warm light, monochrome ink, editorial whitespace; the accent ("brand") is
+   Welcome teal (#00cf95) rather than datamov's blue. `.dark` carries the
+   graphite dark skin so every component ships light + dark.
+   Tokens are bare-oklch components so Tailwind `<alpha-value>` modifiers work
+   (see tailwind.config.ts).
+--------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    /* shadcn semantic tokens */
+    --background: 0.986 0.003 95;
+    --foreground: 0.24 0.008 70;
+    --card: 1 0 0;
+    --card-foreground: 0.24 0.008 70;
+    --primary: 0.24 0.008 70;
+    --primary-foreground: 0.99 0 0;
+    --secondary: 0.975 0.003 95;
+    --secondary-foreground: 0.24 0.008 70;
+    --muted: 0.975 0.003 95;
+    --muted-foreground: 0.52 0.006 70;
+    --accent: 0.975 0.003 95;
+    --accent-foreground: 0.24 0.008 70;
+    --destructive: 0.57 0.17 25;
+    --destructive-foreground: 0.99 0 0;
+    --border: 0.915 0.004 90;
+    --input: 0.915 0.004 90;
+    --ring: 0.74 0.15 168;
+    --radius: 10px;
+
+    /* datamov design tokens */
+    --panel: 1 0 0;
+    --panel-2: 0.975 0.003 95;
+    --faint: 0.66 0.005 70;
+    --line: 0.915 0.004 90;
+    --line-strong: 0.865 0.005 90;
+    --ok: 0.60 0.13 152;
+    --run: 0.58 0.12 250;
+    --err: 0.57 0.17 25;
+    --warn: 0.70 0.12 75;
+
+    /* Welcome brand — teal accent + deep-slate blue */
+    --welcome-teal: 0.74 0.15 168;
+    --welcome-teal-hover: 0.66 0.14 168;
+    --welcome-blue: 0.34 0.035 250;
+    --brand: 0.74 0.15 168;            /* accent = Welcome teal */
+
+    /* SQL syntax highlighting (light = atom one-light palette) */
+    --sql-keyword: 0.52 0.20 330;
+    --sql-string: 0.62 0.14 150;
+    --sql-number: 0.58 0.12 65;
+    --sql-operator: 0.58 0.18 262;
+    --sql-comment: 0.66 0.01 270;
+  }
+
+  .dark {
+    --background: 0.175 0.006 265;
+    --foreground: 0.96 0.003 265;
+    --card: 0.205 0.007 265;
+    --card-foreground: 0.96 0.003 265;
+    --primary: 0.96 0.003 265;
+    --primary-foreground: 0.20 0.006 265;
+    --secondary: 0.235 0.008 265;
+    --secondary-foreground: 0.96 0.003 265;
+    --muted: 0.235 0.008 265;
+    --muted-foreground: 0.68 0.010 265;
+    --accent: 0.235 0.008 265;
+    --accent-foreground: 0.96 0.003 265;
+    --destructive: 0.70 0.15 25;
+    --destructive-foreground: 0.99 0 0;
+    --border: 0.285 0.008 265;
+    --input: 0.285 0.008 265;
+    --ring: 0.78 0.15 168;
+
+    --panel: 0.205 0.007 265;
+    --panel-2: 0.235 0.008 265;
+    --faint: 0.55 0.010 265;
+    --line: 0.285 0.008 265;
+    --line-strong: 0.345 0.010 265;
+    --ok: 0.74 0.13 156;
+    --run: 0.74 0.11 250;
+    --err: 0.70 0.15 25;
+    --warn: 0.80 0.12 80;
+
+    --welcome-teal: 0.78 0.15 168;
+    --welcome-teal-hover: 0.70 0.14 168;
+    --welcome-blue: 0.42 0.04 250;
+    --brand: 0.78 0.15 168;
+
+    /* SQL syntax highlighting (dark = atom one-dark palette) */
+    --sql-keyword: 0.74 0.14 330;
+    --sql-string: 0.82 0.13 145;
+    --sql-number: 0.80 0.10 65;
+    --sql-operator: 0.76 0.13 245;
+    --sql-comment: 0.62 0.02 265;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Hanken Grotesk', system-ui, sans-serif;
+    letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The "nice gradient background" kept from the original app: soft teal + blue
+   blur blobs over a faint grid. Used full-strength on /login and as a subtle
+   wash behind the authenticated shell.
+--------------------------------------------------------------------------- */
+@layer components {
+  .welcome-gradient {
+    position: relative;
+    isolation: isolate;
+  }
+  .welcome-gradient::before,
+  .welcome-gradient::after {
+    content: "";
+    position: absolute;
+    width: 32rem;
+    height: 32rem;
+    border-radius: 9999px;
+    filter: blur(80px);
+    z-index: -1;
+    pointer-events: none;
+  }
+  .welcome-gradient::before {
+    top: -8rem;
+    right: -8rem;
+    background: oklch(var(--welcome-teal) / 0.12);
+  }
+  .welcome-gradient::after {
+    bottom: -10rem;
+    left: -10rem;
+    background: oklch(var(--welcome-blue) / 0.10);
+  }
+  /* faint grid wash, masked to a soft ellipse — the marketing-site hero look */
+  .welcome-grid::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(to right, oklch(var(--welcome-blue) / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(var(--welcome-blue) / 0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 30%, transparent 100%);
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 30%, transparent 100%);
+    pointer-events: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   React Flow (lineage graph) theme overrides — keep the paper aesthetic.
+--------------------------------------------------------------------------- */
+.react-flow__attribution { display: none; }
+.react-flow__handle {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  min-height: 6px;
+  border: none;
+  background: oklch(var(--faint));
+}
+.react-flow__edge-path { stroke-width: 1.5; }
+.react-flow__controls-button {
+  background: oklch(var(--panel));
+  border-bottom: 1px solid oklch(var(--line));
+  color: oklch(var(--foreground));
+}
+.react-flow__controls-button:hover { background: oklch(var(--panel-2)); }
+.react-flow__minimap { border: 1px solid oklch(var(--line)); border-radius: 8px; }

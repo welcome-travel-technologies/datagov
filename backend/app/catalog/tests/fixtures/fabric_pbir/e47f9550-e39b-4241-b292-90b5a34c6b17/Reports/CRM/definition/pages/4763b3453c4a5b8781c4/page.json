@@ -1,0 +1,45 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.1.0/schema.json",
+  "name": "4763b3453c4a5b8781c4",
+  "displayName": "🤝 Referrals",
+  "displayOption": "FitToWidth",
+  "height": 2000,
+  "width": 1700,
+  "visualInteractions": [
+    {
+      "source": "d0e2da200ca942dcd337",
+      "target": "f9375c9f30bd08612672",
+      "type": "NoFilter"
+    },
+    {
+      "source": "d0e2da200ca942dcd337",
+      "target": "43b91019b502906a870a",
+      "type": "DataFilter"
+    },
+    {
+      "source": "710c0ad16ac86acbe730",
+      "target": "43b91019b502906a870a",
+      "type": "DataFilter"
+    },
+    {
+      "source": "d0e2da200ca942dcd337",
+      "target": "49261e70404889845cc9",
+      "type": "NoFilter"
+    },
+    {
+      "source": "d0e2da200ca942dcd337",
+      "target": "62f9585d62b2a00c2d70",
+      "type": "NoFilter"
+    },
+    {
+      "source": "49261e70404889845cc9",
+      "target": "62f9585d62b2a00c2d70",
+      "type": "NoFilter"
+    },
+    {
+      "source": "49261e70404889845cc9",
+      "target": "43b91019b502906a870a",
+      "type": "NoFilter"
+    }
+  ]
+}

@@ -1,0 +1,1210 @@
+# name	kind	area	location	extra
+# grep this file first. e.g.  grep -iP '\tmodel\t' symbols.tsv
+perm_keys_for_groups	function	backend:catalog	backend/app/catalog/access.py:90	
+resolve_org	function	backend:catalog	backend/app/catalog/access.py:109	
+is_org_admin	function	backend:catalog	backend/app/catalog/access.py:134	
+DepartmentAdmin	class	backend:catalog	backend/app/catalog/admin.py:16	admin.ModelAdmin
+DataPersonAdmin	class	backend:catalog	backend/app/catalog/admin.py:21	admin.ModelAdmin
+CategoryAdmin	class	backend:catalog	backend/app/catalog/admin.py:33	admin.ModelAdmin
+SummaryAdmin	class	backend:catalog	backend/app/catalog/admin.py:38	admin.ModelAdmin
+ItemAdmin	class	backend:catalog	backend/app/catalog/admin.py:42	admin.ModelAdmin
+ItemGroupAdmin	class	backend:catalog	backend/app/catalog/admin.py:58	admin.ModelAdmin
+OrganizationMembershipInline	class	backend:catalog	backend/app/catalog/admin.py:73	admin.TabularInline
+OrganizationAdmin	class	backend:catalog	backend/app/catalog/admin.py:78	admin.ModelAdmin
+OrganizationMembershipAdmin	class	backend:catalog	backend/app/catalog/admin.py:125	admin.ModelAdmin
+SourceScheduleInline	class	backend:catalog	backend/app/catalog/admin.py:130	admin.StackedInline
+SourceRunLogInline	class	backend:catalog	backend/app/catalog/admin.py:134	admin.TabularInline
+IntegrationSourceAdmin	class	backend:catalog	backend/app/catalog/admin.py:142	admin.ModelAdmin
+SourceRunLogAdmin	class	backend:catalog	backend/app/catalog/admin.py:148	admin.ModelAdmin
+IntegrationDestinationAdmin	class	backend:catalog	backend/app/catalog/admin.py:154	admin.ModelAdmin
+IntegrationHookAdmin	class	backend:catalog	backend/app/catalog/admin.py:159	admin.ModelAdmin
+StatusChangeLogAdmin	class	backend:catalog	backend/app/catalog/admin.py:165	admin.ModelAdmin
+MetricsMapAdmin	class	backend:catalog	backend/app/catalog/admin.py:182	admin.ModelAdmin
+UserActivityLogAdmin	class	backend:catalog	backend/app/catalog/admin.py:196	admin.ModelAdmin
+CatalogConfig	appconfig	backend:catalog	backend/app/catalog/apps.py:4	AppConfig
+EmailOrUsernameModelBackend	class	backend:catalog	backend/app/catalog/backends.py:5	ModelBackend
+BigQueryConfigError	class	backend:catalog	backend/app/catalog/bigquery_client.py:12	Exception
+BigQueryClient	class	backend:catalog	backend/app/catalog/bigquery_client.py:16	
+build_bigquery_client_for_org	function	backend:catalog	backend/app/catalog/bigquery_client.py:77	
+_strip_sql_comments	function	backend:catalog	backend/app/catalog/bigquery_tools.py:17	
+validate_read_only_sql	function	backend:catalog	backend/app/catalog/bigquery_tools.py:23	
+_stringify	function	backend:catalog	backend/app/catalog/bigquery_tools.py:37	
+_fmt_rows	function	backend:catalog	backend/app/catalog/bigquery_tools.py:46	
+_schema_lines	function	backend:catalog	backend/app/catalog/bigquery_tools.py:63	
+make_bigquery_tools	function	backend:catalog	backend/app/catalog/bigquery_tools.py:76	
+api_login_required	function	backend:catalog	backend/app/catalog/decorators.py:14	
+get_access_groups_qs	function	backend:catalog	backend/app/catalog/frontend_views.py:22	
+get_user_permissions	function	backend:catalog	backend/app/catalog/frontend_views.py:39	
+compute_pb_cleanup_counts	function	backend:catalog	backend/app/catalog/frontend_views.py:71	
+_resolve_assignee	task	backend:catalog	backend/app/catalog/governance_tasks.py:44	
+_asset_label	task	backend:catalog	backend/app/catalog/governance_tasks.py:55	
+sync_status_task	task	backend:catalog	backend/app/catalog/governance_tasks.py:65	
+WorkflowCancelled	class	backend:catalog	backend/app/catalog/integration_tasks.py:15	Exception
+TaskCancelled	class	backend:catalog	backend/app/catalog/integration_tasks.py:19	Exception
+_workflow_cancel_key	task	backend:catalog	backend/app/catalog/integration_tasks.py:23	
+_is_workflow_cancelled	task	backend:catalog	backend/app/catalog/integration_tasks.py:27	
+_source_cancel_key	task	backend:catalog	backend/app/catalog/integration_tasks.py:42	
+_destination_cancel_key	task	backend:catalog	backend/app/catalog/integration_tasks.py:46	
+_cache_get_safe	task	backend:catalog	backend/app/catalog/integration_tasks.py:50	
+_cache_set_safe	task	backend:catalog	backend/app/catalog/integration_tasks.py:57	
+_cache_delete_safe	task	backend:catalog	backend/app/catalog/integration_tasks.py:65	
+request_source_cancel	task	backend:catalog	backend/app/catalog/integration_tasks.py:72	
+request_destination_cancel	task	backend:catalog	backend/app/catalog/integration_tasks.py:77	
+request_workflow_cancel	task	backend:catalog	backend/app/catalog/integration_tasks.py:82	
+run_source_task	task	backend:catalog	backend/app/catalog/integration_tasks.py:87	
+_cleanup_local_files	task	backend:catalog	backend/app/catalog/integration_tasks.py:221	
+_cleanup_old_run_logs	task	backend:catalog	backend/app/catalog/integration_tasks.py:247	
+run_destination_task	task	backend:catalog	backend/app/catalog/integration_tasks.py:259	
+_get_etl_dir	task	backend:catalog	backend/app/catalog/integration_tasks.py:360	
+run_workflow_scheduled	task	backend:catalog	backend/app/catalog/integration_tasks.py:367	
+run_workflow_task	task	backend:catalog	backend/app/catalog/integration_tasks.py:381	
+_get_dbt_etl_dir	task	backend:catalog	backend/app/catalog/integration_tasks.py:690	
+_client_ip	function	backend:catalog	backend/app/catalog/middleware.py:17	
+UserActivityMiddleware	middleware	backend:catalog	backend/app/catalog/middleware.py:24	MiddlewareMixin
+Department	model	backend:catalog	backend/app/catalog/models.py:6	models.Model
+_validate_slack_handle	function	backend:catalog	backend/app/catalog/models.py:20	
+DataPerson	model	backend:catalog	backend/app/catalog/models.py:29	models.Model
+Category	model	backend:catalog	backend/app/catalog/models.py:69	models.Model
+CustomUser	class	backend:catalog	backend/app/catalog/models.py:83	AbstractUser
+Summary	model	backend:catalog	backend/app/catalog/models.py:93	models.Model
+ItemManager	manager	backend:catalog	backend/app/catalog/models.py:104	models.Manager
+Item	model	backend:catalog	backend/app/catalog/models.py:154	models.Model
+ItemGroup	model	backend:catalog	backend/app/catalog/models.py:342	models.Model
+GovernanceTask	model	backend:catalog	backend/app/catalog/models.py:415	models.Model
+StatusChangeLog	model	backend:catalog	backend/app/catalog/models.py:475	models.Model
+NetworkNode	model	backend:catalog	backend/app/catalog/models.py:518	models.Model
+NetworkEdge	model	backend:catalog	backend/app/catalog/models.py:541	models.Model
+PowerBIReportUsage	model	backend:catalog	backend/app/catalog/models.py:574	models.Model
+ChatSession	model	backend:catalog	backend/app/catalog/models.py:619	models.Model
+ChatMessage	model	backend:catalog	backend/app/catalog/models.py:633	models.Model
+ChatbotModel	model	backend:catalog	backend/app/catalog/models.py:643	models.Model
+Organization	model	backend:catalog	backend/app/catalog/models.py:661	models.Model
+IntegrationSource	model	backend:catalog	backend/app/catalog/models.py:760	models.Model
+SourceSchedule	model	backend:catalog	backend/app/catalog/models.py:829	models.Model
+SourceRunLog	model	backend:catalog	backend/app/catalog/models.py:848	models.Model
+IntegrationDestination	model	backend:catalog	backend/app/catalog/models.py:869	models.Model
+DestinationSchedule	model	backend:catalog	backend/app/catalog/models.py:894	models.Model
+DestinationRunLog	model	backend:catalog	backend/app/catalog/models.py:913	models.Model
+IntegrationHook	model	backend:catalog	backend/app/catalog/models.py:934	models.Model
+WorkflowRun	model	backend:catalog	backend/app/catalog/models.py:960	models.Model
+WorkflowSchedule	model	backend:catalog	backend/app/catalog/models.py:992	models.Model
+WorkflowRawExport	model	backend:catalog	backend/app/catalog/models.py:1011	models.Model
+OrganizationMembership	model	backend:catalog	backend/app/catalog/models.py:1027	models.Model
+UserActivityLog	model	backend:catalog	backend/app/catalog/models.py:1039	models.Model
+PbLiveQueryThread	model	backend:catalog	backend/app/catalog/models.py:1074	models.Model
+MetricsMap	model	backend:catalog	backend/app/catalog/models.py:1099	models.Model
+PowerBIAuthError	class	backend:catalog	backend/app/catalog/powerbi_client.py:21	Exception
+PowerBIRequestError	class	backend:catalog	backend/app/catalog/powerbi_client.py:25	Exception
+PowerBIClient	class	backend:catalog	backend/app/catalog/powerbi_client.py:29	
+build_powerbi_client_for_org	function	backend:catalog	backend/app/catalog/powerbi_client.py:207	
+_fmt_rows	function	backend:catalog	backend/app/catalog/powerbi_tools.py:41	
+_fmt_list	function	backend:catalog	backend/app/catalog/powerbi_tools.py:66	
+_make_run_dax_query	function	backend:catalog	backend/app/catalog/powerbi_tools.py:82	
+_make_get_refresh_history	function	backend:catalog	backend/app/catalog/powerbi_tools.py:155	
+_make_list_workspaces	function	backend:catalog	backend/app/catalog/powerbi_tools.py:198	
+_make_list_datasets	function	backend:catalog	backend/app/catalog/powerbi_tools.py:224	
+_make_get_dataset_schema	function	backend:catalog	backend/app/catalog/powerbi_tools.py:247	
+_make_list_reports	function	backend:catalog	backend/app/catalog/powerbi_tools.py:297	
+_make_analyze_data_quality	function	backend:catalog	backend/app/catalog/powerbi_tools.py:320	
+_make_export_table_to_csv	function	backend:catalog	backend/app/catalog/powerbi_tools.py:364	
+_make_create_measure	function	backend:catalog	backend/app/catalog/powerbi_tools.py:412	
+_make_create_calculated_column	function	backend:catalog	backend/app/catalog/powerbi_tools.py:453	
+make_powerbi_tools	function	backend:catalog	backend/app/catalog/powerbi_tools.py:498	
+SummarySerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:4	serializers.ModelSerializer
+DepartmentSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:9	serializers.ModelSerializer
+DataPersonSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:14	serializers.ModelSerializer
+CategorySerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:27	serializers.ModelSerializer
+MetricsMapSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:33	serializers.ModelSerializer
+ItemGroupSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:62	serializers.ModelSerializer
+ItemSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:83	serializers.ModelSerializer
+GovernanceTaskSerializer	serializer	backend:catalog	backend/app/catalog/serializers.py:125	serializers.ModelSerializer
+_noop	function	backend:catalog	backend/app/catalog/services/bridge_builder.py:25	
+build_cross_tool_bridges	function	backend:catalog	backend/app/catalog/services/bridge_builder.py:29	
+PbiTableKey	class	backend:catalog	backend/app/catalog/services/bridge_matching.py:23	
+DbtModelKey	class	backend:catalog	backend/app/catalog/services/bridge_matching.py:32	
+BridgeMatch	class	backend:catalog	backend/app/catalog/services/bridge_matching.py:45	
+normalize	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:51	
+_dbt_fqn_triple	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:58	
+_pbi_fqn_triple	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:78	
+match_dbt_to_pbi_table	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:87	
+iter_table_pairs	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:121	
+iter_column_pairs	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:168	
+preview_matches	function	backend:catalog	backend/app/catalog/services/bridge_matching.py:190	
+build_debug_payload	function	backend:catalog	backend/app/catalog/services/debug_render.py:21	
+_format_args	function	backend:catalog	backend/app/catalog/services/debug_render.py:72	
+render_debug_section	function	backend:catalog	backend/app/catalog/services/debug_render.py:88	
+PathHop	class	backend:catalog	backend/app/catalog/services/graph_paths.py:27	
+PathResult	class	backend:catalog	backend/app/catalog/services/graph_paths.py:39	
+_hash_of	function	backend:catalog	backend/app/catalog/services/graph_paths.py:49	
+_table_for_measure	function	backend:catalog	backend/app/catalog/services/graph_paths.py:53	
+_table_for_column	function	backend:catalog	backend/app/catalog/services/graph_paths.py:62	
+_columns_of_table	function	backend:catalog	backend/app/catalog/services/graph_paths.py:71	
+find_relationship_path	function	backend:catalog	backend/app/catalog/services/graph_paths.py:88	
+_bfs	function	backend:catalog	backend/app/catalog/services/graph_paths.py:141	
+_bfs_postgres	function	backend:catalog	backend/app/catalog/services/graph_paths.py:147	
+_bfs_python	function	backend:catalog	backend/app/catalog/services/graph_paths.py:199	
+_label_columns	function	backend:catalog	backend/app/catalog/services/graph_paths.py:241	
+_build_result	function	backend:catalog	backend/app/catalog/services/graph_paths.py:254	
+cascade_status_to_items	function	backend:catalog	backend/app/catalog/services/group_cascade.py:17	
+cascade_delete_to_items	function	backend:catalog	backend/app/catalog/services/group_cascade.py:31	
+_key_kind	function	backend:catalog	backend/app/catalog/services/item_groups.py:20	
+_chunked	function	backend:catalog	backend/app/catalog/services/item_groups.py:26	
+ensure_item_groups	function	backend:catalog	backend/app/catalog/services/item_groups.py:32	
+classify_edge	function	backend:catalog	backend/app/catalog/services/network_classify.py:53	
+_node_type	function	backend:catalog	backend/app/catalog/services/network_classify.py:83	
+classify_node_ids	function	backend:catalog	backend/app/catalog/services/network_classify.py:88	
+_in_sql	function	backend:catalog	backend/app/catalog/services/network_classify.py:96	
+kind_case_sql	function	backend:catalog	backend/app/catalog/services/network_classify.py:101	
+level_case_sql	function	backend:catalog	backend/app/catalog/services/network_classify.py:118	
+_pb_nodes_outside_workspace	function	backend:catalog	backend/app/catalog/services/network_path.py:29	
+PathNode	class	backend:catalog	backend/app/catalog/services/network_path.py:53	
+NetworkPathResult	class	backend:catalog	backend/app/catalog/services/network_path.py:60	
+_serialize_ids	function	backend:catalog	backend/app/catalog/services/network_path.py:89	
+find_shortest_path	function	backend:catalog	backend/app/catalog/services/network_path.py:114	
+ReachableNode	class	backend:catalog	backend/app/catalog/services/network_path.py:307	
+ReachableResult	class	backend:catalog	backend/app/catalog/services/network_path.py:315	
+find_reachable_nodes	function	backend:catalog	backend/app/catalog/services/network_path.py:327	
+resolve_node_id_by_name	function	backend:catalog	backend/app/catalog/services/network_path.py:438	
+get_workspaces_for_source	function	backend:catalog	backend/app/catalog/services/workspaces.py:22	
+resolve_default_workspace	function	backend:catalog	backend/app/catalog/services/workspaces.py:59	
+get_user_default_workspace_name	function	backend:catalog	backend/app/catalog/services/workspaces.py:79	
+resolve_default_workspaces_for_org	function	backend:catalog	backend/app/catalog/services/workspaces.py:95	
+_client_ip	function	backend:catalog	backend/app/catalog/signals.py:9	
+_user_agent	function	backend:catalog	backend/app/catalog/signals.py:18	
+on_user_logged_in	function	backend:catalog	backend/app/catalog/signals.py:25	
+on_user_logged_out	function	backend:catalog	backend/app/catalog/signals.py:38	
+on_user_login_failed	function	backend:catalog	backend/app/catalog/signals.py:51	
+run_slack_event_sync	function	backend:catalog	backend/app/catalog/slack_views.py:15	
+process_slack_event	function	backend:catalog	backend/app/catalog/slack_views.py:33	
+slack_events	function	backend:catalog	backend/app/catalog/slack_views.py:150	
+slack_oauth	function	backend:catalog	backend/app/catalog/slack_views.py:182	
+slack_alerts_oauth	function	backend:catalog	backend/app/catalog/slack_views.py:190	
+_handle_slack_oauth	function	backend:catalog	backend/app/catalog/slack_views.py:197	
+_me_payload	function	backend:catalog	backend/app/catalog/spa_auth.py:54	
+me_view	function	backend:catalog	backend/app/catalog/spa_auth.py:89	
+branding_view	function	backend:catalog	backend/app/catalog/spa_auth.py:96	
+login_view	function	backend:catalog	backend/app/catalog/spa_auth.py:112	
+logout_view	function	backend:catalog	backend/app/catalog/spa_auth.py:132	
+change_password_view	function	backend:catalog	backend/app/catalog/spa_auth.py:138	
+_admin_org	function	backend:catalog	backend/app/catalog/spa_auth.py:173	
+_member_payload	function	backend:catalog	backend/app/catalog/spa_auth.py:192	
+org_members_view	function	backend:catalog	backend/app/catalog/spa_auth.py:214	
+org_assistant_scope_view	function	backend:catalog	backend/app/catalog/spa_auth.py:279	
+org_members_save_view	function	backend:catalog	backend/app/catalog/spa_auth.py:301	
+org_members_remove_view	function	backend:catalog	backend/app/catalog/spa_auth.py:396	
+_q_short_result	function	backend:catalog	backend/app/catalog/spa_auth.py:422	
+org_queues_view	function	backend:catalog	backend/app/catalog/spa_auth.py:439	
+org_queue_task_kill_view	function	backend:catalog	backend/app/catalog/spa_auth.py:575	
+org_settings_save_view	function	backend:catalog	backend/app/catalog/spa_auth.py:632	
+_workspace_sources_payload	function	backend:catalog	backend/app/catalog/spa_auth.py:720	
+me_workspaces_view	function	backend:catalog	backend/app/catalog/spa_auth.py:747	
+sync_group_deleted_at	function	backend:catalog	backend/app/catalog/status_history.py:10	
+log_status_change	function	backend:catalog	backend/app/catalog/status_history.py:37	
+build_model_settings	function	backend:catalog	backend/app/catalog/tools/agent.py:73	
+_workspace_scope_block	function	backend:catalog	backend/app/catalog/tools/agent.py:86	
+get_agent	function	backend:catalog	backend/app/catalog/tools/agent.py:129	
+_make_repeat_guard	function	backend:catalog	backend/app/catalog/tools/agent.py:301	
+_norm	function	backend:catalog	backend/app/catalog/tools/analytics.py:30	
+_group_key	function	backend:catalog	backend/app/catalog/tools/analytics.py:34	
+_report_names	function	backend:catalog	backend/app/catalog/tools/analytics.py:39	
+get_pb_usage_analytics	function	backend:catalog	backend/app/catalog/tools/analytics.py:56	
+_report_mode	function	backend:catalog	backend/app/catalog/tools/analytics.py:97	
+_measure_mode	function	backend:catalog	backend/app/catalog/tools/analytics.py:169	
+_overview_mode	function	backend:catalog	backend/app/catalog/tools/analytics.py:232	
+scope_options	function	backend:catalog	backend/app/catalog/tools/assistant/bigquery.py:23	
+build_context	function	backend:catalog	backend/app/catalog/tools/assistant/bigquery.py:46	
+_build	function	backend:catalog	backend/app/catalog/tools/assistant/bigquery.py:56	
+build_tools	function	backend:catalog	backend/app/catalog/tools/assistant/bigquery.py:87	
+scope_key	function	backend:catalog	backend/app/catalog/tools/assistant/cache.py:21	
+cached_context	function	backend:catalog	backend/app/catalog/tools/assistant/cache.py:29	
+scope_options	function	backend:catalog	backend/app/catalog/tools/assistant/dbt.py:21	
+build_context	function	backend:catalog	backend/app/catalog/tools/assistant/dbt.py:26	
+_build	function	backend:catalog	backend/app/catalog/tools/assistant/dbt.py:33	
+build_tools	function	backend:catalog	backend/app/catalog/tools/assistant/dbt.py:74	
+scope_options	function	backend:catalog	backend/app/catalog/tools/assistant/powerbi.py:19	
+build_context	function	backend:catalog	backend/app/catalog/tools/assistant/powerbi.py:44	
+_build	function	backend:catalog	backend/app/catalog/tools/assistant/powerbi.py:52	
+build_tools	function	backend:catalog	backend/app/catalog/tools/assistant/powerbi.py:161	
+_person_label	function	backend:catalog	backend/app/catalog/tools/catalog_search.py:15	
+_governance_lines	function	backend:catalog	backend/app/catalog/tools/catalog_search.py:22	
+search_pb_columns	function	backend:catalog	backend/app/catalog/tools/catalog_search.py:40	
+_dbt_fqn	function	backend:catalog	backend/app/catalog/tools/dbt.py:11	
+search_dbt_models	function	backend:catalog	backend/app/catalog/tools/dbt.py:18	
+search_dbt_sources	function	backend:catalog	backend/app/catalog/tools/dbt.py:65	
+search_dbt_tests	function	backend:catalog	backend/app/catalog/tools/dbt.py:99	
+get_dbt_sql	function	backend:catalog	backend/app/catalog/tools/dbt.py:128	
+get_dbt_upstream_tree	function	backend:catalog	backend/app/catalog/tools/dbt.py:176	
+get_dbt_model_schema	function	backend:catalog	backend/app/catalog/tools/dbt.py:262	
+get_lineage	function	backend:catalog	backend/app/catalog/tools/lineage.py:19	
+where_is_used	function	backend:catalog	backend/app/catalog/tools/lineage.py:104	
+_person_name	function	backend:catalog	backend/app/catalog/tools/lineage.py:214	
+_governance_and_usage_block	function	backend:catalog	backend/app/catalog/tools/lineage.py:220	
+_table_columns_block	function	backend:catalog	backend/app/catalog/tools/lineage.py:280	
+_workspace_profile	function	backend:catalog	backend/app/catalog/tools/lineage.py:296	
+get_pb_item_details	function	backend:catalog	backend/app/catalog/tools/lineage.py:324	
+get_dbt_item_details	function	backend:catalog	backend/app/catalog/tools/lineage.py:492	
+get_pb_measure_dependencies	function	backend:catalog	backend/app/catalog/tools/lineage.py:526	
+get_dbt_bigquery_lineage	function	backend:catalog	backend/app/catalog/tools/lineage.py:603	
+preview_pb_dbt_bridge	function	backend:catalog	backend/app/catalog/tools/lineage.py:704	
+_is_external_wrapper	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:26	
+_resolve_wrapper_source	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:42	
+_priority_sort_key	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:66	
+_pick_group_primary	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:78	
+_collapse_to_group_primaries	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:93	
+get_pb_measure_schema	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:108	
+verify_pb_measure_dimension_link	function	backend:catalog	backend/app/catalog/tools/pb_schema_bundle.py:784	
+build_date_context_block	function	backend:catalog	backend/app/catalog/tools/prompts.py:16	
+build_format_reminder_block	function	backend:catalog	backend/app/catalog/tools/prompts.py:58	
+make_safe_tool	function	backend:catalog	backend/app/catalog/tools/safe_wrapper.py:15	
+/api/items/	endpoint	backend:catalog	backend/app/catalog/urls.py:32	→ ItemViewSet (router)
+/api/item-groups/	endpoint	backend:catalog	backend/app/catalog/urls.py:33	→ ItemGroupViewSet (router)
+/api/departments/	endpoint	backend:catalog	backend/app/catalog/urls.py:34	→ DepartmentViewSet (router)
+/api/data-persons/	endpoint	backend:catalog	backend/app/catalog/urls.py:35	→ DataPersonViewSet (router)
+/api/owners/	endpoint	backend:catalog	backend/app/catalog/urls.py:38	→ DataPersonViewSet (router)
+/api/categories/	endpoint	backend:catalog	backend/app/catalog/urls.py:39	→ CategoryViewSet (router)
+/api/tasks/	endpoint	backend:catalog	backend/app/catalog/urls.py:40	→ GovernanceTaskViewSet (router)
+/api/metrics-maps/	endpoint	backend:catalog	backend/app/catalog/urls.py:41	→ MetricsMapViewSet (router)
+/api/	endpoint	backend:catalog	backend/app/catalog/urls.py:44	→ include
+/api/me/	endpoint	backend:catalog	backend/app/catalog/urls.py:46	→ me_view
+/api/branding/	endpoint	backend:catalog	backend/app/catalog/urls.py:47	→ branding_view
+/api/me/change-password/	endpoint	backend:catalog	backend/app/catalog/urls.py:48	→ change_password_view
+/api/me/workspaces/	endpoint	backend:catalog	backend/app/catalog/urls.py:49	→ me_workspaces_view
+/api/auth/login/	endpoint	backend:catalog	backend/app/catalog/urls.py:50	→ login_view
+/api/auth/logout/	endpoint	backend:catalog	backend/app/catalog/urls.py:51	→ logout_view
+/api/org/members/	endpoint	backend:catalog	backend/app/catalog/urls.py:53	→ org_members_view
+/api/org/members/save/	endpoint	backend:catalog	backend/app/catalog/urls.py:54	→ org_members_save_view
+/api/org/members/remove/	endpoint	backend:catalog	backend/app/catalog/urls.py:55	→ org_members_remove_view
+/api/org/settings/	endpoint	backend:catalog	backend/app/catalog/urls.py:56	→ org_settings_save_view
+/api/org/assistant-scope/	endpoint	backend:catalog	backend/app/catalog/urls.py:57	→ org_assistant_scope_view
+/api/org/queues/	endpoint	backend:catalog	backend/app/catalog/urls.py:58	→ org_queues_view
+/api/org/queues/<int:ormq_id>/kill/	endpoint	backend:catalog	backend/app/catalog/urls.py:59	→ org_queue_task_kill_view
+/api/summary/	endpoint	backend:catalog	backend/app/catalog/urls.py:60	→ get_summary
+/api/dashboard/	endpoint	backend:catalog	backend/app/catalog/urls.py:61	→ get_dashboard
+/api/filters/	endpoint	backend:catalog	backend/app/catalog/urls.py:62	→ get_filters
+/api/pb-cleanup-counts/	endpoint	backend:catalog	backend/app/catalog/urls.py:63	→ pb_cleanup_counts
+/api/dbt-insights/	endpoint	backend:catalog	backend/app/catalog/urls.py:64	→ dbt_insights
+/api/powerbi-usage/	endpoint	backend:catalog	backend/app/catalog/urls.py:65	→ powerbi_usage
+/api/network/	endpoint	backend:catalog	backend/app/catalog/urls.py:66	→ get_network
+/api/network/path/	endpoint	backend:catalog	backend/app/catalog/urls.py:67	→ find_network_path
+/api/network/reachable/	endpoint	backend:catalog	backend/app/catalog/urls.py:68	→ get_network_reachable
+/api/chat/	endpoint	backend:catalog	backend/app/catalog/urls.py:69	→ chat_api_view
+/api/chat/sessions/	endpoint	backend:catalog	backend/app/catalog/urls.py:70	→ get_chat_sessions
+/api/chat/sessions/<int:session_id>/messages/	endpoint	backend:catalog	backend/app/catalog/urls.py:71	→ get_chat_messages
+/api/chat/sessions/<int:session_id>/	endpoint	backend:catalog	backend/app/catalog/urls.py:72	→ delete_chat_session
+/api/chat/task/<str:task_id>/	endpoint	backend:catalog	backend/app/catalog/urls.py:73	→ get_chat_task_status
+/api/integrations/	endpoint	backend:catalog	backend/app/catalog/urls.py:75	→ integrations_get_all
+/api/integrations/sources/save/	endpoint	backend:catalog	backend/app/catalog/urls.py:76	→ integrations_save_source
+/api/integrations/sources/<int:source_id>/run/	endpoint	backend:catalog	backend/app/catalog/urls.py:77	→ integrations_run_source_now
+/api/integrations/sources/<int:source_id>/test/	endpoint	backend:catalog	backend/app/catalog/urls.py:78	→ integrations_test_source
+/api/integrations/sources/<int:source_id>/logs/	endpoint	backend:catalog	backend/app/catalog/urls.py:79	→ integrations_get_run_logs
+/api/integrations/logs/<int:log_id>/	endpoint	backend:catalog	backend/app/catalog/urls.py:80	→ integrations_get_run_log_detail
+/api/integrations/logs/<int:log_id>/kill/	endpoint	backend:catalog	backend/app/catalog/urls.py:81	→ integrations_kill_run
+/api/integrations/logs/<int:log_id>/delete/	endpoint	backend:catalog	backend/app/catalog/urls.py:82	→ integrations_delete_run
+/api/integrations/destinations/save/	endpoint	backend:catalog	backend/app/catalog/urls.py:84	→ integrations_save_destination
+/api/integrations/destinations/<int:dest_id>/run/	endpoint	backend:catalog	backend/app/catalog/urls.py:85	→ integrations_run_destination_now
+/api/integrations/destinations/<int:dest_id>/test/	endpoint	backend:catalog	backend/app/catalog/urls.py:86	→ integrations_test_destination
+/api/integrations/destinations/<int:dest_id>/logs/	endpoint	backend:catalog	backend/app/catalog/urls.py:87	→ integrations_get_dest_logs
+/api/integrations/destinations/logs/<int:log_id>/	endpoint	backend:catalog	backend/app/catalog/urls.py:88	→ integrations_get_dest_log_detail
+/api/integrations/destinations/logs/<int:log_id>/kill/	endpoint	backend:catalog	backend/app/catalog/urls.py:89	→ integrations_kill_dest_run
+/api/integrations/destinations/logs/<int:log_id>/delete/	endpoint	backend:catalog	backend/app/catalog/urls.py:90	→ integrations_delete_dest_run
+/api/integrations/hooks/save/	endpoint	backend:catalog	backend/app/catalog/urls.py:92	→ integrations_save_hook
+/api/integrations/clean-logs/	endpoint	backend:catalog	backend/app/catalog/urls.py:93	→ integrations_clean_logs
+/api/integrations/workflow/	endpoint	backend:catalog	backend/app/catalog/urls.py:96	→ workflow_get_status
+/api/integrations/workflow/run/	endpoint	backend:catalog	backend/app/catalog/urls.py:97	→ workflow_run_now
+/api/integrations/workflow/<int:run_id>/	endpoint	backend:catalog	backend/app/catalog/urls.py:98	→ workflow_get_run_detail
+/api/integrations/workflow/schedule/	endpoint	backend:catalog	backend/app/catalog/urls.py:99	→ workflow_save_schedule
+/api/integrations/workflow/<int:run_id>/kill/	endpoint	backend:catalog	backend/app/catalog/urls.py:100	→ workflow_kill_run
+/api/integrations/workflow/<int:run_id>/delete/	endpoint	backend:catalog	backend/app/catalog/urls.py:101	→ workflow_delete_run
+/api/integrations/workflow/toggle/	endpoint	backend:catalog	backend/app/catalog/urls.py:102	→ workflow_toggle_step
+/api/integrations/workflow/raw-export/	endpoint	backend:catalog	backend/app/catalog/urls.py:103	→ workflow_save_raw_export
+/api/integrations/workflow/raw-export/test/	endpoint	backend:catalog	backend/app/catalog/urls.py:104	→ workflow_test_raw_export
+/api/governance/export-csv/	endpoint	backend:catalog	backend/app/catalog/urls.py:107	→ governance_export_csv
+/api/governance/import-csv/	endpoint	backend:catalog	backend/app/catalog/urls.py:108	→ governance_import_csv
+/api/slack/events/	endpoint	backend:catalog	backend/app/catalog/urls.py:111	→ slack_events
+/api/slack/oauth/	endpoint	backend:catalog	backend/app/catalog/urls.py:112	→ slack_oauth
+/api/slack/alerts-oauth/	endpoint	backend:catalog	backend/app/catalog/urls.py:113	→ slack_alerts_oauth
+_enrich_with_item_metadata	function	backend:catalog	backend/app/catalog/views.py:49	
+_edge_kind	function	backend:catalog	backend/app/catalog/views.py:122	
+_serialize_node	function	backend:catalog	backend/app/catalog/views.py:131	
+serialize_message	function	backend:catalog	backend/app/catalog/views.py:140	
+deserialize_messages	function	backend:catalog	backend/app/catalog/views.py:144	
+_get_org_for_session	function	backend:catalog	backend/app/catalog/views.py:148	
+_get_powerbi_client_for_org	function	backend:catalog	backend/app/catalog/views.py:159	
+_get_bigquery_client_for_org	function	backend:catalog	backend/app/catalog/views.py:171	
+_get_dbt_enabled_for_org	function	backend:catalog	backend/app/catalog/views.py:184	
+_get_powerbi_tools_enabled_for_org	function	backend:catalog	backend/app/catalog/views.py:188	
+_get_bigquery_live_enabled_for_org	function	backend:catalog	backend/app/catalog/views.py:196	
+_get_chatbot_model_for_org	function	backend:catalog	backend/app/catalog/views.py:201	
+build_chatbot_agent_for_org	function	backend:catalog	backend/app/catalog/views.py:210	
+_chat_session_lock_key	function	backend:catalog	backend/app/catalog/views.py:316	
+_extract_parts_text	function	backend:catalog	backend/app/catalog/views.py:320	
+_run_with_timeout	function	backend:catalog	backend/app/catalog/views.py:338	
+retry_transient_llm_errors	function	backend:catalog	backend/app/catalog/views.py:365	
+_agent_usage_limits	function	backend:catalog	backend/app/catalog/views.py:389	
+_finalize_partial_answer	function	backend:catalog	backend/app/catalog/views.py:397	
+run_chat_event_sync	function	backend:catalog	backend/app/catalog/views.py:470	
+chat_api_view	function	backend:catalog	backend/app/catalog/views.py:625	
+get_chat_task_status	function	backend:catalog	backend/app/catalog/views.py:701	
+get_chat_sessions	function	backend:catalog	backend/app/catalog/views.py:751	
+get_chat_messages	function	backend:catalog	backend/app/catalog/views.py:758	
+delete_chat_session	function	backend:catalog	backend/app/catalog/views.py:783	
+_get_user_organization	function	backend:catalog	backend/app/catalog/views.py:790	
+_deleted_filter	function	backend:catalog	backend/app/catalog/views.py:796	
+DepartmentViewSet	view	backend:catalog	backend/app/catalog/views.py:803	viewsets.ModelViewSet
+DataPersonViewSet	view	backend:catalog	backend/app/catalog/views.py:812	viewsets.ModelViewSet
+CategoryViewSet	view	backend:catalog	backend/app/catalog/views.py:842	viewsets.ModelViewSet
+MetricsMapViewSet	view	backend:catalog	backend/app/catalog/views.py:852	viewsets.ModelViewSet
+ActionPermissionMixin	class	backend:catalog	backend/app/catalog/views.py:882	
+CatalogPagination	class	backend:catalog	backend/app/catalog/views.py:952	PageNumberPagination
+ItemViewSet	view	backend:catalog	backend/app/catalog/views.py:957	ActionPermissionMixin, viewsets.ModelViewSet
+ItemGroupViewSet	view	backend:catalog	backend/app/catalog/views.py:1022	viewsets.ModelViewSet
+GovernanceTaskViewSet	view	backend:catalog	backend/app/catalog/views.py:1098	viewsets.ModelViewSet
+get_summary	function	backend:catalog	backend/app/catalog/views.py:1138	
+get_dashboard	function	backend:catalog	backend/app/catalog/views.py:1147	
+get_filters	function	backend:catalog	backend/app/catalog/views.py:1321	
+pb_cleanup_counts	function	backend:catalog	backend/app/catalog/views.py:1373	
+dbt_insights	function	backend:catalog	backend/app/catalog/views.py:1391	
+powerbi_usage	function	backend:catalog	backend/app/catalog/views.py:1551	
+_column_ego	function	backend:catalog	backend/app/catalog/views.py:1637	
+get_network	function	backend:catalog	backend/app/catalog/views.py:1860	
+find_network_path	function	backend:catalog	backend/app/catalog/views.py:2130	
+get_network_reachable	function	backend:catalog	backend/app/catalog/views.py:2188	
+_get_user_org	function	backend:catalog	backend/app/catalog/views.py:2230	
+integrations_get_all	function	backend:catalog	backend/app/catalog/views.py:2244	
+integrations_save_source	function	backend:catalog	backend/app/catalog/views.py:2347	
+_frequency_to_cron	function	backend:catalog	backend/app/catalog/views.py:2432	
+_update_django_q_schedule	function	backend:catalog	backend/app/catalog/views.py:2444	
+integrations_run_source_now	function	backend:catalog	backend/app/catalog/views.py:2470	
+integrations_test_source	function	backend:catalog	backend/app/catalog/views.py:2507	
+integrations_test_destination	function	backend:catalog	backend/app/catalog/views.py:2530	
+integrations_get_run_logs	function	backend:catalog	backend/app/catalog/views.py:2552	
+integrations_get_run_log_detail	function	backend:catalog	backend/app/catalog/views.py:2576	
+integrations_save_destination	function	backend:catalog	backend/app/catalog/views.py:2598	
+integrations_run_destination_now	function	backend:catalog	backend/app/catalog/views.py:2663	
+integrations_get_dest_logs	function	backend:catalog	backend/app/catalog/views.py:2696	
+integrations_get_dest_log_detail	function	backend:catalog	backend/app/catalog/views.py:2719	
+integrations_kill_dest_run	function	backend:catalog	backend/app/catalog/views.py:2740	
+integrations_delete_dest_run	function	backend:catalog	backend/app/catalog/views.py:2763	
+integrations_kill_run	function	backend:catalog	backend/app/catalog/views.py:2778	
+integrations_delete_run	function	backend:catalog	backend/app/catalog/views.py:2802	
+integrations_save_hook	function	backend:catalog	backend/app/catalog/views.py:2818	
+workflow_get_status	function	backend:catalog	backend/app/catalog/views.py:2872	
+workflow_save_raw_export	function	backend:catalog	backend/app/catalog/views.py:2958	
+workflow_test_raw_export	function	backend:catalog	backend/app/catalog/views.py:2985	
+workflow_run_now	function	backend:catalog	backend/app/catalog/views.py:3005	
+workflow_get_run_detail	function	backend:catalog	backend/app/catalog/views.py:3037	
+workflow_save_schedule	function	backend:catalog	backend/app/catalog/views.py:3060	
+workflow_kill_run	function	backend:catalog	backend/app/catalog/views.py:3106	
+workflow_delete_run	function	backend:catalog	backend/app/catalog/views.py:3167	
+workflow_toggle_step	function	backend:catalog	backend/app/catalog/views.py:3183	
+integrations_clean_logs	function	backend:catalog	backend/app/catalog/views.py:3211	
+_gov_csv_groups	function	backend:catalog	backend/app/catalog/views.py:3253	
+_CsvEcho	class	backend:catalog	backend/app/catalog/views.py:3273	
+governance_export_csv	function	backend:catalog	backend/app/catalog/views.py:3280	
+_resolve_named	function	backend:catalog	backend/app/catalog/views.py:3321	
+governance_import_csv	function	backend:catalog	backend/app/catalog/views.py:3337	
+/api/	endpoint	backend:config	backend/app/config/urls.py:9	→ views.home
+/api/	endpoint	backend:config	backend/app/config/urls.py:12	→ Home.as_view
+/api/blog/	endpoint	backend:config	backend/app/config/urls.py:15	→ include
+/api/admin/	endpoint	backend:config	backend/app/config/urls.py:24	→ admin.site.urls
+/api/api/	endpoint	backend:config	backend/app/config/urls.py:25	→ include
+push_to_bigquery	function	backend:etl	backend/app/etl/destinations/bigquery/push_to_bigquery.py:6	
+_slugify	function	backend:etl	backend/app/etl/destinations/gcs/raw_export.py:22	
+_zip_dirs	function	backend:etl	backend/app/etl/destinations/gcs/raw_export.py:26	
+upload_source_raw_to_gcs	function	backend:etl	backend/app/etl/destinations/gcs/raw_export.py:49	
+test_gcs_connection	function	backend:etl	backend/app/etl/destinations/gcs/raw_export.py:111	
+BaseDestination	class	backend:etl	backend/app/etl/destinations/registry.py:30	ABC
+BigQueryDestination	class	backend:etl	backend/app/etl/destinations/registry.py:54	BaseDestination
+get_destination	function	backend:etl	backend/app/etl/destinations/registry.py:147	
+send_slack_alert	function	backend:etl	backend/app/etl/hooks/slack/slack_alerts.py:1	
+send_slack_dest_alert	function	backend:etl	backend/app/etl/hooks/slack/slack_alerts.py:43	
+send_slack_item_alert	function	backend:etl	backend/app/etl/hooks/slack/slack_alerts.py:79	
+send_slack_task_alert	function	backend:etl	backend/app/etl/hooks/slack/slack_alerts.py:122	
+_norm	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:40	
+_col_key	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:47	
+_classify_lineage_type	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:52	
+_relation_name	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:88	
+_literal_args	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:102	
+_resolve_from_raw	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:117	
+resolve_sql	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:166	
+build_relation_index	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:191	
+_resolve_uid	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:225	
+build_schema	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:239	
+extract_column_edges	function	backend:etl	backend/app/etl/sources/dbt/column_lineage.py:268	
+run_dbt_extraction	function	backend:etl	backend/app/etl/sources/dbt/extract_dbt.py:14	
+_clean_yaml_value	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:76	
+generate_custom_id	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:91	
+_read_sql_file	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:97	
+_build_properties_yaml	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:111	
+_parse_json	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:152	
+_extract_repo_name	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:158	
+_build_catalog_lookup	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:163	
+_make_item_row	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:223	
+_make_edge	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:263	
+_validate_with_parser	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:284	
+_build_meta_dict	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:312	
+_build_column_meta	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:329	
+main	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:343	
+_merge_column_names	function	backend:etl	backend/app/etl/sources/dbt/transform_dbt.py:762	
+run_fabric_extraction	function	backend:etl	backend/app/etl/sources/fabric/extract_fabric.py:8	
+_fetch_fabric_definition	function	backend:etl	backend/app/etl/sources/fabric/extract_fabric.py:110	
+_normalize_guid	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:70	
+_first_of_month_n_months_ago	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:77	
+_build_views_dax	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:88	
+_build_legacy_views_dax	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:105	
+_find_usage_dataset	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:122	
+_run_dax	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:133	
+_log_dataset_schema	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:144	
+_collect_modern	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:171	
+_collect_legacy	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:218	
+run_usage_extraction	function	backend:etl	backend/app/etl/sources/fabric/extract_usage.py:268	
+generate_custom_id	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:25	
+get_item_id	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:31	
+extract_fields_from_visual	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:49	
+parse_report_layout_pbir	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:70	
+parse_report_layout	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:184	
+parse_bigquery_source	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:259	
+calculate_dependencies	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:285	
+_partition_type_from_dax	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:350	
+parse_tmdl_table	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:370	
+parse_tmdl_relationships	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:533	
+process_semantic_model_dir	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:632	
+main	function	backend:etl	backend/app/etl/sources/fabric/transform_fabric.py:775	
+BaseSource	class	backend:etl	backend/app/etl/sources/registry.py:29	ABC
+FabricSource	class	backend:etl	backend/app/etl/sources/registry.py:87	BaseSource
+DbtSource	class	backend:etl	backend/app/etl/sources/registry.py:192	BaseSource
+get_source	function	backend:etl	backend/app/etl/sources/registry.py:306	
+backfill_company_access	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/backfill_company_access.py:1	manage.py backfill_company_access
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/backfill_company_access.py:8	BaseCommand
+bulk_add_members	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/bulk_add_members.py:1	manage.py bulk_add_members
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/bulk_add_members.py:51	BaseCommand
+chat_repl	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/chat_repl.py:1	manage.py chat_repl
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/chat_repl.py:50	BaseCommand
+_Runner	class	backend:mgmt	backend/app/catalog/management/commands/chat_repl.py:233	
+clean_database	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/clean_database.py:1	manage.py clean_database
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/clean_database.py:14	BaseCommand
+load_data	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/load_data.py:1	manage.py load_data
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/load_data.py:8	BaseCommand
+load_dbt_data	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/load_dbt_data.py:1	manage.py load_dbt_data
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/load_dbt_data.py:16	BaseCommand
+rebridge	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/rebridge.py:1	manage.py rebridge
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/rebridge.py:14	BaseCommand
+replay_chat	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:1	manage.py replay_chat
+_format_history	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:58	
+_is_synthetic	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:75	
+_select_targets	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:92	
+_load_targets_from_file	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:145	
+_build_clients	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:179	
+_scalar_usage	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:199	
+_usage_dict	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:215	
+_count_model_responses	function	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:250	
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/replay_chat.py:261	BaseCommand
+run_source	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/run_source.py:1	manage.py run_source
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/run_source.py:4	BaseCommand
+run_workflow_final	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/run_workflow_final.py:1	manage.py run_workflow_final
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/run_workflow_final.py:35	BaseCommand
+test_ai_dax_prompt	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_ai_dax_prompt.py:1	manage.py test_ai_dax_prompt
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_ai_dax_prompt.py:48	BaseCommand
+test_pbi_relationships	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_pbi_relationships.py:1	manage.py test_pbi_relationships
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_pbi_relationships.py:8	BaseCommand
+test_sources	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_sources.py:1	manage.py test_sources
+Command	mgmt-command	backend:mgmt	backend/app/catalog/management/commands/test_sources.py:16	BaseCommand
+main	function	backend:other	backend/app/manage.py:7	
+org	function	backend:tests	backend/app/catalog/tests/conftest.py:13	
+dept	function	backend:tests	backend/app/catalog/tests/conftest.py:18	
+owner	function	backend:tests	backend/app/catalog/tests/conftest.py:23	
+user	function	backend:tests	backend/app/catalog/tests/conftest.py:30	
+rw_user	function	backend:tests	backend/app/catalog/tests/conftest.py:38	
+ro_user	function	backend:tests	backend/app/catalog/tests/conftest.py:56	
+item	function	backend:tests	backend/app/catalog/tests/conftest.py:70	
+item_with_org	function	backend:tests	backend/app/catalog/tests/conftest.py:80	
+item_with_reports	function	backend:tests	backend/app/catalog/tests/conftest.py:94	
+summary	function	backend:tests	backend/app/catalog/tests/conftest.py:109	
+source	function	backend:tests	backend/app/catalog/tests/conftest.py:118	
+slack_hook	function	backend:tests	backend/app/catalog/tests/conftest.py:127	
+TestItemAdmin	class	backend:tests	backend/app/catalog/tests/test_admin.py:11	
+TestIntegrationsAPI	class	backend:tests	backend/app/catalog/tests/test_api_integrations.py:6	
+test_normalize_strips_quotes_and_lowercases	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:24	
+test_normalize_handles_none	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:30	
+_dbt	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:38	
+_pbi	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:42	
+test_match_prefers_bq_fqn_even_when_pbi_renamed	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:46	
+test_match_falls_back_to_name_when_no_bq	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:58	
+test_match_full_name_beats_tail_name	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:67	
+test_ambiguous_fqn_falls_through_to_name	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:75	
+test_no_match_returns_none	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:91	
+test_ambiguous_name_returns_none	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:97	
+test_dbt_split_table_name_when_schema_alias_missing	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:105	
+test_non_bigquery_dbt_target_falls_back_to_name	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:119	
+test_iter_table_pairs_yields_one_per_pbi	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:138	
+test_iter_table_pairs_skips_unmatched	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:156	
+test_iter_column_pairs_case_insensitive	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:168	
+test_iter_column_pairs_no_match_returns_empty	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:175	
+test_preview_matches_returns_all_passes	function	backend:tests	backend/app/catalog/tests/test_bridge_matching.py:184	
+_canned_agent	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:33	
+chat_user	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:41	
+test_worker_runs_agent_sync_and_persists_assistant_message	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:49	
+test_worker_persists_graceful_error_when_agent_fails	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:68	
+test_chat_api_enqueues_task_and_creates_user_message	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:88	
+test_chat_messages_endpoint_returns_frontend_shape	function	backend:tests	backend/app/catalog/tests/test_chat_async.py:121	
+_load	function	backend:tests	backend/app/catalog/tests/test_chat_problematic_questions.py:32	
+test_fixture_is_well_formed	function	backend:tests	backend/app/catalog/tests/test_chat_problematic_questions.py:36	
+test_element_profiler_tools_registered	function	backend:tests	backend/app/catalog/tests/test_chat_problematic_questions.py:60	
+_registered_tool_names	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:11	
+test_org_bot_settings_persist_all_tool_flags	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:16	
+test_agent_registers_dbt_and_bigquery_tools_conditionally	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:42	
+test_bigquery_sql_guardrails_reject_write_queries	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:75	
+test_bigquery_execute_query_dry_runs_and_caps_rows	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:89	
+test_search_pb_columns_can_scope_to_measure_dataset	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:115	
+test_powerbi_dax_guard_rejects_placeholders	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:148	
+test_get_dbt_sql_returns_full_sql	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:176	
+test_get_dbt_bigquery_lineage_reports_cross_system_edge	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:195	
+_capture_powerbi_system_prompt	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:220	
+test_future_date_prohibition_rule_is_present	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:252	
+test_powerbi_prompt_is_context_first	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:266	
+test_date_context_block_uses_todays_actual_date	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:277	
+test_make_safe_tool_records_args_kwargs_and_duration	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:288	
+test_make_safe_tool_records_errors_with_exception_info	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:313	
+test_make_safe_tool_awaits_async_tools	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:331	
+test_render_debug_section_emits_dax_sql_and_stats	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:351	
+test_render_debug_section_is_empty_when_no_calls	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:405	
+_capture_bigquery_system_prompt	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:412	
+test_powerbi_handles_multi_metric_requests	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:443	
+test_powerbi_year_sanity_check_catches_typos	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:453	
+test_bigquery_prompt_is_context_first	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:461	
+test_bigquery_year_sanity_check_catches_typos	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:471	
+_make_measure	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:476	
+test_get_pb_measure_schema_collapses_copies_to_group_primary	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:500	
+test_get_pb_measure_schema_falls_back_to_top_priority_without_primary	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:533	
+test_format_reminder_example_dates_track_today	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:556	
+_usage_measure	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:578	
+test_pb_usage_analytics_report_mode_lists_measures	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:600	
+test_pb_usage_analytics_measure_mode_lists_reports	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:624	
+test_pb_usage_analytics_overview_ranks_and_flags_unused	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:645	
+test_pb_usage_analytics_workspace_filter	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:671	
+test_pb_usage_analytics_unknown_report_is_honest	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:684	
+test_pb_usage_analytics_tool_registered_with_powerbi_provider	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:690	
+test_base_agent_has_only_lineage_and_no_resolve_tool	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:698	
+test_powerbi_catalog_tools_register_without_live_client	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:707	
+test_powerbi_catalog_off_drops_profiler_tools	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:719	
+test_prompts_mention_the_new_analytics_tools	function	backend:tests	backend/app/catalog/tests/test_chatbot_tools.py:731	
+_sources	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:25	
+_models	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:31	
+_col	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:48	
+_col_index	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:52	
+_catalog	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:62	
+_edges	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:72	
+_edge_keys	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:80	
+test_source_to_staging_columns	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:85	
+test_model_to_model_and_multicolumn_derivation	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:92	
+test_no_self_or_duplicate_edges	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:100	
+test_lineage_type_classification	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:107	
+test_relation_index_resolves_three_and_two_part	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:118	
+test_models_without_compiled_sql_are_skipped	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:126	
+test_raw_code_is_resolved_when_no_compiled_sql	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:136	
+test_unresolvable_macro_jinja_is_skipped_not_misparsed	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:166	
+test_unparseable_sql_does_not_raise	function	backend:tests	backend/app/catalog/tests/test_column_lineage.py:178	
+dbt_repo	function	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:164	
+dbt_repo_with_catalog	function	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:199	
+TestGenerateCustomId	class	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:214	
+TestTransformDbt	class	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:231	
+TestCatalogJsonMerge	class	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:454	
+TestNewMetadataColumns	class	backend:tests	backend/app/catalog/tests/test_dbt_etl.py:632	
+ETLTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:17	TestCase
+TransformFabricGenerateCustomIdTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:73	TestCase
+TransformFabricExtractFieldsTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:120	TestCase
+TransformFabricParseBigQuerySourceTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:155	TestCase
+TransformFabricCalculateDependenciesTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:229	TestCase
+TransformFabricParseTmdlTableTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:304	TestCase
+TransformFabricTopologicalPropagationTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:386	TestCase
+ExtractUsageHelperTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:536	TestCase
+RunUsageExtractionIntegrationTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:579	TestCase
+ParseReportLayoutPbirTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:811	unittest.TestCase
+WorkspaceReportDispatchTests	class	backend:tests	backend/app/catalog/tests/test_etl.py:883	unittest.TestCase
+org	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:23	
+member	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:28	
+client	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:36	
+people	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:43	
+group	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:50	
+_read_csv	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:60	
+_upload	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:66	
+test_export_requires_auth	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:85	
+test_export_headers_and_one_row_per_group	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:89	
+test_export_is_org_scoped	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:117	
+test_import_requires_auth	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:130	
+test_import_rejects_missing_file	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:134	
+test_import_rejects_csv_without_key_column	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:138	
+test_match_by_group_pk	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:143	
+test_match_by_group_id_fallback	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:152	
+test_unmatched_group_is_reported_not_created	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:161	
+test_full_happy_path	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:173	
+test_empty_cells_leave_values_unchanged	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:192	
+test_unknown_name_skipped_and_reported	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:205	
+test_invalid_status_reported	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:216	
+test_ambiguous_name_reported	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:225	
+test_context_columns_are_ignored	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:236	
+test_round_trip	function	backend:tests	backend/app/catalog/tests/test_governance_csv.py:248	
+_patch_group_status	task	backend:tests	backend/app/catalog/tests/test_governance_tasks.py:12	
+TestTaskCreation	class	backend:tests	backend/app/catalog/tests/test_governance_tasks.py:21	
+TestDoneAction	class	backend:tests	backend/app/catalog/tests/test_governance_tasks.py:127	
+TestSlackTaskAlert	class	backend:tests	backend/app/catalog/tests/test_governance_tasks.py:154	
+_measure_group	function	backend:tests	backend/app/catalog/tests/test_group_cascade.py:13	
+TestGroupCascade	class	backend:tests	backend/app/catalog/tests/test_group_cascade.py:31	
+TestDbtCleanupPayload	class	backend:tests	backend/app/catalog/tests/test_group_cascade.py:154	
+TestRunSourceTask	class	backend:tests	backend/app/catalog/tests/test_integration_tasks.py:13	
+TestRunDestinationTask	class	backend:tests	backend/app/catalog/tests/test_integration_tasks.py:54	
+MetricsMapApiTests	class	backend:tests	backend/app/catalog/tests/test_metrics_maps.py:8	TestCase
+TestSchemaColumns	class	backend:tests	backend/app/catalog/tests/test_migration.py:9	
+ModelTests	class	backend:tests	backend/app/catalog/tests/test_models.py:11	TestCase
+TestItemOrganizationFK	class	backend:tests	backend/app/catalog/tests/test_models.py:91	
+TestItemConnectedReportsJSON	class	backend:tests	backend/app/catalog/tests/test_models.py:113	
+TestPowerBIReportUsage	class	backend:tests	backend/app/catalog/tests/test_models.py:138	
+test_classify_edge_contains	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:17	
+test_classify_edge_column	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:24	
+test_classify_edge_field_measure_is_both	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:31	
+test_classify_edge_usage_and_structure_are_asset	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:37	
+test_classify_node_ids_parses_prefix	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:48	
+test_case_sql_builders_are_self_consistent	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:54	
+_seed_tagged	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:65	
+_call	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:91	
+test_asset_mode_excludes_column_and_contains_edges	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:99	
+test_list_assets_returns_only_asset_level_nodes	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:111	
+test_column_mode_uses_stored_kind	function	backend:tests	backend/app/catalog/tests/test_network_classify.py:126	
+test_edge_kind_contains	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:13	
+test_edge_kind_column	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:19	
+test_edge_kind_model	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:25	
+_seed_graph	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:32	
+test_column_ego_traces_columns_and_attaches_parents	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:58	
+test_column_ego_seeds_from_container_members	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:79	
+test_column_ego_upstream_only	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:89	
+_seed_chain	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:98	
+test_column_ego_depth_bounds_chain	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:114	
+test_column_ego_depth_zero_focus_only	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:124	
+test_column_ego_full_traverses_entire_chain	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:136	
+_seed_report_graph	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:148	
+test_unified_ego_pulls_downstream_report_hierarchy	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:168	
+test_column_mode_excludes_report_hierarchy	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:187	
+test_unified_ego_upstream_only_skips_reports	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:197	
+test_unified_ego_depth_zero_skips_report_hierarchy	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:206	
+test_column_ego_serializes_lineage_type_bridge_and_join	function	backend:tests	backend/app/catalog/tests/test_network_column_mode.py:219	
+admin_user	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:30	
+admin_client	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:40	
+test_members_list_requires_admin	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:49	
+test_members_list_requires_auth	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:58	
+test_members_list_returns_members_and_support_data	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:66	
+test_create_member_creates_account_membership_profile_and_groups	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:98	
+test_create_member_validation_errors	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:132	
+test_edit_member_updates_profile_and_groups_keeps_password	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:155	
+test_create_member_can_grant_org_admin	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:188	
+test_admin_cannot_demote_self_via_save	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:210	
+test_admin_group_user_without_is_admin_is_rejected	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:232	
+test_remove_member	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:249	
+test_cannot_remove_self	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:265	
+test_update_settings_toggles_flags_and_model	function	backend:tests	backend/app/catalog/tests/test_org_members_api.py:279	
+TestItemSerializer	class	backend:tests	backend/app/catalog/tests/test_serializers.py:7	
+TestSendSlackItemAlert	class	backend:tests	backend/app/catalog/tests/test_slack_alerts.py:11	
+TestSendSlackSourceAlert	class	backend:tests	backend/app/catalog/tests/test_slack_alerts.py:75	
+TestSendSlackDestAlert	class	backend:tests	backend/app/catalog/tests/test_slack_alerts.py:95	
+ViewTests	class	backend:tests	backend/app/catalog/tests/test_views.py:14	TestCase
+TestItemAPINewFields	class	backend:tests	backend/app/catalog/tests/test_views.py:66	
+TestItemStatusSlackAlert	class	backend:tests	backend/app/catalog/tests/test_views.py:93	
+TestPowerBIUsageAPI	class	backend:tests	backend/app/catalog/tests/test_views.py:141	
+_make_pbi_table	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:16	
+_make_pbi_column	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:29	
+_make_dbt_model	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:40	
+_make_dbt_column	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:55	
+test_renamed_pbi_table_still_bridges_via_bq_fqn	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:67	
+test_column_bridges_emitted_when_table_matches	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:91	
+test_name_match_works_when_no_bq_fqn	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:121	
+test_unmatched_pbi_yields_no_bridge	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:137	
+test_rerun_replaces_old_bridge_edges	function	backend:tests	backend/app/catalog/tests/test_workflow_final.py:151	
+_mk_item	function	backend:tests	backend/app/catalog/tests/test_workspaces.py:15	
+TestGetWorkspacesForSource	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:30	
+TestResolveDefaultWorkspace	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:85	
+TestResolveForOrg	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:134	
+TestChatbotPromptInjection	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:154	
+TestUserSettingsWorkspacesAPI	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:223	
+TestLineageNodeEnrichment	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:256	
+TestPathWorkspaceConstraint	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:290	
+TestGetFiltersDedup	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:374	
+TestUserDefaultWorkspaceName	class	backend:tests	backend/app/catalog/tests/test_workspaces.py:421	
+AutoData	component	frontend:components	frontend/components/auto-data.tsx:65	
+CleanupStat	interface	frontend:components	frontend/components/cleanup/cleanup-view.tsx:25	
+CleanupRow	interface	frontend:components	frontend/components/cleanup/cleanup-view.tsx:35	
+QueryTab	interface	frontend:components	frontend/components/cleanup/cleanup-view.tsx:63	
+RowsTab	interface	frontend:components	frontend/components/cleanup/cleanup-view.tsx:70	
+CleanupTab	type	frontend:components	frontend/components/cleanup/cleanup-view.tsx:75	
+CleanupView	component	frontend:components	frontend/components/cleanup/cleanup-view.tsx:77	
+asCleanupRows	function	frontend:components	frontend/components/cleanup/cleanup-view.tsx:453	
+DashboardView	component	frontend:components	frontend/components/dashboard/dashboard-view.tsx:40	
+DetailsModal	component	frontend:components	frontend/components/dictionary/details-modal.tsx:11	
+DictionaryView	component	frontend:components	frontend/components/dictionary/dictionary-view.tsx:92	
+GroupedItem	interface	frontend:components	frontend/components/dictionary/grouping.ts:16	
+LocFilters	interface	frontend:components	frontend/components/dictionary/grouping.ts:27	
+pickRepresentative	function	frontend:components	frontend/components/dictionary/grouping.ts:40	
+buildGroups	function	frontend:components	frontend/components/dictionary/grouping.ts:76	
+DestinationCard	component	frontend:components	frontend/components/integrations/destination-card.tsx:18	
+DestinationDialog	component	frontend:components	frontend/components/integrations/destination-dialog.tsx:25	
+IntegrationsManager	component	frontend:components	frontend/components/integrations/integrations-manager.tsx:17	
+BotTab	component	frontend:components	frontend/components/integrations/notifications-panel.tsx:19	
+AlertsTab	component	frontend:components	frontend/components/integrations/notifications-panel.tsx:28	
+RunsDialog	component	frontend:components	frontend/components/integrations/runs-dialog.tsx:17	
+ScheduleFields	component	frontend:components	frontend/components/integrations/schedule-fields.tsx:14	
+SourceCard	component	frontend:components	frontend/components/integrations/source-card.tsx:18	
+SourceDialog	component	frontend:components	frontend/components/integrations/source-dialog.tsx:34	
+statusVariant	function	frontend:components	frontend/components/integrations/status-badge.tsx:4	
+StatusBadge	component	frontend:components	frontend/components/integrations/status-badge.tsx:22	
+isActiveStatus	function	frontend:components	frontend/components/integrations/status-badge.tsx:32	
+TestResultPanel	component	frontend:components	frontend/components/integrations/test-result-panel.tsx:8	
+WorkflowDag	component	frontend:components	frontend/components/integrations/workflow-dag.tsx:350	
+WorkflowPanel	component	frontend:components	frontend/components/integrations/workflow-panel.tsx:45	
+CatalogColumn	interface	frontend:components	frontend/components/items/catalog-view.tsx:19	
+CatalogView	component	frontend:components	frontend/components/items/catalog-view.tsx:34	
+DaxModal	component	frontend:components	frontend/components/items/dax-modal.tsx:9	
+badgeVariant	function	frontend:components	frontend/components/items/item-detail.tsx:24	
+useItemDetail	hook	frontend:components	frontend/components/items/item-detail.tsx:72	
+ItemDetailModal	component	frontend:components	frontend/components/items/item-detail.tsx:135	
+ItemDetail	component	frontend:components	frontend/components/items/item-detail.tsx:205	
+PB_TYPES	const	frontend:components	frontend/components/items/type-options.ts:1	
+DBT_TYPES	const	frontend:components	frontend/components/items/type-options.ts:11	
+ALL_TYPES	const	frontend:components	frontend/components/items/type-options.ts:19	
+AppShell	component	frontend:components	frontend/components/layout/app-shell.tsx:63	
+AuthGuard	component	frontend:components	frontend/components/layout/auth-guard.tsx:9	
+NavItem	type	frontend:components	frontend/components/layout/nav-config.ts:22	
+NavGroup	type	frontend:components	frontend/components/layout/nav-config.ts:32	
+NAV_GROUPS	const	frontend:components	frontend/components/layout/nav-config.ts:34	
+FOOTER_ITEMS	const	frontend:components	frontend/components/layout/nav-config.ts:67	
+canSee	function	frontend:components	frontend/components/layout/nav-config.ts:76	
+LABEL_BY_HREF	const	frontend:components	frontend/components/layout/nav-config.ts:84	
+SideNav	component	frontend:components	frontend/components/layout/side-nav.tsx:60	
+ColumnMenuAction	type	frontend:components	frontend/components/lineage/canvas/column-context-menu.tsx:6	
+ColumnMenuState	interface	frontend:components	frontend/components/lineage/canvas/column-context-menu.tsx:8	
+ColumnContextMenu	component	frontend:components	frontend/components/lineage/canvas/column-context-menu.tsx:23	
+Highlight	interface	frontend:components	frontend/components/lineage/canvas/context.tsx:7	
+EMPTY_HIGHLIGHT	component	frontend:components	frontend/components/lineage/canvas/context.tsx:15	
+CanvasContext	interface	frontend:components	frontend/components/lineage/canvas/context.tsx:25	
+CanvasProvider	component	frontend:components	frontend/components/lineage/canvas/context.tsx:39	
+useCanvas	hook	frontend:components	frontend/components/lineage/canvas/context.tsx:41	
+SelfLoopEdge	component	frontend:components	frontend/components/lineage/canvas/edges.tsx:14	
+edgeTypes	const	frontend:components	frontend/components/lineage/canvas/edges.tsx:23	
+LineageCanvasProps	interface	frontend:components	frontend/components/lineage/canvas/lineage-canvas.tsx:19	
+LineageCanvas	component	frontend:components	frontend/components/lineage/canvas/lineage-canvas.tsx:29	
+CardNodeData	interface	frontend:components	frontend/components/lineage/canvas/nodes.tsx:14	
+CardNode	component	frontend:components	frontend/components/lineage/canvas/nodes.tsx:52	
+nodeTypes	const	frontend:components	frontend/components/lineage/canvas/nodes.tsx:257	
+LineagePage	component	frontend:components	frontend/components/lineage/lineage-page.tsx:674	
+LayoutMode	type	frontend:components	frontend/components/lineage/lineage-store.ts:16	
+LineageState	interface	frontend:components	frontend/components/lineage/lineage-store.ts:18	
+initialLineageState	const	frontend:components	frontend/components/lineage/lineage-store.ts:46	
+LineageAction	type	frontend:components	frontend/components/lineage/lineage-store.ts:69	
+lineageReducer	function	frontend:components	frontend/components/lineage/lineage-store.ts:100	
+SerializedLineageState	interface	frontend:components	frontend/components/lineage/lineage-store.ts:220	
+serializeState	function	frontend:components	frontend/components/lineage/lineage-store.ts:241	
+deserializeState	function	frontend:components	frontend/components/lineage/lineage-store.ts:262	
+ModelDetailSidebar	component	frontend:components	frontend/components/lineage/model-detail-sidebar.tsx:47	
+NodeDetailPanel	component	frontend:components	frontend/components/lineage/node-detail-panel.tsx:16	
+BottomToolbarProps	interface	frontend:components	frontend/components/lineage/panels/bottom-toolbar.tsx:26	
+BottomToolbar	component	frontend:components	frontend/components/lineage/panels/bottom-toolbar.tsx:47	
+Grouping	type	frontend:components	frontend/components/lineage/panels/left-sidebar.tsx:34	
+LeftSidebarProps	interface	frontend:components	frontend/components/lineage/panels/left-sidebar.tsx:36	
+LeftSidebar	component	frontend:components	frontend/components/lineage/panels/left-sidebar.tsx:58	
+LensLegend	component	frontend:components	frontend/components/lineage/panels/legend.tsx:7	
+SavedViewsPanel	component	frontend:components	frontend/components/lineage/panels/saved-views.tsx:7	
+SearchSelect	component	frontend:components	frontend/components/lineage/search-select.tsx:22	
+Markdown	component	frontend:components	frontend/components/markdown.tsx:11	
+GroupsOverlay	component	frontend:components	frontend/components/metrics-canvas/groups-overlay.tsx:21	
+CanvasInteraction	interface	frontend:components	frontend/components/metrics-canvas/interaction.tsx:7	
+CanvasInteractionProvider	component	frontend:components	frontend/components/metrics-canvas/interaction.tsx:16	
+useCanvasInteraction	hook	frontend:components	frontend/components/metrics-canvas/interaction.tsx:18	
+CANVAS_MAPS_KEY	component	frontend:components	frontend/components/metrics-canvas/maps-sidebar.tsx:9	
+SavedMapsPanel	component	frontend:components	frontend/components/metrics-canvas/maps-sidebar.tsx:28	
+MetricsCanvas	component	frontend:components	frontend/components/metrics-canvas/metrics-canvas.tsx:56	
+ElementNode	component	frontend:components	frontend/components/metrics-canvas/nodes.tsx:34	
+ShapeNode	component	frontend:components	frontend/components/metrics-canvas/nodes.tsx:71	
+ContainerNode	component	frontend:components	frontend/components/metrics-canvas/nodes.tsx:99	
+NoteNode	component	frontend:components	frontend/components/metrics-canvas/nodes.tsx:121	
+nodeTypes	const	frontend:components	frontend/components/metrics-canvas/nodes.tsx:167	
+PaletteCatalogSection	component	frontend:components	frontend/components/metrics-canvas/palette-catalog-section.tsx:42	
+Palette	component	frontend:components	frontend/components/metrics-canvas/palette.tsx:78	
+PropertiesPanelProps	interface	frontend:components	frontend/components/metrics-canvas/properties-panel.tsx:103	
+PropertiesPanel	component	frontend:components	frontend/components/metrics-canvas/properties-panel.tsx:119	
+ToolbarProps	interface	frontend:components	frontend/components/metrics-canvas/toolbar.tsx:14	
+Toolbar	component	frontend:components	frontend/components/metrics-canvas/toolbar.tsx:50	
+MemberDialog	component	frontend:components	frontend/components/org/member-dialog.tsx:87	
+OrgQueuesPanel	component	frontend:components	frontend/components/org/org-queues-panel.tsx:67	
+OrgSettingsManager	component	frontend:components	frontend/components/org/org-settings-manager.tsx:32	
+PageHeader	component	frontend:components	frontend/components/page-header.tsx:1	
+ReportHealthTable	component	frontend:components	frontend/components/reports/report-health-table.tsx:45	
+ReportUsagePivot	component	frontend:components	frontend/components/reports/report-usage-pivot.tsx:38	
+WorkspaceDefaults	component	frontend:components	frontend/components/settings/workspace-defaults.tsx:23	
+BadgeProps	interface	frontend:components	frontend/components/ui/badge.tsx:23	
+Badge	component	frontend:components	frontend/components/ui/badge.tsx:29	
+ButtonProps	interface	frontend:components	frontend/components/ui/button.tsx:32	
+Button	component	frontend:components	frontend/components/ui/button.tsx:38	
+Card	component	frontend:components	frontend/components/ui/card.tsx:4	
+CardHeader	component	frontend:components	frontend/components/ui/card.tsx:16	
+CardTitle	component	frontend:components	frontend/components/ui/card.tsx:20	
+CardDescription	component	frontend:components	frontend/components/ui/card.tsx:29	
+CardContent	component	frontend:components	frontend/components/ui/card.tsx:33	
+CodeLang	type	frontend:components	frontend/components/ui/code-block.tsx:13	
+CodeBlock	component	frontend:components	frontend/components/ui/code-block.tsx:96	
+Dialog	component	frontend:components	frontend/components/ui/dialog.tsx:8	
+DialogTrigger	component	frontend:components	frontend/components/ui/dialog.tsx:9	
+DialogClose	component	frontend:components	frontend/components/ui/dialog.tsx:10	
+DialogContent	component	frontend:components	frontend/components/ui/dialog.tsx:12	
+DialogHeader	component	frontend:components	frontend/components/ui/dialog.tsx:39	
+DialogTitle	component	frontend:components	frontend/components/ui/dialog.tsx:43	
+DialogDescription	component	frontend:components	frontend/components/ui/dialog.tsx:55	
+Field	component	frontend:components	frontend/components/ui/form-field.tsx:5	
+FormError	component	frontend:components	frontend/components/ui/form-field.tsx:15	
+Input	component	frontend:components	frontend/components/ui/input.tsx:4	
+Spinner	component	frontend:components	frontend/components/ui/misc.tsx:5	
+Skeleton	component	frontend:components	frontend/components/ui/misc.tsx:9	
+LoadingState	component	frontend:components	frontend/components/ui/misc.tsx:14	
+EmptyState	component	frontend:components	frontend/components/ui/misc.tsx:24	
+Stat	component	frontend:components	frontend/components/ui/misc.tsx:43	
+Select	component	frontend:components	frontend/components/ui/select.tsx:8	
+SelectValue	component	frontend:components	frontend/components/ui/select.tsx:9	
+SelectGroup	component	frontend:components	frontend/components/ui/select.tsx:10	
+SelectTrigger	component	frontend:components	frontend/components/ui/select.tsx:12	
+SelectContent	component	frontend:components	frontend/components/ui/select.tsx:34	
+SelectLabel	component	frontend:components	frontend/components/ui/select.tsx:64	
+SelectItem	component	frontend:components	frontend/components/ui/select.tsx:79	
+SelectOption	interface	frontend:components	frontend/components/ui/simple-select.tsx:14	
+SelectOptionGroup	interface	frontend:components	frontend/components/ui/simple-select.tsx:20	
+SimpleSelect	component	frontend:components	frontend/components/ui/simple-select.tsx:37	
+Switch	component	frontend:components	frontend/components/ui/switch.tsx:7	
+Table	component	frontend:components	frontend/components/ui/table.tsx:4	
+THead	component	frontend:components	frontend/components/ui/table.tsx:12	
+TBody	component	frontend:components	frontend/components/ui/table.tsx:16	
+TR	component	frontend:components	frontend/components/ui/table.tsx:20	
+TH	component	frontend:components	frontend/components/ui/table.tsx:32	
+TD	component	frontend:components	frontend/components/ui/table.tsx:44	
+Tabs	component	frontend:components	frontend/components/ui/tabs.tsx:7	
+TabsList	component	frontend:components	frontend/components/ui/tabs.tsx:9	
+TabsTrigger	component	frontend:components	frontend/components/ui/tabs.tsx:21	
+TabsContent	component	frontend:components	frontend/components/ui/tabs.tsx:37	
+ApiError	class	frontend:lib	frontend/lib/api.ts:14	
+getApiErrorMessage	function	frontend:lib	frontend/lib/api.ts:26	
+getApiErrorMessage	function	frontend:lib	frontend/lib/api.ts:27	
+getApiErrorMessage	function	frontend:lib	frontend/lib/api.ts:28	
+request	function	frontend:lib	frontend/lib/api.ts:34	
+Paginated	interface	frontend:lib	frontend/lib/api.ts:79	
+unwrapResults	function	frontend:lib	frontend/lib/api.ts:87	
+NodeGroup	type	frontend:lib	frontend/lib/api.ts:92	
+EdgeKind	type	frontend:lib	frontend/lib/api.ts:98	
+NetworkNode	interface	frontend:lib	frontend/lib/api.ts:100	
+NetworkLink	interface	frontend:lib	frontend/lib/api.ts:126	
+NetworkResponse	interface	frontend:lib	frontend/lib/api.ts:136	
+ReachableNode	interface	frontend:lib	frontend/lib/api.ts:141	
+ReachableResponse	interface	frontend:lib	frontend/lib/api.ts:148	
+PathResponse	interface	frontend:lib	frontend/lib/api.ts:153	
+ConnectedReport	interface	frontend:lib	frontend/lib/api.ts:162	
+RelationshipRef	interface	frontend:lib	frontend/lib/api.ts:169	
+ItemStatus	type	frontend:lib	frontend/lib/api.ts:178	
+Item	interface	frontend:lib	frontend/lib/api.ts:180	
+ItemGroupPatch	interface	frontend:lib	frontend/lib/api.ts:237	
+Department	interface	frontend:lib	frontend/lib/api.ts:247	
+Category	interface	frontend:lib	frontend/lib/api.ts:252	
+DataPerson	interface	frontend:lib	frontend/lib/api.ts:257	
+GovernanceTask	interface	frontend:lib	frontend/lib/api.ts:269	
+FiltersResponse	interface	frontend:lib	frontend/lib/api.ts:286	
+UsageRow	interface	frontend:lib	frontend/lib/api.ts:293	
+UsageResponse	interface	frontend:lib	frontend/lib/api.ts:308	
+UsageParams	interface	frontend:lib	frontend/lib/api.ts:314	
+GovernanceImportResult	interface	frontend:lib	frontend/lib/api.ts:322	
+SummaryResponse	interface	frontend:lib	frontend/lib/api.ts:332	
+DashboardMeasureGroup	interface	frontend:lib	frontend/lib/api.ts:337	
+DashboardWsStat	interface	frontend:lib	frontend/lib/api.ts:353	
+DashboardResponse	interface	frontend:lib	frontend/lib/api.ts:361	
+MetricsMapKind	type	frontend:lib	frontend/lib/api.ts:381	
+MetricsMap	interface	frontend:lib	frontend/lib/api.ts:384	
+MetricsMapInput	interface	frontend:lib	frontend/lib/api.ts:397	
+MePerms	interface	frontend:lib	frontend/lib/api.ts:404	
+User	interface	frontend:lib	frontend/lib/api.ts:421	
+Branding	interface	frontend:lib	frontend/lib/api.ts:433	
+OrgMember	interface	frontend:lib	frontend/lib/api.ts:441	
+GroupRef	interface	frontend:lib	frontend/lib/api.ts:456	
+DepartmentRef	interface	frontend:lib	frontend/lib/api.ts:461	
+ChatbotModelRef	interface	frontend:lib	frontend/lib/api.ts:466	
+OrgSettings	interface	frontend:lib	frontend/lib/api.ts:472	
+ScopeOption	interface	frontend:lib	frontend/lib/api.ts:494	
+AssistantScopeResponse	interface	frontend:lib	frontend/lib/api.ts:499	
+OrgMembersResponse	interface	frontend:lib	frontend/lib/api.ts:504	
+QueueCluster	interface	frontend:lib	frontend/lib/api.ts:515	
+QueuedTask	interface	frontend:lib	frontend/lib/api.ts:525	
+RecentTask	interface	frontend:lib	frontend/lib/api.ts:537	
+ScheduledTask	interface	frontend:lib	frontend/lib/api.ts:552	
+QueuesResponse	interface	frontend:lib	frontend/lib/api.ts:564	
+MemberInput	interface	frontend:lib	frontend/lib/api.ts:581	
+IntegrationSchedule	interface	frontend:lib	frontend/lib/api.ts:598	
+LastRun	interface	frontend:lib	frontend/lib/api.ts:606	
+IntegrationSource	interface	frontend:lib	frontend/lib/api.ts:613	
+IntegrationDestination	interface	frontend:lib	frontend/lib/api.ts:632	
+IntegrationHook	interface	frontend:lib	frontend/lib/api.ts:644	
+IntegrationsData	interface	frontend:lib	frontend/lib/api.ts:654	
+TestResult	interface	frontend:lib	frontend/lib/api.ts:660	
+RunQueued	interface	frontend:lib	frontend/lib/api.ts:666	
+RunLog	interface	frontend:lib	frontend/lib/api.ts:673	
+RunLogDetail	interface	frontend:lib	frontend/lib/api.ts:682	
+WorkflowRun	interface	frontend:lib	frontend/lib/api.ts:691	
+WorkflowStepSummary	interface	frontend:lib	frontend/lib/api.ts:701	
+WorkflowStatus	interface	frontend:lib	frontend/lib/api.ts:711	
+ScheduleInput	interface	frontend:lib	frontend/lib/api.ts:721	
+SourceInput	interface	frontend:lib	frontend/lib/api.ts:729	
+DestinationInput	interface	frontend:lib	frontend/lib/api.ts:747	
+WorkflowScheduleInput	interface	frontend:lib	frontend/lib/api.ts:755	
+Direction	type	frontend:lib	frontend/lib/api.ts:763	
+LineageMode	type	frontend:lib	frontend/lib/api.ts:764	
+WorkspaceOption	interface	frontend:lib	frontend/lib/api.ts:768	
+WorkspaceSource	interface	frontend:lib	frontend/lib/api.ts:773	
+WorkspaceDefaultsResponse	interface	frontend:lib	frontend/lib/api.ts:782	
+api	const	frontend:lib	frontend/lib/api.ts:788	
+AuthProvider	component	frontend:lib	frontend/lib/auth.tsx:17	
+useAuth	hook	frontend:lib	frontend/lib/auth.tsx:61	
+EffectiveBranding	type	frontend:lib	frontend/lib/branding.tsx:57	
+useBranding	hook	frontend:lib	frontend/lib/branding.tsx:65	
+BrandingApplier	component	frontend:lib	frontend/lib/branding.tsx:82	
+BrandLogo	component	frontend:lib	frontend/lib/branding.tsx:122	
+fmtWhen	function	frontend:lib	frontend/lib/format.ts:4	
+fmtDuration	function	frontend:lib	frontend/lib/format.ts:17	
+History	interface	frontend:lib	frontend/lib/history.ts:11	
+useHistory	hook	frontend:lib	frontend/lib/history.ts:22	
+ScheduleState	interface	frontend:lib	frontend/lib/integrations/schedule.ts:4	
+FREQUENCIES	const	frontend:lib	frontend/lib/integrations/schedule.ts:12	
+WEEKDAYS	const	frontend:lib	frontend/lib/integrations/schedule.ts:19	
+scheduleStateFrom	function	frontend:lib	frontend/lib/integrations/schedule.ts:29	
+describeSchedule	function	frontend:lib	frontend/lib/integrations/schedule.ts:48	
+schedulePayload	function	frontend:lib	frontend/lib/integrations/schedule.ts:58	
+isExternalMeasure	function	frontend:lib	frontend/lib/items.ts:13	
+wsPriority	function	frontend:lib	frontend/lib/items.ts:21	
+sortInstances	function	frontend:lib	frontend/lib/items.ts:34	
+NODES	const	frontend:lib	frontend/lib/lineage/__fixtures__.ts:9	
+LINKS	const	frontend:lib	frontend/lib/lineage/__fixtures__.ts:17	
+CENTER	const	frontend:lib	frontend/lib/lineage/__fixtures__.ts:27	
+EDGE	const	frontend:lib	frontend/lib/lineage/build-flow.ts:33	
+Filters	interface	frontend:lib	frontend/lib/lineage/build-flow.ts:52	
+buildColumnFlow	function	frontend:lib	frontend/lib/lineage/build-flow.ts:112	
+ColibriFlowOptions	interface	frontend:lib	frontend/lib/lineage/build-flow.ts:185	
+buildColibriFlow	function	frontend:lib	frontend/lib/lineage/build-flow.ts:218	
+buildAssetFlow	function	frontend:lib	frontend/lib/lineage/build-flow.ts:379	
+buildPathFlow	function	frontend:lib	frontend/lib/lineage/build-flow.ts:451	
+applyEdgeHighlight	function	frontend:lib	frontend/lib/lineage/build-flow.ts:494	
+ModelType	type	frontend:lib	frontend/lib/lineage/colibri.ts:19	
+LineageType	type	frontend:lib	frontend/lib/lineage/colibri.ts:24	
+detectModelType	function	frontend:lib	frontend/lib/lineage/colibri.ts:41	
+MODEL_TYPE_META	const	frontend:lib	frontend/lib/lineage/colibri.ts:50	
+LINEAGE_TYPE_META	const	frontend:lib	frontend/lib/lineage/colibri.ts:58	
+LINEAGE_TYPE_ORDER	const	frontend:lib	frontend/lib/lineage/colibri.ts:66	
+normalizeLineageType	function	frontend:lib	frontend/lib/lineage/colibri.ts:74	
+aggregateLineageType	function	frontend:lib	frontend/lib/lineage/colibri.ts:87	
+showModelTypeBadge	function	frontend:lib	frontend/lib/lineage/colibri.ts:94	
+ColumnRow	interface	frontend:lib	frontend/lib/lineage/column-model.ts:19	
+CardKind	type	frontend:lib	frontend/lib/lineage/column-model.ts:32	
+ModelCard	interface	frontend:lib	frontend/lib/lineage/column-model.ts:34	
+ColumnEdgeKind	type	frontend:lib	frontend/lib/lineage/column-model.ts:55	
+ColumnEdge	interface	frontend:lib	frontend/lib/lineage/column-model.ts:57	
+SELF_EDGE_TARGET_SUFFIX	const	frontend:lib	frontend/lib/lineage/column-model.ts:74	
+UsageEdge	interface	frontend:lib	frontend/lib/lineage/column-model.ts:79	
+ColumnModel	interface	frontend:lib	frontend/lib/lineage/column-model.ts:88	
+BuildColumnModelOptions	interface	frontend:lib	frontend/lib/lineage/column-model.ts:106	
+buildColumnModel	function	frontend:lib	frontend/lib/lineage/column-model.ts:117	
+columnLineage	function	frontend:lib	frontend/lib/lineage/column-model.ts:324	
+dbtBuildCommand	function	frontend:lib	frontend/lib/lineage/column-model.ts:362	
+MergeResult	interface	frontend:lib	frontend/lib/lineage/graph-merge.ts:12	
+edgeKey	function	frontend:lib	frontend/lib/lineage/graph-merge.ts:21	
+mergeGraph	function	frontend:lib	frontend/lib/lineage/graph-merge.ts:25	
+GROUP_COLORS	const	frontend:lib	frontend/lib/lineage/graph-utils.ts:9	
+GROUP_LABELS	const	frontend:lib	frontend/lib/lineage/graph-utils.ts:27	
+GROUP_ORDER	const	frontend:lib	frontend/lib/lineage/graph-utils.ts:43	
+isDbtGroup	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:48	
+isPbGroup	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:51	
+isColumnGroup	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:54	
+isMemberGroup	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:57	
+colorFor	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:60	
+cleanLabel	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:69	
+nodeDisplayLabel	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:82	
+typeGlyph	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:89	
+memberGlyph	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:100	
+nodeTooltip	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:105	
+edgeClasses	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:110	
+isBridge	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:120	
+synthTitle	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:126	
+nodeSize	function	frontend:lib	frontend/lib/lineage/graph-utils.ts:133	
+XY	interface	frontend:lib	frontend/lib/lineage/layout.ts:14	
+CARD_WIDTH	const	frontend:lib	frontend/lib/lineage/layout.ts:19	
+ROW_H	const	frontend:lib	frontend/lib/lineage/layout.ts:20	
+CARD_HEADER_H	const	frontend:lib	frontend/lib/lineage/layout.ts:21	
+cardHeight	function	frontend:lib	frontend/lib/lineage/layout.ts:24	
+layoutColumnCards	function	frontend:lib	frontend/lib/lineage/layout.ts:32	
+layoutAssetDagre	function	frontend:lib	frontend/lib/lineage/layout.ts:135	
+layoutPathLR	function	frontend:lib	frontend/lib/lineage/layout.ts:172	
+CardLayer	type	frontend:lib	frontend/lib/lineage/lens.ts:20	
+LAYER_LABEL	const	frontend:lib	frontend/lib/lineage/lens.ts:31	
+cardLayer	function	frontend:lib	frontend/lib/lineage/lens.ts:56	
+cardAccent	function	frontend:lib	frontend/lib/lineage/lens.ts:71	
+LensId	type	frontend:lib	frontend/lib/lineage/lens.ts:76	
+LensBadge	interface	frontend:lib	frontend/lib/lineage/lens.ts:78	
+LensLegendItem	interface	frontend:lib	frontend/lib/lineage/lens.ts:83	
+Lens	interface	frontend:lib	frontend/lib/lineage/lens.ts:89	
+dataKind	function	frontend:lib	frontend/lib/lineage/lens.ts:114	
+LENSES	const	frontend:lib	frontend/lib/lineage/lens.ts:124	
+LENS_ORDER	const	frontend:lib	frontend/lib/lineage/lens.ts:154	
+getLens	function	frontend:lib	frontend/lib/lineage/lens.ts:156	
+SavedView	interface	frontend:lib	frontend/lib/lineage/saved-views.ts:13	
+SAVED_VIEWS_KEY	const	frontend:lib	frontend/lib/lineage/saved-views.ts:32	
+upsertView	function	frontend:lib	frontend/lib/lineage/saved-views.ts:36	
+removeView	function	frontend:lib	frontend/lib/lineage/saved-views.ts:41	
+loadViews	function	frontend:lib	frontend/lib/lineage/saved-views.ts:54	
+persistViews	function	frontend:lib	frontend/lib/lineage/saved-views.ts:66	
+saveView	function	frontend:lib	frontend/lib/lineage/saved-views.ts:77	
+deleteView	function	frontend:lib	frontend/lib/lineage/saved-views.ts:84	
+TreeLeaf	interface	frontend:lib	frontend/lib/lineage/tree.ts:20	
+TreeBranch	interface	frontend:lib	frontend/lib/lineage/tree.ts:26	
+buildLineageTree	function	frontend:lib	frontend/lib/lineage/tree.ts:55	
+countLeaves	function	frontend:lib	frontend/lib/lineage/tree.ts:81	
+buildLineageTreeByPath	function	frontend:lib	frontend/lib/lineage/tree.ts:118	
+ResizableWidthOptions	interface	frontend:lib	frontend/lib/lineage/use-resizable-width.ts:19	
+ResizableWidth	interface	frontend:lib	frontend/lib/lineage/use-resizable-width.ts:34	
+useResizableWidth	hook	frontend:lib	frontend/lib/lineage/use-resizable-width.ts:40	
+CatalogSection	type	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:15	
+SECTION_ITEM_TYPE	const	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:18	
+PaletteTile	interface	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:26	
+itemToCatalogRef	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:43	
+tableTile	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:59	
+measureTile	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:70	
+columnTile	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:81	
+pageTile	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:93	
+relationshipTiles	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:104	
+tilesForSection	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:122	
+makeTypeNode	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:149	
+makeCatalogNode	function	frontend:lib	frontend/lib/metrics-canvas/catalog-tiles.ts:163	
+ShapeKey	type	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:8	
+TypeMeta	interface	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:10	
+TYPES	const	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:18	
+TYPE_KEYS_ORDERED	const	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:50	
+CAT_ORDER	const	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:52	
+typeMeta	function	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:57	
+typesByCategory	function	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:62	
+rfTypeFor	function	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:70	
+defaultSize	function	frontend:lib	frontend/lib/metrics-canvas/catalog.ts:79	
+MM_MIME	const	frontend:lib	frontend/lib/metrics-canvas/dnd.ts:4	
+DragPayload	type	frontend:lib	frontend/lib/metrics-canvas/dnd.ts:6	
+readPayload	function	frontend:lib	frontend/lib/metrics-canvas/dnd.ts:10	
+HistorySnapshot	interface	frontend:lib	frontend/lib/metrics-canvas/history.ts:15	
+uid	function	frontend:lib	frontend/lib/metrics-canvas/ids.ts:4	
+XY	interface	frontend:lib	frontend/lib/metrics-canvas/layout.ts:16	
+arrangeDagre	function	frontend:lib	frontend/lib/metrics-canvas/layout.ts:32	
+RfNode	type	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:21	
+RfEdge	type	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:22	
+rfToStoredNode	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:50	
+storedToRfNode	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:62	
+rfToStoredEdge	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:90	
+storedToRfEdge	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:106	
+decorateEdgeLabel	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:141	
+CanvasState	interface	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:157	
+toDoc	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:166	
+fromDoc	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:177	
+normalizeDoc	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:190	
+importJson	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:217	
+exportJson	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:239	
+exportPng	function	frontend:lib	frontend/lib/metrics-canvas/serialize.ts:247	
+buildShapeSVG	function	frontend:lib	frontend/lib/metrics-canvas/shapes.ts:9	
+hexToRgba	function	frontend:lib	frontend/lib/metrics-canvas/shapes.ts:46	
+CatalogRef	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:16	
+CanvasNodeData	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:33	
+CanvasEdgeData	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:50	
+EdgeMarker	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:57	
+StoredNode	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:64	
+StoredEdge	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:74	
+CanvasGroup	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:89	
+CanvasMeta	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:96	
+CanvasViewport	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:105	
+CanvasDoc	interface	frontend:lib	frontend/lib/metrics-canvas/types.ts:112	
+CANVAS_DOC_VERSION	const	frontend:lib	frontend/lib/metrics-canvas/types.ts:122	
+DEFAULT_FONT_SCALE	const	frontend:lib	frontend/lib/metrics-canvas/types.ts:125	
+FONT_SCALE_MIN	const	frontend:lib	frontend/lib/metrics-canvas/types.ts:126	
+FONT_SCALE_MAX	const	frontend:lib	frontend/lib/metrics-canvas/types.ts:127	
+clampFontScale	function	frontend:lib	frontend/lib/metrics-canvas/types.ts:130	
+emptyDoc	function	frontend:lib	frontend/lib/metrics-canvas/types.ts:137	
+QueryProvider	component	frontend:lib	frontend/lib/query.tsx:13	
+useMutationWithInvalidate	hook	frontend:lib	frontend/lib/query.tsx:30	
+useDebounced	hook	frontend:lib	frontend/lib/use-debounced.ts:6	
+cn	function	frontend:lib	frontend/lib/utils.ts:5	
+getCookie	function	frontend:lib	frontend/lib/utils.ts:10	
+fmtInt	function	frontend:lib	frontend/lib/utils.ts:20	
+/champions	route	frontend:routes	frontend/app/champions/page.tsx:1	
+ChampionsPage	component	frontend:routes	frontend/app/champions/page.tsx:115	default export
+/chat	route	frontend:routes	frontend/app/chat/page.tsx:1	
+ChatPage	component	frontend:routes	frontend/app/chat/page.tsx:70	default export
+/dashboard	route	frontend:routes	frontend/app/dashboard/page.tsx:1	
+DashboardPage	component	frontend:routes	frontend/app/dashboard/page.tsx:6	default export
+/dbt/catalog	route	frontend:routes	frontend/app/dbt/catalog/page.tsx:1	
+DbtCatalogPage	component	frontend:routes	frontend/app/dbt/catalog/page.tsx:15	default export
+/dbt/cleanup	route	frontend:routes	frontend/app/dbt/cleanup/page.tsx:1	
+DbtCleanupPage	component	frontend:routes	frontend/app/dbt/cleanup/page.tsx:26	default export
+/dbt/top-assets	route	frontend:routes	frontend/app/dbt/top-assets/page.tsx:1	
+DbtTopAssetsPage	component	frontend:routes	frontend/app/dbt/top-assets/page.tsx:48	default export
+/dictionary	route	frontend:routes	frontend/app/dictionary/page.tsx:1	
+DictionaryPage	component	frontend:routes	frontend/app/dictionary/page.tsx:6	default export
+/integrations	route	frontend:routes	frontend/app/integrations/page.tsx:1	
+IntegrationsPage	component	frontend:routes	frontend/app/integrations/page.tsx:9	default export
+/  (layout)	route	frontend:routes	frontend/app/layout.tsx:1	
+metadata	const	frontend:routes	frontend/app/layout.tsx:8	
+RootLayout	component	frontend:routes	frontend/app/layout.tsx:13	default export
+/lineage	route	frontend:routes	frontend/app/lineage/page.tsx:1	
+LineageRoute	component	frontend:routes	frontend/app/lineage/page.tsx:8	default export
+/login	route	frontend:routes	frontend/app/login/page.tsx:1	
+LoginPage	component	frontend:routes	frontend/app/login/page.tsx:100	default export
+/	route	frontend:routes	frontend/app/page.tsx:1	
+Home	component	frontend:routes	frontend/app/page.tsx:3	default export
+/powerbi/catalog	route	frontend:routes	frontend/app/powerbi/catalog/page.tsx:1	
+PowerBiCatalogPage	component	frontend:routes	frontend/app/powerbi/catalog/page.tsx:15	default export
+/powerbi/cleanup	route	frontend:routes	frontend/app/powerbi/cleanup/page.tsx:1	
+PowerBiCleanupPage	component	frontend:routes	frontend/app/powerbi/cleanup/page.tsx:13	default export
+/powerbi/metrics-map	route	frontend:routes	frontend/app/powerbi/metrics-map/page.tsx:1	
+MetricsMapPage	component	frontend:routes	frontend/app/powerbi/metrics-map/page.tsx:8	default export
+/powerbi/reports	route	frontend:routes	frontend/app/powerbi/reports/page.tsx:1	
+PowerBiReportsPage	component	frontend:routes	frontend/app/powerbi/reports/page.tsx:21	default export
+/powerbi/top-assets	route	frontend:routes	frontend/app/powerbi/top-assets/page.tsx:1	
+PowerBiTopAssetsPage	component	frontend:routes	frontend/app/powerbi/top-assets/page.tsx:16	default export
+/settings/org	route	frontend:routes	frontend/app/settings/org/page.tsx:1	
+OrgSettingsPage	component	frontend:routes	frontend/app/settings/org/page.tsx:9	default export
+/settings/queues	route	frontend:routes	frontend/app/settings/queues/page.tsx:1	
+QueuesPage	component	frontend:routes	frontend/app/settings/queues/page.tsx:9	default export
+/settings/user	route	frontend:routes	frontend/app/settings/user/page.tsx:1	
+UserSettingsPage	component	frontend:routes	frontend/app/settings/user/page.tsx:15	default export
+/tasks	route	frontend:routes	frontend/app/tasks/page.tsx:1	
+TasksPage	component	frontend:routes	frontend/app/tasks/page.tsx:54	default export
+area_for	function	other	.claude/skills/index-project/build_index.py:68	
+run_git	function	other	.claude/skills/index-project/build_index.py:79	
+repo_root	function	other	.claude/skills/index-project/build_index.py:83	
+tracked_files	function	other	.claude/skills/index-project/build_index.py:87	
+_excluded	function	other	.claude/skills/index-project/build_index.py:103	
+Sym	class	other	.claude/skills/index-project/build_index.py:116	
+classify_py_class	function	other	.claude/skills/index-project/build_index.py:142	
+extract_python	function	other	.claude/skills/index-project/build_index.py:163	
+next_route_for	function	other	.claude/skills/index-project/build_index.py:210	
+classify_ts	function	other	.claude/skills/index-project/build_index.py:229	
+extract_ts	function	other	.claude/skills/index-project/build_index.py:245	
+read_lines	function	other	.claude/skills/index-project/build_index.py:270	
+build	function	other	.claude/skills/index-project/build_index.py:278	
+md_link	function	other	.claude/skills/index-project/build_index.py:300	
+write_symbols_tsv	function	other	.claude/skills/index-project/build_index.py:304	
+group	function	other	.claude/skills/index-project/build_index.py:313	
+section	function	other	.claude/skills/index-project/build_index.py:317	
+write_backend_md	function	other	.claude/skills/index-project/build_index.py:332	
+write_frontend_md	function	other	.claude/skills/index-project/build_index.py:352	
+file_tree	function	other	.claude/skills/index-project/build_index.py:366	
+write_index_md	function	other	.claude/skills/index-project/build_index.py:379	
+write_manifest	function	other	.claude/skills/index-project/build_index.py:424	
+current_commit	function	other	.claude/skills/index-project/build_index.py:433	
+check_stale	function	other	.claude/skills/index-project/build_index.py:440	
+main	function	other	.claude/skills/index-project/build_index.py:463	
+getCookie	function	other	.claude/skills/scaffold-app/templates/api-client.ts:16	
+ApiError	class	other	.claude/skills/scaffold-app/templates/api-client.ts:21	
+request	function	other	.claude/skills/scaffold-app/templates/api-client.ts:34	
+qs	function	other	.claude/skills/scaffold-app/templates/api-client.ts:69	
+Paginated	interface	other	.claude/skills/scaffold-app/templates/api-client.ts:80	
+CurrentUser	interface	other	.claude/skills/scaffold-app/templates/api-client.ts:89	
+auth	const	other	.claude/skills/scaffold-app/templates/api-client.ts:96	
