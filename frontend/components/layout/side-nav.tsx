@@ -32,7 +32,7 @@ function NavLink({
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
-        "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13.5px] font-medium transition-colors",
+        "group flex h-[34px] items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium transition-colors",
         active
           ? "bg-panel text-foreground shadow-card"
           : "text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
@@ -44,14 +44,19 @@ function NavLink({
   );
 }
 
-/** Group heading: full label when expanded, a short divider line when collapsed. */
+/** Group heading: keeps a constant height in both states so the icons below
+ *  don't shift vertically — full label when expanded, a thin divider when
+ *  collapsed. */
 function GroupHeading({ label, collapsed }: { label: string; collapsed: boolean }) {
-  if (collapsed) {
-    return <div className="mx-auto my-2 h-1 w-1 rounded-full bg-line" aria-hidden="true" />;
-  }
   return (
-    <div className="px-2.5 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">
-      {label}
+    <div className={cn("flex h-6 items-center", collapsed ? "px-1.5" : "px-2.5")}>
+      {collapsed ? (
+        <div className="h-px w-full rounded-full bg-line" aria-hidden="true" />
+      ) : (
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">
+          {label}
+        </span>
+      )}
     </div>
   );
 }
