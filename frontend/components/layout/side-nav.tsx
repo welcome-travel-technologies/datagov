@@ -170,7 +170,7 @@ export function SideNav() {
           onClick={toggle}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-faint transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
+          className="flex h-7 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-faint transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
         >
           {collapsed ? (
             <PanelLeftOpen className="h-4 w-4 shrink-0" />
