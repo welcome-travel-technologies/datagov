@@ -32,7 +32,7 @@ function NavLink({
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
-        "group flex h-[31px] items-center gap-2.5 rounded-md px-3 text-[13.5px] font-medium transition-colors",
+        "group flex h-7 items-center gap-2.5 rounded-md px-3 text-[13.5px] font-medium transition-colors",
         active
           ? "bg-panel text-foreground shadow-card"
           : "text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
@@ -49,7 +49,7 @@ function NavLink({
  *  collapsed. */
 function GroupHeading({ label, collapsed }: { label: string; collapsed: boolean }) {
   return (
-    <div className="flex h-5 items-center">
+    <div className="flex h-[18px] items-center">
       {collapsed ? (
         <span className="mx-auto h-1 w-1 rounded-full bg-line" aria-hidden="true" />
       ) : (
@@ -113,7 +113,7 @@ export function SideNav() {
           const items = group.items.filter((i) => canSee(i, perms));
           if (items.length === 0) return null;
           return (
-            <div key={group.label || group.items[0]?.href} className="mt-2.5 first:mt-0">
+            <div key={group.label || group.items[0]?.href} className="mt-2 first:mt-0">
               {group.label && <GroupHeading label={group.label} collapsed={collapsed} />}
               <div className="space-y-0.5">
                 {items.map((item) => (
@@ -125,7 +125,7 @@ export function SideNav() {
         })}
 
         {/* footer settings group */}
-        <div className="mt-2.5">
+        <div className="mt-2">
           <GroupHeading label="Settings" collapsed={collapsed} />
           <div className="space-y-0.5">
             {FOOTER_ITEMS.filter((i) => canSee(i, perms)).map((item) => (
