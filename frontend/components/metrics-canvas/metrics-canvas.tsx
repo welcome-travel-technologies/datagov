@@ -24,7 +24,7 @@ import { typeMeta } from "@/lib/metrics-canvas/catalog";
 import { uid } from "@/lib/metrics-canvas/ids";
 import { makeCatalogNode, makeTypeNode } from "@/lib/metrics-canvas/catalog-tiles";
 import { readPayload } from "@/lib/metrics-canvas/dnd";
-import { arrangeDagre, facingHandles, type XY } from "@/lib/metrics-canvas/layout";
+import { arrangeDagre } from "@/lib/metrics-canvas/layout";
 import { useHistory, type HistorySnapshot } from "@/lib/metrics-canvas/history";
 import {
   fromDoc,
@@ -42,6 +42,7 @@ import {
 } from "@/lib/metrics-canvas/serialize";
 import { emptyDoc, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
 import { nodeTypes } from "@/components/metrics-canvas/nodes";
+import { edgeTypes } from "@/components/metrics-canvas/edges";
 import { CanvasInteractionProvider } from "@/components/metrics-canvas/interaction";
 import { Palette } from "@/components/metrics-canvas/palette";
 import { PropertiesPanel } from "@/components/metrics-canvas/properties-panel";
@@ -349,33 +350,11 @@ export function MetricsCanvas() {
     pushHistory();
     const pos = arrangeDagre(nodesRef.current, edgesRef.current, "TB", groupsRef.current);
     setNodes((ns) => ns.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)));
-
-    // Re-point each edge to the facing sides of its (re-positioned) nodes so the
-    // orthogonal routing drops straight between them instead of looping out of a
-    // stale port. Use the fresh layout position, falling back to the node's own
-    // for anything the layout left in place (notes / section frames).
-    const byId = new Map(nodesRef.current.map((n) => [n.id, n]));
-    const center = (id: string): XY | null => {
-      const n = byId.get(id);
-      if (!n) return null;
-      const p = pos[id] ?? n.position;
-      const w = (n.width as number | undefined) ?? n.measured?.width ?? 190;
-      const h = (n.height as number | undefined) ?? n.measured?.height ?? 60;
-      return { x: p.x + w / 2, y: p.y + h / 2 };
-    };
-    setEdges((es) =>
-      es.map((e) => {
-        const s = center(e.source);
-        const t = center(e.target);
-        if (!s || !t) return e;
-        const h = facingHandles(s, t);
-        return { ...e, sourceHandle: h.source, targetHandle: h.target };
-      }),
-    );
-
+    // Edges re-route themselves: they're floating, so they always attach to the
+    // facing side of each re-positioned box — no handle bookkeeping needed here.
     touch();
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 60);
-  }, [pushHistory, setNodes, setEdges, touch, fitView]);
+  }, [pushHistory, setNodes, touch, fitView]);
 
   const undo = useCallback(() => {
     const snap = history.undo(snapshot());
@@ -443,7 +422,13 @@ export function MetricsCanvas() {
   // Concrete inline fills for edge-label pills (see `decorateEdgeLabel`); keeps
   // operator badges legible in the editor and the PNG export. Derived only — the
   // undecorated `edges` state is what gets serialized/saved.
-  const rfEdges = useMemo(() => edges.map((e) => decorateEdgeLabel(e, fontScale)), [edges, fontScale]);
+  // Every edge renders as a "floating" edge (attaches to the facing side of each
+  // box) regardless of its stored type — so existing maps and skill imports get
+  // clean routing without a data migration.
+  const rfEdges = useMemo(
+    () => edges.map((e) => ({ ...decorateEdgeLabel(e, fontScale), type: "floating" })),
+    [edges, fontScale],
+  );
 
   // ---- load / new / save --------------------------------------------------
 
@@ -683,6 +668,7 @@ export function MetricsCanvas() {
               nodes={nodes}
               edges={rfEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}

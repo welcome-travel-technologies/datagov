@@ -20,6 +20,7 @@ import { typeMeta } from "@/lib/metrics-canvas/catalog";
 import { fromDoc, decorateEdgeLabel, exportPng, type RfEdge, type RfNode } from "@/lib/metrics-canvas/serialize";
 import { emptyDoc, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
 import { nodeTypes } from "@/components/metrics-canvas/nodes";
+import { edgeTypes } from "@/components/metrics-canvas/edges";
 import { CanvasInteractionProvider } from "@/components/metrics-canvas/interaction";
 import { GroupsOverlay } from "@/components/metrics-canvas/groups-overlay";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
@@ -84,7 +85,12 @@ export function MetricsCanvasViewer({ token }: { token: string }) {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [data, setNodes, setEdges, fitView]);
 
-  const rfEdges = useMemo(() => edges.map((e) => decorateEdgeLabel(e, fontScale)), [edges, fontScale]);
+  // Render every edge as a "floating" edge (attaches to the facing side of each
+  // box) so a shared map looks exactly as clean as the editor.
+  const rfEdges = useMemo(
+    () => edges.map((e) => ({ ...decorateEdgeLabel(e, fontScale), type: "floating" })),
+    [edges, fontScale],
+  );
   const interaction = useMemo(() => ({ onLabelCommit: noop, fontScale, readOnly: true }), [fontScale]);
 
   const onExportPng = useCallback(async () => {
@@ -155,6 +161,7 @@ export function MetricsCanvasViewer({ token }: { token: string }) {
             nodes={nodes}
             edges={rfEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             nodesDraggable={canDrag}
             nodesConnectable={false}
