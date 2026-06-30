@@ -57,6 +57,11 @@ def _detach_renamed_measures(organization_id=None):
     for chunk in _chunked(stale_ids):
         Item.objects.filter(item_id__in=chunk).update(
             item_group=None, status='UNVERIFIED')
+        # A detached item must not stay its old group's primary — that would
+        # leave the old group pointing at a member it no longer owns. Clear it;
+        # the read path falls back to the group's first remaining item.
+        ItemGroup.objects.filter(primary_item_id__in=chunk).update(
+            primary_item=None)
     return len(stale_ids)
 
 
