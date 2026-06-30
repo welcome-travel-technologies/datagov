@@ -15,6 +15,7 @@ import {
   getNodesBounds,
   getViewportForBounds,
   type Connection,
+  type NodeChange,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -25,6 +26,7 @@ import { uid } from "@/lib/metrics-canvas/ids";
 import { makeCatalogNode, makeTypeNode } from "@/lib/metrics-canvas/catalog-tiles";
 import { readPayload } from "@/lib/metrics-canvas/dnd";
 import { arrangeDagre } from "@/lib/metrics-canvas/layout";
+import { arrangeElk } from "@/lib/metrics-canvas/elk-layout";
 import { useHistory, type HistorySnapshot } from "@/lib/metrics-canvas/history";
 import {
   fromDoc,
@@ -40,7 +42,7 @@ import {
   type RfEdge,
   type RfNode,
 } from "@/lib/metrics-canvas/serialize";
-import { emptyDoc, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
+import { emptyDoc, type CanvasEdgeData, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
 import { nodeTypes } from "@/components/metrics-canvas/nodes";
 import { edgeTypes } from "@/components/metrics-canvas/edges";
 import { CanvasInteractionProvider } from "@/components/metrics-canvas/interaction";
@@ -345,7 +347,33 @@ export function MetricsCanvas() {
     [setNodes],
   );
 
-  const arrange = useCallback(() => {
+  // Revert any baked auto-arrange routes back to live floating edges — called on
+  // every manual move so a dragged box's edges re-attach to its borders cleanly.
+  const clearRoutes = useCallback(() => {
+    if (!edgesRef.current.some((e) => (e.data as CanvasEdgeData | undefined)?.route)) return;
+    setEdges((es) =>
+      es.map((e) =>
+        (e.data as CanvasEdgeData | undefined)?.route ? { ...e, data: { ...e.data, route: undefined } } : e,
+      ),
+    );
+  }, [setEdges]);
+
+  // Manual node moves/resizes drop the baked routes (so edges follow live); other
+  // changes (selection, etc.) pass straight through.
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<RfNode>[]) => {
+      onNodesChange(changes);
+      if (changes.some((c) => c.type === "position" || c.type === "dimensions")) clearRoutes();
+    },
+    [onNodesChange, clearRoutes],
+  );
+
+  const onGroupDragStart = useCallback(() => {
+    pushHistory();
+    clearRoutes();
+  }, [pushHistory, clearRoutes]);
+
+  const arrange = useCallback(async () => {
     if (!nodesRef.current.length) return;
     pushHistory();
 
@@ -374,12 +402,23 @@ export function MetricsCanvas() {
       if (label && !existingLabel) kept[idx] = e; // upgrade to the labelled one
     }
     const deduped = removed ? kept : edgesRef.current;
-    if (removed) setEdges(deduped);
 
-    // Edges re-route themselves: they're floating, so they always attach to the
-    // facing side of each re-positioned box — no handle bookkeeping needed here.
-    const pos = arrangeDagre(nodesRef.current, deduped, "TB", groupsRef.current);
-    setNodes((ns) => ns.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)));
+    // ELK lays out the boxes AND routes the edges around them (orthogonal). We
+    // bake each edge's route into its data so the edge component draws that exact
+    // path; a manual move later clears it back to live floating. Dagre is the
+    // fallback if ELK ever throws (it only gives positions — edges stay floating).
+    let positions: Record<string, { x: number; y: number }>;
+    let routes: Record<string, { x: number; y: number }[]> = {};
+    try {
+      const out = await arrangeElk(nodesRef.current, deduped, groupsRef.current, "DOWN");
+      positions = out.positions;
+      routes = out.routes;
+    } catch {
+      positions = arrangeDagre(nodesRef.current, deduped, "TB", groupsRef.current);
+    }
+
+    setNodes((ns) => ns.map((n) => (positions[n.id] ? { ...n, position: positions[n.id] } : n)));
+    setEdges(deduped.map((e) => ({ ...e, data: { ...e.data, route: routes[e.id] } })));
     touch();
     if (removed) showToast(`Merged ${removed} duplicate ${removed === 1 ? "connection" : "connections"}`);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 60);
@@ -698,7 +737,7 @@ export function MetricsCanvas() {
               edges={rfEdges}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
-              onNodesChange={onNodesChange}
+              onNodesChange={handleNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onSelectionChange={onSelectionChange}
@@ -729,7 +768,7 @@ export function MetricsCanvas() {
                 fontScale={fontScale}
                 selectedId={selGroupId}
                 onSelect={selectGroup}
-                onDragStart={pushHistory}
+                onDragStart={onGroupDragStart}
                 onDrag={moveGroupBy}
                 onDragStop={touch}
               />

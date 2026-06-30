@@ -12,13 +12,14 @@ import {
   useReactFlow,
   getNodesBounds,
   getViewportForBounds,
+  type NodeChange,
 } from "@xyflow/react";
 import { useQuery } from "@tanstack/react-query";
 import { Image as ImageIcon, Maximize } from "lucide-react";
 import { api } from "@/lib/api";
 import { typeMeta } from "@/lib/metrics-canvas/catalog";
 import { fromDoc, decorateEdgeLabel, exportPng, type RfEdge, type RfNode } from "@/lib/metrics-canvas/serialize";
-import { emptyDoc, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
+import { emptyDoc, type CanvasEdgeData, type CanvasGroup, type CanvasMeta, type CanvasNodeData } from "@/lib/metrics-canvas/types";
 import { nodeTypes } from "@/components/metrics-canvas/nodes";
 import { edgeTypes } from "@/components/metrics-canvas/edges";
 import { CanvasInteractionProvider } from "@/components/metrics-canvas/interaction";
@@ -72,6 +73,26 @@ export function MetricsCanvasViewer({ token }: { token: string }) {
       );
     },
     [setNodes],
+  );
+
+  // If a viewer drags a box, drop the saved route on its edges so they follow
+  // live (floating) instead of leaving the line at its baked path.
+  const clearRoutes = useCallback(() => {
+    setEdges((es) =>
+      es.some((e) => (e.data as CanvasEdgeData | undefined)?.route)
+        ? es.map((e) =>
+            (e.data as CanvasEdgeData | undefined)?.route ? { ...e, data: { ...e.data, route: undefined } } : e,
+          )
+        : es,
+    );
+  }, [setEdges]);
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<RfNode>[]) => {
+      onNodesChange(changes);
+      if (changes.some((c) => c.type === "position" || c.type === "dimensions")) clearRoutes();
+    },
+    [onNodesChange, clearRoutes],
   );
 
   // Hydrate the canvas once the public document arrives.
@@ -162,7 +183,7 @@ export function MetricsCanvasViewer({ token }: { token: string }) {
             edges={rfEdges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
-            onNodesChange={onNodesChange}
+            onNodesChange={handleNodesChange}
             nodesDraggable={canDrag}
             nodesConnectable={false}
             elementsSelectable={false}
@@ -191,6 +212,7 @@ export function MetricsCanvasViewer({ token }: { token: string }) {
               groups={groups}
               nodes={nodes}
               fontScale={fontScale}
+              onDragStart={canDrag ? clearRoutes : undefined}
               onDrag={canDrag ? moveGroupBy : undefined}
             />
           </ReactFlow>

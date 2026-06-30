@@ -52,6 +52,10 @@ export interface CanvasEdgeData extends Record<string, unknown> {
   arrowEnd?: boolean;
   dashed?: boolean;
   color?: string;
+  /** Baked orthogonal route (absolute canvas points) produced by auto-arrange.
+   *  When present the edge is drawn through these points; cleared on any manual
+   *  move so the edge falls back to live floating attachment. */
+  route?: { x: number; y: number }[];
 }
 
 export interface EdgeMarker {
