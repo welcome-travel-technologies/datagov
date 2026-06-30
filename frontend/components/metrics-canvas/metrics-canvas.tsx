@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, AlertTriangle } from "lucide-react";
 import {
   ReactFlow,
   Background,
@@ -18,6 +19,7 @@ import {
 } from "@xyflow/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type MetricsMap } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { typeMeta } from "@/lib/metrics-canvas/catalog";
 import { uid } from "@/lib/metrics-canvas/ids";
 import { makeCatalogNode, makeTypeNode } from "@/lib/metrics-canvas/catalog-tiles";
@@ -50,6 +52,10 @@ import { ShareDialog } from "@/components/metrics-canvas/share-dialog";
 
 const GROUP_COLORS = ["#0ea5e9", "#a855f7", "#f59e0b", "#10b981", "#ef4444", "#6366f1"];
 
+// Autosave is opt-in (off by default — manual saving is the norm) and the choice
+// is remembered across sessions.
+const AUTOSAVE_KEY = "metrics-map:autosave";
+
 function newMeta(): CanvasMeta {
   return { ...emptyDoc().meta };
 }
@@ -69,6 +75,11 @@ export function MetricsCanvas() {
   const [dirty, setDirty] = useState(false);
   const [rev, setRev] = useState(0);
 
+  // Autosave (opt-in, persisted) and a transient save/import notification.
+  const [autosave, setAutosave] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err" } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [selNodeId, setSelNodeId] = useState<string | null>(null);
   const [selEdgeId, setSelEdgeId] = useState<string | null>(null);
   const [selCount, setSelCount] = useState(0);
@@ -84,6 +95,9 @@ export function MetricsCanvas() {
   const history = useHistory<HistorySnapshot>();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Always points at the latest `save` so the keydown handler (registered before
+  // `save` is declared) can call it without a stale closure or TDZ.
+  const saveRef = useRef<() => void>(() => {});
 
   // Keep refs to the latest nodes/edges for snapshotting without stale closures.
   const nodesRef = useRef(nodes);
@@ -109,6 +123,38 @@ export function MetricsCanvas() {
     setDirty(true);
     setRev((r) => r + 1);
   }, []);
+
+  // Pop a small notification that auto-dismisses after a couple of seconds.
+  const showToast = useCallback((msg: string, kind: "ok" | "err" = "ok") => {
+    setToast({ msg, kind });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  // Restore the saved autosave preference once on mount (client only).
+  useEffect(() => {
+    try {
+      setAutosave(window.localStorage.getItem(AUTOSAVE_KEY) === "1");
+    } catch {
+      /* localStorage unavailable — leave autosave off */
+    }
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, []);
+
+  const toggleAutosave = useCallback(() => {
+    setAutosave((on) => {
+      const next = !on;
+      try {
+        window.localStorage.setItem(AUTOSAVE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore persistence failure */
+      }
+      showToast(next ? "Autosave on" : "Autosave off");
+      return next;
+    });
+  }, [showToast]);
 
   const pushHistory = useCallback(() => history.push(snapshot()), [history, snapshot]);
 
@@ -326,12 +372,19 @@ export function MetricsCanvas() {
       return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
     }
     function onKey(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+      // Ctrl/Cmd+S saves — handled even from form fields so it always wins over
+      // the browser's own save dialog. Called via ref to dodge declaration order.
+      if (mod && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveRef.current();
+        return;
+      }
       if (isEditable(e.target)) return;
-      const meta = e.ctrlKey || e.metaKey;
-      if (meta && e.key.toLowerCase() === "z" && !e.shiftKey) {
+      if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
-      } else if (meta && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+      } else if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
         e.preventDefault();
         redo();
       } else if (e.key === "Delete" || e.key === "Backspace") {
@@ -438,8 +491,18 @@ export function MetricsCanvas() {
       setPublicToken(saved.public_token ?? null);
       setPublicCanDrag(saved.public_can_drag ?? true);
       qc.invalidateQueries({ queryKey: CANVAS_MAPS_KEY });
+      showToast("Map saved");
     },
+    onError: () => showToast("Save failed — try again", "err"),
   });
+
+  // Manual save (Save button / Ctrl+S): updates the active map or creates one if
+  // this is a fresh canvas. Independent of the autosave toggle.
+  const save = useCallback(() => {
+    if (saveMut.isPending || !nodesRef.current.length) return;
+    saveMut.mutate();
+  }, [saveMut]);
+  saveRef.current = save;
 
   // "Save current map" from the bottom panel: always creates a NEW named map
   // (mirrors the lineage saved-views "+"), then adopts it as the active draft.
@@ -481,13 +544,26 @@ export function MetricsCanvas() {
     [draftId, onNew],
   );
 
-  // Autosave: 1.5s after the last change, but only once a map has been saved.
+  // Autosave: opt-in only. When enabled, save 1.5s after the last change (and
+  // only once the map has been saved at least once, so we have a record to PATCH).
   useEffect(() => {
-    if (!draftId || !dirty) return;
+    if (!autosave || !draftId || !dirty) return;
     const t = setTimeout(() => saveMut.mutate(), 1500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rev, draftId, dirty]);
+  }, [rev, draftId, dirty, autosave]);
+
+  // Warn before leaving with unsaved changes (autosave off means nothing else
+  // will persist them). Only guards full-page unload/refresh.
+  useEffect(() => {
+    if (!dirty) return;
+    function warn(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   // ---- import / export ----------------------------------------------------
 
@@ -499,9 +575,12 @@ export function MetricsCanvas() {
       if (!file) return;
       try {
         const doc = importJson(await file.text());
-        loadState(doc, null);
+        // Always land an import as a fresh, unnamed map (no draftId) so it can
+        // never overwrite the map that was open — saving it creates a new record.
+        loadState({ ...doc, meta: { ...doc.meta, name: "Untitled Map" } }, null);
+        showToast("Imported as a new map");
       } catch {
-        /* ignore malformed file */
+        showToast("Couldn't import that file", "err");
       }
     },
     [loadState],
@@ -538,11 +617,17 @@ export function MetricsCanvas() {
 
   return (
     <CanvasInteractionProvider value={interaction}>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
         <Toolbar
           canUndo={history.canUndo}
           canRedo={history.canRedo}
+          dirty={dirty}
+          saving={saveMut.isPending}
+          canSave={nodes.length > 0}
+          autosave={autosave}
           onNew={onNew}
+          onSave={save}
+          onToggleAutosave={toggleAutosave}
           onUndo={undo}
           onRedo={redo}
           onArrange={arrange}
@@ -640,6 +725,20 @@ export function MetricsCanvas() {
         </div>
 
         <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={onImportFile} />
+
+        {toast && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={cn(
+              "pointer-events-none absolute bottom-4 right-4 z-50 flex items-center gap-2 rounded-md border bg-panel px-3 py-2 text-[12.5px] font-medium shadow-lg",
+              toast.kind === "ok" ? "border-ok/30 text-ok" : "border-err/30 text-err",
+            )}
+          >
+            {toast.kind === "ok" ? <Check className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+            {toast.msg}
+          </div>
+        )}
       </div>
 
       <ShareDialog
