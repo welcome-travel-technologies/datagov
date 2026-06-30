@@ -56,6 +56,22 @@ describe("arrangeElk", () => {
     for (const p of routes.e2) expect(p.y).toBeGreaterThan(cTop - 120);
   });
 
+  it("applies the spacing sliders to nodes INSIDE a group, not just between groups", async () => {
+    // a→b is a vertical chain inside one group. The rank-spacing slider must
+    // move b away from a; a regression (options only on root) leaves it pinned
+    // at ELK's default (~20px) while only group-to-group gaps respond.
+    const nodes = ["a", "b"].map(node);
+    const edges: RfEdge[] = [{ id: "e1", source: "a", target: "b" }];
+    const groups = [{ id: "g1", name: "G1", color: "#000", nodeIds: ["a", "b"] }];
+    const opts = { direction: "DOWN" as const, nodeSep: 100, stagger: false };
+
+    const tight = await arrangeElk(nodes, edges, groups, { ...opts, rankSep: 80 });
+    const loose = await arrangeElk(nodes, edges, groups, { ...opts, rankSep: 320 });
+
+    const gap = (p: typeof tight) => p.positions.b.y - p.positions.a.y;
+    expect(gap(loose)).toBeGreaterThan(gap(tight) + 150);
+  });
+
   it("stagger offsets alternate layers and drops baked routes", async () => {
     const nodes = ["a", "b", "c"].map(node);
     const edges: RfEdge[] = [

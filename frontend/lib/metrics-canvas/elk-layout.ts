@@ -98,6 +98,12 @@ export async function arrangeElk(
       id: gid,
       layoutOptions: {
         "elk.padding": `[top=${GROUP_PAD_TOP},left=${GROUP_PAD_X},bottom=${GROUP_PAD_BOTTOM},right=${GROUP_PAD_X}]`,
+        // Spacing options are read per-container, NOT inherited from root even
+        // with INCLUDE_CHILDREN — so without these the nodes *inside* a group
+        // would always sit at ELK's defaults while only the group-to-group gap
+        // tracked the sliders. Mirror the root spacing onto every container.
+        "elk.spacing.nodeNode": String(opts.nodeSep),
+        "elk.layered.spacing.nodeNodeBetweenLayers": String(opts.rankSep),
       },
       children: clusterMembers.get(gid)!.map((id) => leaf(byId.get(id)!)),
     });
