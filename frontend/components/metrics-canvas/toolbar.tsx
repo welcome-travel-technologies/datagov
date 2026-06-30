@@ -61,7 +61,7 @@ export function Toolbar(p: ToolbarProps) {
       <IconBtn onClick={p.onRedo} title="Redo (Ctrl+Y)" disabled={!p.canRedo}>
         <Redo2 className="h-4 w-4" />
       </IconBtn>
-      <IconBtn onClick={p.onArrange} title="Auto-layout">
+      <IconBtn onClick={p.onArrange} title="Tidy up — auto-arrange &amp; separate groups">
         <LayoutGrid className="h-4 w-4" />
       </IconBtn>
       <IconBtn onClick={p.onFit} title="Fit view">

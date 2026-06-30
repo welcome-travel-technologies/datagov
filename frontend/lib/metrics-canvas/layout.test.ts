@@ -88,4 +88,43 @@ describe("arrangeDagre", () => {
     const intersects = a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
     expect(intersects).toBe(false);
   });
+
+  it("keeps three cross-linked groups from overlapping", () => {
+    // Cross edges between every group previously made Dagre's compound layout
+    // interleave members so the frames collided; the nested layout cannot.
+    const nodes = ["a", "b", "c", "d", "e", "f"].map(node);
+    const edges: RfEdge[] = [
+      { id: "e1", source: "a", target: "b" },
+      { id: "e2", source: "c", target: "d" },
+      { id: "e3", source: "e", target: "f" },
+      { id: "e4", source: "a", target: "c" },
+      { id: "e5", source: "c", target: "e" },
+      { id: "e6", source: "a", target: "e" },
+    ];
+    const groups = [
+      { id: "g1", name: "G1", color: "#000", nodeIds: ["a", "b"] },
+      { id: "g2", name: "G2", color: "#111", nodeIds: ["c", "d"] },
+      { id: "g3", name: "G3", color: "#222", nodeIds: ["e", "f"] },
+    ];
+    const pos = arrangeDagre(nodes, edges, "TB", groups);
+
+    const box = (ids: string[]) => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const id of ids) {
+        minX = Math.min(minX, pos[id].x);
+        minY = Math.min(minY, pos[id].y);
+        maxX = Math.max(maxX, pos[id].x + 190);
+        maxY = Math.max(maxY, pos[id].y + 60);
+      }
+      return { minX, minY, maxX, maxY };
+    };
+    const boxes = [box(["a", "b"]), box(["c", "d"]), box(["e", "f"])];
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const x = boxes[i], y = boxes[j];
+        const intersects = x.minX < y.maxX && y.minX < x.maxX && x.minY < y.maxY && y.minY < x.maxY;
+        expect(intersects).toBe(false);
+      }
+    }
+  });
 });
