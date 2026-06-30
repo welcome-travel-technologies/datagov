@@ -27,8 +27,6 @@ import type { ElkArrangeOpts } from "@/lib/metrics-canvas/arrange-settings";
 const GROUP_PAD_X = 28;
 const GROUP_PAD_TOP = 44;
 const GROUP_PAD_BOTTOM = 28;
-// How far stacked nodes shift sideways on alternate layers when stagger is on.
-const STAGGER_STEP = 56;
 
 export interface ElkResult {
   /** Absolute top-left position per arranged node id. */

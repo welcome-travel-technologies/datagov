@@ -18,6 +18,8 @@ export interface ArrangeSettings {
   groupSep: number;
   /** Offset stacked nodes left/right (zig-zag) instead of a straight stack. */
   stagger: boolean;
+  /** How far alternate layers shift sideways when stagger is on (px). */
+  staggerStep: number;
 }
 
 export const ARRANGE_KEY = "metrics-map:arrange";
@@ -27,12 +29,14 @@ export const DEFAULT_ARRANGE: ArrangeSettings = {
   rankSep: 190,
   groupSep: 140,
   stagger: false,
+  staggerStep: 80,
 };
 
 /** Slider bounds for the spacing variables. */
 export const NODE_SEP_RANGE = { min: 40, max: 220, step: 4 };
 export const RANK_SEP_RANGE = { min: 80, max: 360, step: 5 };
 export const GROUP_SEP_RANGE = { min: 60, max: 400, step: 5 };
+export const STAGGER_STEP_RANGE = { min: 24, max: 200, step: 4 };
 
 export interface ElkArrangeOpts {
   direction: "DOWN" | "RIGHT";
@@ -40,6 +44,7 @@ export interface ElkArrangeOpts {
   rankSep: number;
   groupSep: number;
   stagger: boolean;
+  staggerStep: number;
 }
 
 export function toElkOpts(s: ArrangeSettings): ElkArrangeOpts {
@@ -49,6 +54,7 @@ export function toElkOpts(s: ArrangeSettings): ElkArrangeOpts {
     rankSep: s.rankSep,
     groupSep: s.groupSep,
     stagger: s.stagger,
+    staggerStep: s.staggerStep,
   };
 }
 
@@ -71,5 +77,6 @@ export function sanitizeArrange(raw: unknown): ArrangeSettings {
     rankSep: clamp(o.rankSep, RANK_SEP_RANGE.min, RANK_SEP_RANGE.max, DEFAULT_ARRANGE.rankSep),
     groupSep: clamp(o.groupSep, GROUP_SEP_RANGE.min, GROUP_SEP_RANGE.max, DEFAULT_ARRANGE.groupSep),
     stagger: !!o.stagger,
+    staggerStep: clamp(o.staggerStep, STAGGER_STEP_RANGE.min, STAGGER_STEP_RANGE.max, DEFAULT_ARRANGE.staggerStep),
   };
 }
