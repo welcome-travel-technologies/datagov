@@ -26,10 +26,13 @@ export interface XY {
 // apart here are exactly the ones drawn on screen.
 const FRAME_PAD = 16; // GroupsOverlay PAD
 const FRAME_LABEL = 18; // GroupsOverlay LABEL_H
-const GROUP_GAP = 24; // clear space kept between adjacent group frames
+const GROUP_GAP = 40; // clear space kept between adjacent group frames
 
-const NODE_SEP = 48;
-const RANK_SEP = 96;
+// Generous spacing so edges and their labels have room to breathe: fewer lines
+// cross, fewer labels collide with boxes / group frames, and long edges are
+// less likely to clip a neighbour.
+const NODE_SEP = 72;
+const RANK_SEP = 150;
 const MARGIN = 24;
 
 /** Inset of group members from their super-node box. The frame (PAD beyond the

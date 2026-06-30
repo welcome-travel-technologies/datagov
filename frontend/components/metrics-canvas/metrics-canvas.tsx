@@ -348,13 +348,42 @@ export function MetricsCanvas() {
   const arrange = useCallback(() => {
     if (!nodesRef.current.length) return;
     pushHistory();
-    const pos = arrangeDagre(nodesRef.current, edgesRef.current, "TB", groupsRef.current);
-    setNodes((ns) => ns.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)));
+
+    // Drop redundant connections first. As floating edges, two edges with the
+    // same source→target draw the same line, so a second one is just a hidden
+    // duplicate (the "doubled line"). Collapse them — keeping a labelled edge
+    // over a blank one — but leave genuinely different labelled parallels alone.
+    const kept: RfEdge[] = [];
+    const slotOf = new Map<string, number>();
+    let removed = 0;
+    for (const e of edgesRef.current) {
+      const key = `${e.source}->${e.target}`;
+      const label = e.label ? String(e.label).trim() : "";
+      const idx = slotOf.get(key);
+      if (idx == null) {
+        slotOf.set(key, kept.length);
+        kept.push(e);
+        continue;
+      }
+      const existingLabel = kept[idx].label ? String(kept[idx].label).trim() : "";
+      if (existingLabel && label && existingLabel !== label) {
+        kept.push(e); // distinct labelled parallels — keep both
+        continue;
+      }
+      removed++;
+      if (label && !existingLabel) kept[idx] = e; // upgrade to the labelled one
+    }
+    const deduped = removed ? kept : edgesRef.current;
+    if (removed) setEdges(deduped);
+
     // Edges re-route themselves: they're floating, so they always attach to the
     // facing side of each re-positioned box — no handle bookkeeping needed here.
+    const pos = arrangeDagre(nodesRef.current, deduped, "TB", groupsRef.current);
+    setNodes((ns) => ns.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)));
     touch();
+    if (removed) showToast(`Merged ${removed} duplicate ${removed === 1 ? "connection" : "connections"}`);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 60);
-  }, [pushHistory, setNodes, touch, fitView]);
+  }, [pushHistory, setNodes, setEdges, touch, showToast, fitView]);
 
   const undo = useCallback(() => {
     const snap = history.undo(snapshot());
