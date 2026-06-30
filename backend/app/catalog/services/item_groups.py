@@ -8,10 +8,20 @@ so a re-import that adds a new (workspace, dataset) instance of an existing
 measure simply links it to that measure's existing group and inherits the
 curation.
 
+One exception heals *renamed* measures: when a measure is renamed in Power BI
+the ETL upsert refreshes ``Item.group_id`` from the new name, but the item
+stays linked to its OLD group (the linking pass only fills items with NO
+group). Such an item then shows as its own card, split from the other
+instances of its new name. We detach any PB_MEASURE whose ``group_id`` no
+longer matches its linked group's ``group_key`` so the pass below re-files it
+under the group for its current name (created if missing).
+
 Grouping keys (match the 0029 migration exactly):
   * PB_MEASURE with a group_id -> key = group_id,         kind=measure_name
   * everything else            -> key = "item::{item_id}", kind=singleton
 """
+from django.db.models import F
+
 from ..models import Item, ItemGroup
 
 _CHUNK = 900   # stays under SQLite's 999-variable limit for __in queries
@@ -29,9 +39,32 @@ def _chunked(seq, n=_CHUNK):
         yield seq[i:i + n]
 
 
+def _detach_renamed_measures(organization_id=None):
+    """Unlink any PB_MEASURE whose ``group_id`` (refreshed from a renamed
+    name) no longer matches its linked group's ``group_key``. Resets the
+    denormalized status to the default; ``ensure_item_groups`` re-links them
+    below and the status-mirror step re-applies the destination group's
+    status. Returns the number of items detached."""
+    stale = (
+        Item.objects
+        .filter(item_type='PB_MEASURE', item_group__isnull=False,
+                group_id__isnull=False)
+        .exclude(group_id=F('item_group__group_key'))
+    )
+    if organization_id is not None:
+        stale = stale.filter(organization_id=organization_id)
+    stale_ids = list(stale.values_list('item_id', flat=True))
+    for chunk in _chunked(stale_ids):
+        Item.objects.filter(item_id__in=chunk).update(
+            item_group=None, status='UNVERIFIED')
+    return len(stale_ids)
+
+
 def ensure_item_groups(organization_id=None, batch_size=2000):
     """Create/link ItemGroups for any items missing one. Returns the number
     of items linked."""
+    _detach_renamed_measures(organization_id)
+
     qs = Item.objects.filter(item_group__isnull=True)
     if organization_id is not None:
         qs = qs.filter(organization_id=organization_id)
