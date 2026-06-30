@@ -236,6 +236,6 @@ function staggerLayers(
     prev = p;
   }
   for (const id of present) {
-    if (layerOf[id] % 2 === 1) positions[id] = { ...positions[id], [cross]: positions[id][cross] + STAGGER_STEP };
+    if (layerOf[id] % 2 === 1) positions[id] = { ...positions[id], [cross]: positions[id][cross] + step };
   }
 }

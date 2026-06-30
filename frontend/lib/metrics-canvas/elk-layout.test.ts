@@ -24,6 +24,7 @@ describe("arrangeElk", () => {
       rankSep: 190,
       groupSep: 160,
       stagger: false,
+      staggerStep: 80,
     });
 
     for (const id of ["a", "b", "c", "d"]) {

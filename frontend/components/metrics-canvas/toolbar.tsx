@@ -25,6 +25,7 @@ import {
   NODE_SEP_RANGE,
   RANK_SEP_RANGE,
   GROUP_SEP_RANGE,
+  STAGGER_STEP_RANGE,
 } from "@/lib/metrics-canvas/arrange-settings";
 
 export interface ToolbarProps {
@@ -268,6 +269,18 @@ function ArrangeControl({
             <span className="text-[12px] text-foreground">Stagger stacked nodes</span>
             <Switch checked={arrange.stagger} onCheckedChange={(v) => patch({ stagger: v })} />
           </label>
+          {arrange.stagger && (
+            <div className="mt-2.5">
+              <DistanceSlider
+                label="Stagger amount"
+                value={arrange.staggerStep}
+                min={STAGGER_STEP_RANGE.min}
+                max={STAGGER_STEP_RANGE.max}
+                step={STAGGER_STEP_RANGE.step}
+                onChange={(v) => patch({ staggerStep: v })}
+              />
+            </div>
+          )}
 
           <button
             onClick={() => {
