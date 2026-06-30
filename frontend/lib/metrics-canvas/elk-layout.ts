@@ -216,6 +216,7 @@ function staggerLayers(
   positions: Record<string, XY>,
   memberIds: string[],
   direction: "DOWN" | "RIGHT",
+  step: number,
 ): void {
   const primary: keyof XY = direction === "DOWN" ? "y" : "x";
   const cross: keyof XY = direction === "DOWN" ? "x" : "y";
