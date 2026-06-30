@@ -22,6 +22,22 @@ export interface XY {
   y: number;
 }
 
+/**
+ * Choose the facing handle pair for an edge from the two node centers, so an
+ * orthogonal (smoothstep) edge runs straight between the nearest sides instead
+ * of looping out of a stale port. Returns handle ids matching the four ports
+ * every node exposes (`top` / `right` / `bottom` / `left`). The dominant axis
+ * wins: mostly-vertical → bottom↔top, mostly-horizontal → right↔left.
+ */
+export function facingHandles(source: XY, target: XY): { source: string; target: string } {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    return dy >= 0 ? { source: "bottom", target: "top" } : { source: "top", target: "bottom" };
+  }
+  return dx >= 0 ? { source: "right", target: "left" } : { source: "left", target: "right" };
+}
+
 // Group frame geometry — mirrors GroupsOverlay so the dashed frames we space
 // apart here are exactly the ones drawn on screen.
 const FRAME_PAD = 16; // GroupsOverlay PAD

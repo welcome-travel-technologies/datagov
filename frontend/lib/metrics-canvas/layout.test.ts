@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { arrangeDagre } from "@/lib/metrics-canvas/layout";
+import { arrangeDagre, facingHandles } from "@/lib/metrics-canvas/layout";
 import type { RfEdge, RfNode } from "@/lib/metrics-canvas/serialize";
 
 function node(id: string): RfNode {
@@ -126,5 +126,20 @@ describe("arrangeDagre", () => {
         expect(intersects).toBe(false);
       }
     }
+  });
+});
+
+describe("facingHandles", () => {
+  it("connects bottom→top when the target is below", () => {
+    expect(facingHandles({ x: 0, y: 0 }, { x: 5, y: 200 })).toEqual({ source: "bottom", target: "top" });
+  });
+  it("connects top→bottom when the target is above", () => {
+    expect(facingHandles({ x: 0, y: 0 }, { x: 5, y: -200 })).toEqual({ source: "top", target: "bottom" });
+  });
+  it("connects right→left when the target is to the right", () => {
+    expect(facingHandles({ x: 0, y: 0 }, { x: 200, y: 5 })).toEqual({ source: "right", target: "left" });
+  });
+  it("connects left→right when the target is to the left", () => {
+    expect(facingHandles({ x: 0, y: 0 }, { x: -200, y: 5 })).toEqual({ source: "left", target: "right" });
   });
 });

@@ -24,7 +24,7 @@ import { typeMeta } from "@/lib/metrics-canvas/catalog";
 import { uid } from "@/lib/metrics-canvas/ids";
 import { makeCatalogNode, makeTypeNode } from "@/lib/metrics-canvas/catalog-tiles";
 import { readPayload } from "@/lib/metrics-canvas/dnd";
-import { arrangeDagre } from "@/lib/metrics-canvas/layout";
+import { arrangeDagre, facingHandles, type XY } from "@/lib/metrics-canvas/layout";
 import { useHistory, type HistorySnapshot } from "@/lib/metrics-canvas/history";
 import {
   fromDoc,
@@ -349,9 +349,33 @@ export function MetricsCanvas() {
     pushHistory();
     const pos = arrangeDagre(nodesRef.current, edgesRef.current, "TB", groupsRef.current);
     setNodes((ns) => ns.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)));
+
+    // Re-point each edge to the facing sides of its (re-positioned) nodes so the
+    // orthogonal routing drops straight between them instead of looping out of a
+    // stale port. Use the fresh layout position, falling back to the node's own
+    // for anything the layout left in place (notes / section frames).
+    const byId = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const center = (id: string): XY | null => {
+      const n = byId.get(id);
+      if (!n) return null;
+      const p = pos[id] ?? n.position;
+      const w = (n.width as number | undefined) ?? n.measured?.width ?? 190;
+      const h = (n.height as number | undefined) ?? n.measured?.height ?? 60;
+      return { x: p.x + w / 2, y: p.y + h / 2 };
+    };
+    setEdges((es) =>
+      es.map((e) => {
+        const s = center(e.source);
+        const t = center(e.target);
+        if (!s || !t) return e;
+        const h = facingHandles(s, t);
+        return { ...e, sourceHandle: h.source, targetHandle: h.target };
+      }),
+    );
+
     touch();
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 60);
-  }, [pushHistory, setNodes, touch, fitView]);
+  }, [pushHistory, setNodes, setEdges, touch, fitView]);
 
   const undo = useCallback(() => {
     const snap = history.undo(snapshot());
