@@ -21,8 +21,8 @@ import type { RfEdge, RfNode } from "@/lib/metrics-canvas/serialize";
 import type { CanvasGroup } from "@/lib/metrics-canvas/types";
 import type { XY } from "@/lib/metrics-canvas/layout";
 
-const NODE_SEP = 72;
-const RANK_SEP = 150;
+const NODE_SEP = 100; // gap between side-by-side nodes (within a layer)
+const RANK_SEP = 190; // gap between layers (row to row)
 // Group container padding — mirrors GroupsOverlay (PAD 16 + label 18) plus slack
 // so the drawn frame sits comfortably inside ELK's container box.
 const GROUP_PAD_X = 28;
