@@ -86,11 +86,13 @@ describe("arrangeElk", () => {
       rankSep: 190,
       groupSep: 160,
       stagger: true,
+      staggerStep: 64,
     });
     // Routes are dropped so edges float (angle) between the offset boxes.
     expect(Object.keys(routes)).toHaveLength(0);
-    // a (layer 0) and c (layer 2) stay aligned; b (layer 1) is shifted sideways.
+    // a (layer 0) and c (layer 2) stay aligned; b (layer 1) is shifted sideways
+    // by exactly the configured stagger amount.
     expect(positions.a.x).toBe(positions.c.x);
-    expect(positions.b.x).not.toBe(positions.a.x);
+    expect(positions.b.x - positions.a.x).toBe(64);
   });
 });
