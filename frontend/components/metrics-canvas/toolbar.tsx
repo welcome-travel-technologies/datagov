@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   FilePlus2,
   Save,
@@ -12,9 +13,18 @@ import {
   Download,
   Image as ImageIcon,
   LayoutGrid,
+  ChevronDown,
+  ArrowDown,
+  ArrowRight,
   Share2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
+import {
+  type ArrangeSettings,
+  NODE_SEP_RANGE,
+  RANK_SEP_RANGE,
+} from "@/lib/metrics-canvas/arrange-settings";
 
 export interface ToolbarProps {
   canUndo: boolean;
@@ -27,12 +37,15 @@ export interface ToolbarProps {
   canSave: boolean;
   /** Whether autosave is currently enabled. */
   autosave: boolean;
+  /** Current auto-arrange settings (direction / spacing / stagger). */
+  arrange: ArrangeSettings;
   onNew: () => void;
   onSave: () => void;
   onToggleAutosave: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onArrange: () => void;
+  onArrangeChange: (next: ArrangeSettings) => void;
   onFit: () => void;
   onImport: () => void;
   onExportJson: () => void;
@@ -60,6 +73,186 @@ function IconBtn({
     >
       {children}
     </button>
+  );
+}
+
+/** Two/three mutually-exclusive pill buttons. */
+function Seg<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: React.ReactNode; title?: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex gap-0.5 rounded-md border border-line bg-panel2/60 p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          title={o.title}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex flex-1 items-center justify-center gap-1 rounded px-2 py-1 text-[11.5px] font-medium transition-colors",
+            value === o.value ? "bg-brand/15 text-brand" : "text-faint hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A labelled distance slider showing its live px value. */
+function DistanceSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.04em] text-faint">{label}</span>
+        <span className="text-[11px] tabular-nums text-foreground/70">{value}px</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-line accent-brand"
+      />
+    </div>
+  );
+}
+
+/** Split button: the left half arranges with current settings; the caret opens a
+ *  popover to tune direction, the two spacing distances, and stagger. */
+function ArrangeControl({
+  arrange,
+  onArrange,
+  onArrangeChange,
+}: {
+  arrange: ArrangeSettings;
+  onArrange: () => void;
+  onArrangeChange: (next: ArrangeSettings) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const patch = (p: Partial<ArrangeSettings>) => onArrangeChange({ ...arrange, ...p });
+
+  return (
+    <div ref={ref} className="relative flex items-center">
+      <button
+        onClick={onArrange}
+        title="Tidy up — auto-arrange & route edges"
+        className="grid h-8 w-8 place-items-center rounded-l-md border border-line-strong bg-panel text-foreground transition-colors hover:bg-panel2"
+      >
+        <LayoutGrid className="h-4 w-4" />
+      </button>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Auto-arrange settings"
+        aria-label="Auto-arrange settings"
+        className={cn(
+          "grid h-8 w-5 place-items-center rounded-r-md border border-l-0 border-line-strong transition-colors",
+          open ? "bg-brand/15 text-brand" : "bg-panel text-faint hover:bg-panel2",
+        )}
+      >
+        <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-9 z-30 w-60 rounded-md border border-line bg-panel p-3 shadow-card">
+          <div className="mb-3">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.04em] text-faint">Direction</div>
+            <Seg
+              value={arrange.direction}
+              onChange={(v) => patch({ direction: v })}
+              options={[
+                {
+                  value: "vertical",
+                  title: "Top to bottom",
+                  label: (
+                    <>
+                      <ArrowDown className="h-3 w-3" /> Vertical
+                    </>
+                  ),
+                },
+                {
+                  value: "horizontal",
+                  title: "Left to right",
+                  label: (
+                    <>
+                      <ArrowRight className="h-3 w-3" /> Horizontal
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </div>
+
+          <div className="mb-3 space-y-2.5">
+            <DistanceSlider
+              label="Node spacing"
+              value={arrange.nodeSep}
+              min={NODE_SEP_RANGE.min}
+              max={NODE_SEP_RANGE.max}
+              step={NODE_SEP_RANGE.step}
+              onChange={(v) => patch({ nodeSep: v })}
+            />
+            <DistanceSlider
+              label="Row spacing"
+              value={arrange.rankSep}
+              min={RANK_SEP_RANGE.min}
+              max={RANK_SEP_RANGE.max}
+              step={RANK_SEP_RANGE.step}
+              onChange={(v) => patch({ rankSep: v })}
+            />
+          </div>
+
+          <label className="flex items-center justify-between gap-2">
+            <span className="text-[12px] text-foreground">Stagger stacked nodes</span>
+            <Switch checked={arrange.stagger} onCheckedChange={(v) => patch({ stagger: v })} />
+          </label>
+
+          <button
+            onClick={() => {
+              setOpen(false);
+              onArrange();
+            }}
+            className="mt-3 w-full rounded-md bg-brand px-2 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-brand/90"
+          >
+            Apply &amp; arrange
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -115,9 +308,7 @@ export function Toolbar(p: ToolbarProps) {
       <IconBtn onClick={p.onRedo} title="Redo (Ctrl+Y)" disabled={!p.canRedo}>
         <Redo2 className="h-4 w-4" />
       </IconBtn>
-      <IconBtn onClick={p.onArrange} title="Tidy up — auto-arrange &amp; separate groups">
-        <LayoutGrid className="h-4 w-4" />
-      </IconBtn>
+      <ArrangeControl arrange={p.arrange} onArrange={p.onArrange} onArrangeChange={p.onArrangeChange} />
       <IconBtn onClick={p.onFit} title="Fit view">
         <Maximize className="h-4 w-4" />
       </IconBtn>

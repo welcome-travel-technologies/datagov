@@ -18,7 +18,12 @@ describe("arrangeElk", () => {
       { id: "g1", name: "G1", color: "#000", nodeIds: ["a", "b"] },
       { id: "g2", name: "G2", color: "#111", nodeIds: ["c", "d"] },
     ];
-    const { positions, routes } = await arrangeElk(nodes, edges, groups, "DOWN");
+    const { positions, routes } = await arrangeElk(nodes, edges, groups, {
+      direction: "DOWN",
+      nodeSep: 100,
+      rankSep: 190,
+      stagger: false,
+    });
 
     for (const id of ["a", "b", "c", "d"]) {
       expect(positions[id]).toBeDefined();
@@ -49,5 +54,24 @@ describe("arrangeElk", () => {
     // i.e. near y=0 while the members are far down the canvas).
     const cTop = Math.min(positions.c.y, positions.d.y);
     for (const p of routes.e2) expect(p.y).toBeGreaterThan(cTop - 120);
+  });
+
+  it("stagger offsets alternate layers and drops baked routes", async () => {
+    const nodes = ["a", "b", "c"].map(node);
+    const edges: RfEdge[] = [
+      { id: "e1", source: "a", target: "b" },
+      { id: "e2", source: "b", target: "c" },
+    ];
+    const { positions, routes } = await arrangeElk(nodes, edges, [], {
+      direction: "DOWN",
+      nodeSep: 100,
+      rankSep: 190,
+      stagger: true,
+    });
+    // Routes are dropped so edges float (angle) between the offset boxes.
+    expect(Object.keys(routes)).toHaveLength(0);
+    // a (layer 0) and c (layer 2) stay aligned; b (layer 1) is shifted sideways.
+    expect(positions.a.x).toBe(positions.c.x);
+    expect(positions.b.x).not.toBe(positions.a.x);
   });
 });

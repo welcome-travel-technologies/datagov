@@ -27,6 +27,14 @@ import { makeCatalogNode, makeTypeNode } from "@/lib/metrics-canvas/catalog-tile
 import { readPayload } from "@/lib/metrics-canvas/dnd";
 import { arrangeDagre } from "@/lib/metrics-canvas/layout";
 import { arrangeElk } from "@/lib/metrics-canvas/elk-layout";
+import {
+  ARRANGE_KEY,
+  DEFAULT_ARRANGE,
+  sanitizeArrange,
+  toDagreDir,
+  toElkOpts,
+  type ArrangeSettings,
+} from "@/lib/metrics-canvas/arrange-settings";
 import { useHistory, type HistorySnapshot } from "@/lib/metrics-canvas/history";
 import {
   fromDoc,
@@ -83,6 +91,9 @@ export function MetricsCanvas() {
   const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err" } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Auto-arrange settings (direction / spacing distances / stagger), persisted.
+  const [arrangeSettings, setArrangeSettings] = useState<ArrangeSettings>(DEFAULT_ARRANGE);
+
   const [selNodeId, setSelNodeId] = useState<string | null>(null);
   const [selEdgeId, setSelEdgeId] = useState<string | null>(null);
   const [selCount, setSelCount] = useState(0);
@@ -134,16 +145,27 @@ export function MetricsCanvas() {
     toastTimer.current = setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // Restore the saved autosave preference once on mount (client only).
+  // Restore saved preferences once on mount (client only).
   useEffect(() => {
     try {
       setAutosave(window.localStorage.getItem(AUTOSAVE_KEY) === "1");
+      const rawArrange = window.localStorage.getItem(ARRANGE_KEY);
+      if (rawArrange) setArrangeSettings(sanitizeArrange(JSON.parse(rawArrange)));
     } catch {
-      /* localStorage unavailable — leave autosave off */
+      /* localStorage unavailable — keep defaults */
     }
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
+  }, []);
+
+  const onArrangeChange = useCallback((next: ArrangeSettings) => {
+    setArrangeSettings(next);
+    try {
+      window.localStorage.setItem(ARRANGE_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore persistence failure */
+    }
   }, []);
 
   const toggleAutosave = useCallback(() => {
@@ -410,11 +432,11 @@ export function MetricsCanvas() {
     let positions: Record<string, { x: number; y: number }>;
     let routes: Record<string, { x: number; y: number }[]> = {};
     try {
-      const out = await arrangeElk(nodesRef.current, deduped, groupsRef.current, "DOWN");
+      const out = await arrangeElk(nodesRef.current, deduped, groupsRef.current, toElkOpts(arrangeSettings));
       positions = out.positions;
       routes = out.routes;
     } catch {
-      positions = arrangeDagre(nodesRef.current, deduped, "TB", groupsRef.current);
+      positions = arrangeDagre(nodesRef.current, deduped, toDagreDir(arrangeSettings), groupsRef.current);
     }
 
     setNodes((ns) => ns.map((n) => (positions[n.id] ? { ...n, position: positions[n.id] } : n)));
@@ -422,7 +444,7 @@ export function MetricsCanvas() {
     touch();
     if (removed) showToast(`Merged ${removed} duplicate ${removed === 1 ? "connection" : "connections"}`);
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 60);
-  }, [pushHistory, setNodes, setEdges, touch, showToast, fitView]);
+  }, [pushHistory, setNodes, setEdges, touch, showToast, fitView, arrangeSettings]);
 
   const undo = useCallback(() => {
     const snap = history.undo(snapshot());
@@ -702,9 +724,11 @@ export function MetricsCanvas() {
           saving={saveMut.isPending}
           canSave={nodes.length > 0}
           autosave={autosave}
+          arrange={arrangeSettings}
           onNew={onNew}
           onSave={save}
           onToggleAutosave={toggleAutosave}
+          onArrangeChange={onArrangeChange}
           onUndo={undo}
           onRedo={redo}
           onArrange={arrange}
