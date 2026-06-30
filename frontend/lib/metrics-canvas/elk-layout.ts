@@ -68,7 +68,7 @@ export async function arrangeElk(
   nodes: RfNode[],
   edges: RfEdge[],
   groups: CanvasGroup[] = [],
-  opts: ElkArrangeOpts = { direction: "DOWN", nodeSep: 100, rankSep: 190, stagger: false },
+  opts: ElkArrangeOpts = { direction: "DOWN", nodeSep: 100, rankSep: 190, groupSep: 160, stagger: false },
 ): Promise<ElkResult> {
   const layoutNodes = nodes.filter(isLayoutNode);
   const ids = new Set(layoutNodes.map((n) => n.id));
@@ -120,6 +120,14 @@ export async function arrangeElk(
     elkEdges.push({ id: e.id, sources: [e.source], targets: [e.target] });
   }
 
+  // Root-level spacing governs the gaps between top-level items. When there are
+  // groups those items ARE the group frames, so the dedicated `groupSep` drives
+  // them; on a flat map (no groups) the root holds the leaf nodes, so the
+  // node/row sliders apply there instead.
+  const hasGroups = clusterIds.length > 0;
+  const rootNodeSep = hasGroups ? opts.groupSep : opts.nodeSep;
+  const rootRankSep = hasGroups ? opts.groupSep : opts.rankSep;
+
   const graph: ElkNode = {
     id: "root",
     layoutOptions: {
@@ -127,8 +135,8 @@ export async function arrangeElk(
       "elk.direction": opts.direction,
       "elk.edgeRouting": "ORTHOGONAL",
       "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-      "elk.layered.spacing.nodeNodeBetweenLayers": String(opts.rankSep),
-      "elk.spacing.nodeNode": String(opts.nodeSep),
+      "elk.layered.spacing.nodeNodeBetweenLayers": String(rootRankSep),
+      "elk.spacing.nodeNode": String(rootNodeSep),
       "elk.spacing.edgeNode": "28",
       "elk.spacing.edgeEdge": "18",
       "elk.layered.spacing.edgeNodeBetweenLayers": "28",

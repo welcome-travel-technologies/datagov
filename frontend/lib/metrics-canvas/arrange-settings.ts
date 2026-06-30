@@ -10,10 +10,12 @@ export type ArrangeDir = "vertical" | "horizontal";
 
 export interface ArrangeSettings {
   direction: ArrangeDir;
-  /** Gap between side-by-side nodes (px). */
+  /** Gap between side-by-side nodes, inside a group (px). */
   nodeSep: number;
-  /** Gap between successive rows / layers along the flow (px). */
+  /** Gap between successive rows / layers along the flow, inside a group (px). */
   rankSep: number;
+  /** Gap between whole groups (and any ungrouped nodes) at the top level (px). */
+  groupSep: number;
   /** Offset stacked nodes left/right (zig-zag) instead of a straight stack. */
   stagger: boolean;
 }
@@ -23,17 +25,20 @@ export const DEFAULT_ARRANGE: ArrangeSettings = {
   direction: "vertical",
   nodeSep: 100,
   rankSep: 190,
+  groupSep: 140,
   stagger: false,
 };
 
-/** Slider bounds for the two spacing variables. */
+/** Slider bounds for the spacing variables. */
 export const NODE_SEP_RANGE = { min: 40, max: 220, step: 4 };
 export const RANK_SEP_RANGE = { min: 80, max: 360, step: 5 };
+export const GROUP_SEP_RANGE = { min: 60, max: 400, step: 5 };
 
 export interface ElkArrangeOpts {
   direction: "DOWN" | "RIGHT";
   nodeSep: number;
   rankSep: number;
+  groupSep: number;
   stagger: boolean;
 }
 
@@ -42,6 +47,7 @@ export function toElkOpts(s: ArrangeSettings): ElkArrangeOpts {
     direction: s.direction === "horizontal" ? "RIGHT" : "DOWN",
     nodeSep: s.nodeSep,
     rankSep: s.rankSep,
+    groupSep: s.groupSep,
     stagger: s.stagger,
   };
 }
@@ -63,6 +69,7 @@ export function sanitizeArrange(raw: unknown): ArrangeSettings {
     direction: o.direction === "horizontal" ? "horizontal" : "vertical",
     nodeSep: clamp(o.nodeSep, NODE_SEP_RANGE.min, NODE_SEP_RANGE.max, DEFAULT_ARRANGE.nodeSep),
     rankSep: clamp(o.rankSep, RANK_SEP_RANGE.min, RANK_SEP_RANGE.max, DEFAULT_ARRANGE.rankSep),
+    groupSep: clamp(o.groupSep, GROUP_SEP_RANGE.min, GROUP_SEP_RANGE.max, DEFAULT_ARRANGE.groupSep),
     stagger: !!o.stagger,
   };
 }

@@ -24,6 +24,7 @@ import {
   type ArrangeSettings,
   NODE_SEP_RANGE,
   RANK_SEP_RANGE,
+  GROUP_SEP_RANGE,
 } from "@/lib/metrics-canvas/arrange-settings";
 
 export interface ToolbarProps {
@@ -166,6 +167,15 @@ function ArrangeControl({
 
   const patch = (p: Partial<ArrangeSettings>) => onArrangeChange({ ...arrange, ...p });
 
+  // nodeSep spaces nodes ACROSS the flow; rankSep spaces successive steps ALONG
+  // it. Which on-screen axis each maps to flips with direction — so label by the
+  // axis the user actually sees. Otherwise "Node spacing" looks broken on
+  // connected boxes (their gap is the along-flow one) and only nudges unconnected
+  // siblings — exactly the "works only on some" confusion.
+  const isVertical = arrange.direction === "vertical";
+  const crossLabel = isVertical ? "Horizontal gap ↔" : "Vertical gap ↕";
+  const flowLabel = isVertical ? "Vertical gap ↕" : "Horizontal gap ↔";
+
   return (
     <div ref={ref} className="relative flex items-center">
       <button
@@ -217,23 +227,41 @@ function ArrangeControl({
             />
           </div>
 
-          <div className="mb-3 space-y-2.5">
-            <DistanceSlider
-              label="Node spacing"
-              value={arrange.nodeSep}
-              min={NODE_SEP_RANGE.min}
-              max={NODE_SEP_RANGE.max}
-              step={NODE_SEP_RANGE.step}
-              onChange={(v) => patch({ nodeSep: v })}
-            />
-            <DistanceSlider
-              label="Row spacing"
-              value={arrange.rankSep}
-              min={RANK_SEP_RANGE.min}
-              max={RANK_SEP_RANGE.max}
-              step={RANK_SEP_RANGE.step}
-              onChange={(v) => patch({ rankSep: v })}
-            />
+          <div className="mb-3 space-y-3">
+            <div className="space-y-2.5">
+              <div className="text-[9.5px] font-semibold uppercase tracking-[0.06em] text-faint/60">
+                Inside groups
+              </div>
+              <DistanceSlider
+                label={crossLabel}
+                value={arrange.nodeSep}
+                min={NODE_SEP_RANGE.min}
+                max={NODE_SEP_RANGE.max}
+                step={NODE_SEP_RANGE.step}
+                onChange={(v) => patch({ nodeSep: v })}
+              />
+              <DistanceSlider
+                label={flowLabel}
+                value={arrange.rankSep}
+                min={RANK_SEP_RANGE.min}
+                max={RANK_SEP_RANGE.max}
+                step={RANK_SEP_RANGE.step}
+                onChange={(v) => patch({ rankSep: v })}
+              />
+            </div>
+            <div className="space-y-2.5">
+              <div className="text-[9.5px] font-semibold uppercase tracking-[0.06em] text-faint/60">
+                Between groups
+              </div>
+              <DistanceSlider
+                label="Group gap"
+                value={arrange.groupSep}
+                min={GROUP_SEP_RANGE.min}
+                max={GROUP_SEP_RANGE.max}
+                step={GROUP_SEP_RANGE.step}
+                onChange={(v) => patch({ groupSep: v })}
+              />
+            </div>
           </div>
 
           <label className="flex items-center justify-between gap-2">

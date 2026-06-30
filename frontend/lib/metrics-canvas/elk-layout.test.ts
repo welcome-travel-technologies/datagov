@@ -22,6 +22,7 @@ describe("arrangeElk", () => {
       direction: "DOWN",
       nodeSep: 100,
       rankSep: 190,
+      groupSep: 160,
       stagger: false,
     });
 
@@ -63,7 +64,7 @@ describe("arrangeElk", () => {
     const nodes = ["a", "b"].map(node);
     const edges: RfEdge[] = [{ id: "e1", source: "a", target: "b" }];
     const groups = [{ id: "g1", name: "G1", color: "#000", nodeIds: ["a", "b"] }];
-    const opts = { direction: "DOWN" as const, nodeSep: 100, stagger: false };
+    const opts = { direction: "DOWN" as const, nodeSep: 100, groupSep: 160, stagger: false };
 
     const tight = await arrangeElk(nodes, edges, groups, { ...opts, rankSep: 80 });
     const loose = await arrangeElk(nodes, edges, groups, { ...opts, rankSep: 320 });
@@ -82,6 +83,7 @@ describe("arrangeElk", () => {
       direction: "DOWN",
       nodeSep: 100,
       rankSep: 190,
+      groupSep: 160,
       stagger: true,
     });
     // Routes are dropped so edges float (angle) between the offset boxes.
