@@ -178,8 +178,9 @@ export async function arrangeElk(
   // so members shift relative to their own chain. Baked routes are skipped — the
   // edges fall back to live floating, which angles cleanly between the offsets.
   if (opts.stagger) {
-    staggerLayers(positions, layoutNodes.filter((n) => !groupOf.has(n.id)).map((n) => n.id), opts.direction);
-    for (const gid of clusterIds) staggerLayers(positions, clusterMembers.get(gid)!, opts.direction);
+    const step = opts.staggerStep;
+    staggerLayers(positions, layoutNodes.filter((n) => !groupOf.has(n.id)).map((n) => n.id), opts.direction, step);
+    for (const gid of clusterIds) staggerLayers(positions, clusterMembers.get(gid)!, opts.direction, step);
     return { positions, routes: {} };
   }
 
