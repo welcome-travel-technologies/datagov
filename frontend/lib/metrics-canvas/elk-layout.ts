@@ -66,7 +66,14 @@ export async function arrangeElk(
   nodes: RfNode[],
   edges: RfEdge[],
   groups: CanvasGroup[] = [],
-  opts: ElkArrangeOpts = { direction: "DOWN", nodeSep: 100, rankSep: 190, groupSep: 160, stagger: false },
+  opts: ElkArrangeOpts = {
+    direction: "DOWN",
+    nodeSep: 100,
+    rankSep: 190,
+    groupSep: 160,
+    stagger: false,
+    staggerStep: 80,
+  },
 ): Promise<ElkResult> {
   const layoutNodes = nodes.filter(isLayoutNode);
   const ids = new Set(layoutNodes.map((n) => n.id));
