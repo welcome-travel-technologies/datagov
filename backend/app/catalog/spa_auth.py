@@ -596,6 +596,35 @@ def org_mcp_keys_revoke_view(request):
     return JsonResponse({"status": "revoked"})
 
 
+@require_POST
+def org_mcp_keys_delete_view(request):
+    """Hard-delete a key (``{key_id}``) — removes the row entirely.
+
+    Unlike revoke (which keeps the row for audit with ``is_active=False``),
+    this drops the key so it no longer appears in the table at all. The raw
+    token was already unrecoverable, so there is no secret to leak.
+    """
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from .models import McpApiKey
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    key_id = data.get("key_id")
+    if key_id is None:
+        return JsonResponse({"error": "key_id is required."}, status=400)
+
+    deleted, _ = McpApiKey.objects.filter(id=key_id, organization=org).delete()
+    if not deleted:
+        return JsonResponse({"error": "Key not found."}, status=404)
+    return JsonResponse({"status": "deleted"})
+
+
 # ---------------------------------------------------------------------------
 # MCP OAuth connectors (Org Settings → Connectors tab)
 #

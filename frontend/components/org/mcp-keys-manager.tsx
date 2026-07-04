@@ -60,6 +60,11 @@ export function McpKeysManager() {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK }),
   });
 
+  const deleteMut = useMutation({
+    mutationFn: (keyId: number) => api.org.deleteMcpKey(keyId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK }),
+  });
+
   if (isLoading) return <LoadingState label="Loading MCP keys…" />;
   if (isError || !data) {
     return (
@@ -84,6 +89,16 @@ export function McpKeysManager() {
     }
   }
 
+  function del(k: McpKey) {
+    if (
+      window.confirm(
+        `Permanently delete "${k.name}"? This removes the key row entirely. This can't be undone.`,
+      )
+    ) {
+      deleteMut.mutate(k.id);
+    }
+  }
+
   return (
     <>
       <div className="mb-3 flex items-start justify-end gap-4">
@@ -96,6 +111,13 @@ export function McpKeysManager() {
         <div className="mb-3 flex items-center gap-2 rounded-md bg-err/10 px-3 py-2 text-[12.5px] text-err">
           <AlertTriangle className="h-3.5 w-3.5" />
           {getApiErrorMessage(revokeMut.error, "Could not revoke key.")}
+        </div>
+      )}
+
+      {deleteMut.isError && (
+        <div className="mb-3 flex items-center gap-2 rounded-md bg-err/10 px-3 py-2 text-[12.5px] text-err">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {getApiErrorMessage(deleteMut.error, "Could not delete key.")}
         </div>
       )}
 
@@ -157,7 +179,18 @@ export function McpKeysManager() {
                         <Trash2 /> Revoke
                       </Button>
                     ) : (
-                      <Badge variant="outline">Revoked</Badge>
+                      <div className="flex items-center justify-end gap-2">
+                        <Badge variant="outline">Revoked</Badge>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-err hover:bg-err/10 hover:text-err"
+                          disabled={deleteMut.isPending}
+                          onClick={() => del(k)}
+                        >
+                          <Trash2 /> Delete
+                        </Button>
+                      </div>
                     )}
                   </TD>
                 </TR>

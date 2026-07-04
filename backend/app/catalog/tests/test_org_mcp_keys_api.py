@@ -6,6 +6,7 @@ Endpoints under test:
     GET  /api/org/mcp-keys/         -> keys + grantable scopes + members + endpoint
     POST /api/org/mcp-keys/create/  -> mint a key, return the raw token ONCE
     POST /api/org/mcp-keys/revoke/  -> deactivate a key
+    POST /api/org/mcp-keys/delete/  -> hard-delete a key row
 
 Admin-gated (is_admin / can_view_org_settings) like the rest of /api/org/.
 """
@@ -215,3 +216,50 @@ def test_cannot_revoke_another_orgs_key(admin_client, db):
     assert resp.status_code == 404
     key.refresh_from_db()
     assert key.is_active is True  # untouched
+
+
+# ---- delete ---------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_delete_removes_the_row(admin_client, admin_user, org):
+    key, _ = mcp_auth.mint_key(
+        user=admin_user, organization=org, name="k", scopes=["catalog:read"],
+    )
+    resp = admin_client.post(
+        "/api/org/mcp-keys/delete/",
+        data={"key_id": key.id},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "deleted"
+    assert not McpApiKey.objects.filter(id=key.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_unknown_key_is_404(admin_client):
+    resp = admin_client.post(
+        "/api/org/mcp-keys/delete/",
+        data={"key_id": 999999},
+        content_type="application/json",
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+def test_cannot_delete_another_orgs_key(admin_client, db):
+    from catalog.models import Organization
+
+    other_org = Organization.objects.create(name="Other Org")
+    victim = CustomUser.objects.create_user(
+        username="victim2", email="v2@example.com", password="x",
+    )
+    key, _ = mcp_auth.mint_key(
+        user=victim, organization=other_org, name="theirs", scopes=["catalog:read"],
+    )
+    resp = admin_client.post(
+        "/api/org/mcp-keys/delete/",
+        data={"key_id": key.id},
+        content_type="application/json",
+    )
+    assert resp.status_code == 404
+    assert McpApiKey.objects.filter(id=key.id).exists()  # untouched

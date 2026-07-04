@@ -1124,6 +1124,12 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ key_id: keyId }),
       }),
+    /** Hard-delete a key — removes the row entirely. */
+    deleteMcpKey: (keyId: number) =>
+      request<{ status: string }>("/org/mcp-keys/delete/", {
+        method: "POST",
+        body: JSON.stringify({ key_id: keyId }),
+      }),
     /** OAuth clients (MCP connectors) for the org. Never includes the secret. */
     oauthClients: () => request<OAuthClientsResponse>("/org/oauth-clients/"),
     /** Create a connector. The response's `client_secret` is the ONLY time the
