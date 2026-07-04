@@ -86,21 +86,7 @@ export function McpKeysManager() {
 
   return (
     <>
-      <div className="mb-3 flex items-start justify-between gap-4">
-        <p className="max-w-2xl text-[13px] text-muted-foreground">
-          Keys let external{" "}
-          <a
-            href="https://modelcontextprotocol.io"
-            target="_blank"
-            rel="noreferrer"
-            className="text-brand hover:underline"
-          >
-            MCP
-          </a>{" "}
-          clients (Claude Desktop, Claude Code, IDE agents) query this catalog through the
-          same tools the AI Assistant uses. A key acts as its owner, and can only use tools
-          that owner&apos;s org already has enabled.
-        </p>
+      <div className="mb-3 flex items-start justify-end gap-4">
         <Button variant="brand" onClick={() => setDialogOpen(true)}>
           <Plus /> New key
         </Button>

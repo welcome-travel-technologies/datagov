@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserPlus, Pencil, Trash2, ShieldCheck, Save, AlertCircle } from "lucide-react";
+import { UserPlus, Pencil, Trash2, ShieldCheck, Save, AlertCircle, KeyRound, Plug } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -83,8 +83,7 @@ export function OrgSettingsManager() {
         <TabsList>
           <TabsTrigger value="members">Members ({data.members.length})</TabsTrigger>
           <TabsTrigger value="settings">Assistant &amp; Display</TabsTrigger>
-          <TabsTrigger value="mcp">MCP Keys</TabsTrigger>
-          <TabsTrigger value="connectors">Connectors</TabsTrigger>
+          <TabsTrigger value="mcp">MCP Access</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members">
@@ -191,11 +190,42 @@ export function OrgSettingsManager() {
         </TabsContent>
 
         <TabsContent value="mcp">
-          <McpKeysManager />
-        </TabsContent>
+          <div className="space-y-6">
+            <section>
+              <div className="mb-1 flex items-center gap-2">
+                <KeyRound className="h-4 w-4 text-brand" />
+                <h3 className="text-sm font-semibold">MCP Keys</h3>
+                <span className="text-[12px] text-muted-foreground">
+                  — for Claude Desktop, Claude Code, IDE agents, scripts
+                </span>
+              </div>
+              <p className="mb-3 max-w-2xl text-[12.5px] text-muted-foreground">
+                Static bearer tokens you paste straight into a local client&apos;s MCP config.
+                No browser sign-in or admin approval needed. A key acts as its owner and can
+                only use tools that owner&apos;s org already has enabled.
+              </p>
+              <McpKeysManager />
+            </section>
 
-        <TabsContent value="connectors">
-          <OAuthClientsManager />
+            <div className="border-t border-border" />
+
+            <section>
+              <div className="mb-1 flex items-center gap-2">
+                <Plug className="h-4 w-4 text-brand" />
+                <h3 className="text-sm font-semibold">Connectors</h3>
+                <span className="text-[12px] text-muted-foreground">
+                  — for claude.ai&apos;s custom connector (browser)
+                </span>
+              </div>
+              <p className="mb-3 max-w-2xl text-[12.5px] text-muted-foreground">
+                OAuth 2.1 clients that let a browser assistant sign in to this catalog&apos;s
+                MCP server. Create one, then paste its Client ID and Secret into claude.ai&apos;s
+                connector dialog under <span className="font-medium text-foreground">Advanced settings</span>.
+                Only org admins can approve the sign-in.
+              </p>
+              <OAuthClientsManager />
+            </section>
+          </div>
         </TabsContent>
       </Tabs>
 

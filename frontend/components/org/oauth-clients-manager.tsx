@@ -78,16 +78,7 @@ export function OAuthClientsManager() {
 
   return (
     <>
-      <div className="mb-3 flex items-start justify-between gap-4">
-        <p className="max-w-2xl text-[13px] text-muted-foreground">
-          Connectors are OAuth clients that let a browser assistant —{" "}
-          <span className="font-medium text-foreground">claude.ai&apos;s custom connector</span>{" "}
-          — sign in to this catalog&apos;s MCP server. Create one, then paste its Client ID and
-          Secret into claude.ai&apos;s connector dialog under{" "}
-          <span className="font-medium text-foreground">Advanced settings</span>. Only org admins
-          can approve the sign-in. For Claude Desktop / Code, use an{" "}
-          <span className="font-medium text-foreground">MCP Key</span> instead.
-        </p>
+      <div className="mb-3 flex items-start justify-end gap-4">
         <Button variant="brand" onClick={() => setDialogOpen(true)}>
           <Plus /> New connector
         </Button>
