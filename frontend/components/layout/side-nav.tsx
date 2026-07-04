@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LogOut, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { BrandLogo, useBranding } from "@/lib/branding";
@@ -63,7 +63,7 @@ function GroupHeading({ label, collapsed }: { label: string; collapsed: boolean 
 
 export function SideNav() {
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const perms = user?.perms;
   const isActive = (href: string) => !!pathname && (pathname === href || pathname.startsWith(href + "/"));
 
@@ -82,10 +82,6 @@ export function SideNav() {
   };
 
   const { name: orgName } = useBranding();
-  const initials = (user?.email ?? "")
-    .replace(/@.*/, "")
-    .slice(0, 2)
-    .toUpperCase();
 
   return (
     <aside
@@ -134,35 +130,6 @@ export function SideNav() {
           </div>
         </div>
       </nav>
-
-      {/* user footer */}
-      <div
-        className={cn(
-          "flex shrink-0 border-t border-line px-[18px] py-3",
-          collapsed ? "flex-col items-start gap-2" : "items-center gap-2.5",
-        )}
-      >
-        <div
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-brand/10 text-[12px] font-semibold text-brand"
-          title={collapsed ? user?.email ?? "Guest" : undefined}
-        >
-          {initials || "—"}
-        </div>
-        {!collapsed && (
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="truncate text-[12.5px] font-semibold">{user?.email ?? "Guest"}</div>
-            <div className="text-[11px] capitalize text-faint">{user?.role ?? "—"}</div>
-          </div>
-        )}
-        <button
-          onClick={() => logout()}
-          aria-label="Sign out"
-          title="Sign out"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
-        >
-          <LogOut className="h-4 w-4" />
-        </button>
-      </div>
 
       {/* collapse / expand toggle */}
       <div className="shrink-0 border-t border-line px-3 py-2">

@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { AuthGuard } from "@/components/layout/auth-guard";
 import { SideNav } from "@/components/layout/side-nav";
+import { UserMenu } from "@/components/layout/user-menu";
 import { useBranding } from "@/lib/branding";
 import { LABEL_BY_HREF } from "@/components/layout/nav-config";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,7 @@ function Topbar() {
           </span>
         ))}
       </div>
+      <UserMenu />
     </header>
   );
 }
