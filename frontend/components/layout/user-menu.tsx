@@ -11,6 +11,12 @@ import {
   type NavItem,
 } from "@/components/layout/nav-config";
 
+/** Footer nav items shown in the user menu — excludes Queues and Integrations,
+ *  which live only in the sidebar. */
+const USER_MENU_ITEMS = FOOTER_ITEMS.filter(
+  (i) => i.href !== "/settings/queues" && i.href !== "/integrations",
+);
+
 /** Avatar + hover dropdown shown in the top navbar. Surfaces the user's
  *  settings links (User Settings, Org Settings, Queues, Integrations) and a
  *  Sign-out action. Replaces the old sidebar user footer. */
@@ -24,7 +30,7 @@ export function UserMenu() {
     .slice(0, 2)
     .toUpperCase();
 
-  const visibleItems = FOOTER_ITEMS.filter((i) => canSee(i, perms));
+  const visibleItems = USER_MENU_ITEMS.filter((i) => canSee(i, perms));
   const isActive = (href: string) =>
     !!pathname && (pathname === href || pathname.startsWith(href + "/"));
 
@@ -38,9 +44,6 @@ export function UserMenu() {
       >
         <span className="grid h-7 w-7 place-items-center rounded-full bg-brand/10 text-[12px] font-semibold text-brand">
           {initials || "—"}
-        </span>
-        <span className="hidden max-w-[160px] truncate text-foreground sm:inline">
-          {user?.email ?? "Guest"}
         </span>
         <ChevronDown className="h-3.5 w-3.5 text-faint transition-transform group-hover:rotate-180" />
       </button>
