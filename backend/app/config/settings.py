@@ -75,11 +75,35 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
+    'oauth2_provider',  # OAuth 2.1 provider for the MCP server (M5) — see OAUTH2_PROVIDER below
     'django_filters',
     'tailwind',
     'theme',
     'catalog',
 ]
+
+# OAuth 2.1 authorization server for the MCP endpoint (docs/mcp-server-plan.md M5).
+# Lets claude.ai's browser connector authenticate (it is OAuth-only — no bearer
+# field), while the static `wdc_` McpApiKey bearer tokens keep working for
+# Claude Desktop/Code. Scope keys MUST equal catalog/mcp/auth.py ALL_SCOPES
+# (a test asserts this), so OAuth scopes map 1:1 onto the MCP tool scopes and
+# the effective toolset stays "token scopes ∩ org feature flags".
+OAUTH2_PROVIDER = {
+    'SCOPES': {
+        'catalog:read': 'Read the data catalog: overview, lineage, and Power BI/dbt profilers',
+        'powerbi:query': 'Run live Power BI DAX queries (read-only)',
+        'bigquery:query': 'Run live read-only BigQuery SQL',
+    },
+    # OAuth 2.1 / MCP auth spec: PKCE mandatory (S256). This is DOT's default,
+    # set explicitly so it can't silently regress.
+    'PKCE_REQUIRED': True,
+    'ACCESS_TOKEN_EXPIRE_SECONDS': 3600,           # 1 hour
+    'REFRESH_TOKEN_EXPIRE_SECONDS': 60 * 60 * 24 * 14,  # 14 days
+    'ROTATE_REFRESH_TOKEN': True,
+    # claude.ai's redirect URI (https://claude.ai/api/mcp/auth_callback) is https;
+    # restrict redirect schemes to https so no http loopback client can register.
+    'ALLOWED_REDIRECT_URI_SCHEMES': ['https'],
+}
 
 TAILWIND_APP_NAME = 'theme'
 INTERNAL_IPS = [

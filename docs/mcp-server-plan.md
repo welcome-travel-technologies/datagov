@@ -1,7 +1,7 @@
 # Analytics assistant — architecture plan & MCP server design
 
-Status: **Phase M1 (MCP server, bearer auth) implemented** — see [mcp-server.md-worthy
-sections below]. Everything else in this document is planned, not built.
+Status: **Phase M1 (MCP server, bearer auth) and M5 (OAuth 2.1) implemented** —
+see §3 and §7. M2–M4 are planned, not built.
 
 This plan is the outcome of a deep-research pass (26 sources, 25 claims
 adversarially verified) over text-to-data agent architectures (nao, Wren AI,
@@ -45,7 +45,7 @@ assistant ([docs/assistant.md](assistant.md), `catalog/tools/`).
 | M2 | SQL/DAX **identifier validation** pre-flight (sqlglot vs front-loaded schema; DAX names vs synced catalog) | planned |
 | M3 | Eval harness: `replay_chat` fixtures → scored suite with an LLM judge; 👍/👎 feedback on chat messages | planned |
 | M4 | Governed **metric registry** + `run_metric(...)` deterministic tool (compile, don't generate) | planned |
-| M5 | MCP **OAuth 2.1** upgrade (spec-compliant: RFC 9728 + 8414 + 8707 + PKCE), org-scoped consent | planned |
+| **M5** | MCP **OAuth 2.1** upgrade (django-oauth-toolkit AS+RS: RFC 9728 + 8414 + PKCE), org-admin consent | **built** |
 
 Rationale for M1-first (user decision): the MCP server reuses the tool layer
 as-is, creates immediate external value (Claude Desktop / Claude Code / IDE
@@ -178,18 +178,70 @@ Pre-flight inside the two live tools, before any query is sent:
   *compiles* the query deterministically; the LLM only selects. Registered in
   both chat agent and MCP.
 
-## 7. M5 — OAuth 2.1 for MCP
+## 7. M5 — OAuth 2.1 for MCP (implemented)
 
-When third-party / per-user-consent clients matter:
+The reason M5 exists: **claude.ai's browser connector is OAuth-only** — its "Add
+custom connector" dialog has no header/API-key field, so a static `wdc_` bearer
+cannot be entered there. OAuth makes the browser client work; Desktop/Code keep
+using bearer keys.
 
-- `django-oauth-toolkit` (OIDC + PKCE) as the authorization server inside
-  Django (spec permits combined AS+RS), or Entra ID if we prefer delegating.
-- Add: `/.well-known/oauth-protected-resource` (RFC 9728) and point the
-  existing `401 WWW-Authenticate` at it; `/.well-known/oauth-authorization-server`
-  (RFC 8414); enforce RFC 8707 `resource`/`aud` binding (canonical URI
-  `https://datagov.welcomd.com/api/mcp/`); map OAuth scopes 1:1 onto the M1
-  scope names, which is why M1 already uses OAuth-style scope strings.
-- `McpApiKey` bearer keys remain as a "personal access token" fallback.
+### 7.1 Shape
+
+- **`django-oauth-toolkit` (DOT)** is the combined authorization + resource
+  server inside Django (the spec permits combined AS+RS). It provides
+  authorize/token/PKCE/refresh/revocation/consent + the `Application` client
+  model & admin. DOT is mounted under **`/api/o/`** (`/api/o/authorize/`,
+  `/api/o/token/`, `/api/o/revoke_token/`) so nginx's existing `/api/` proxy
+  covers it.
+- **Two metadata docs we add** (`catalog/mcp/oauth.py`), served at the site root
+  (nginx `^~ /.well-known/oauth-` → Django):
+  `/.well-known/oauth-protected-resource` (RFC 9728) and
+  `/.well-known/oauth-authorization-server` (RFC 8414). The MCP `401` now carries
+  `WWW-Authenticate: Bearer … resource_metadata="…/.well-known/oauth-protected-resource"`.
+- **PKCE S256 mandatory** (`OAUTH2_PROVIDER['PKCE_REQUIRED']=True`). Access token
+  1h, refresh 14d (rotating). Scope keys equal the M1 `ALL_SCOPES` 1:1 (a test
+  asserts parity), so the effective toolset stays **token scopes ∩ org flags**.
+
+### 7.2 Decisions
+
+- **Manual client registration only** — no public Dynamic Client Registration
+  endpoint (smaller attack surface). Mint a client with
+  `python manage.py create_oauth_client`.
+- **Org admins only** may complete the consent flow
+  (`OrgAdminAuthorizationView` gates DOT's authorize view via
+  `access.is_org_admin`).
+- **Explicit consent** screen (DOT default; `skip_authorization=False`).
+- **No token passthrough** (unchanged): OAuth callers authenticate to *us*;
+  BigQuery/Power BI still use the org's stored credentials.
+
+### 7.3 Token → principal
+
+An OAuth access token is user-scoped; `catalog/mcp/auth.py` resolves the org from
+the user's membership (`access.resolve_org`) and returns an `OAuthPrincipal`
+duck-typed to the `McpApiKey` fields the registry reads
+(`organization`/`user`/`scopes`), so `registry.build_tool_specs` is unchanged.
+`authenticate_request` branches on the token: `wdc_…` → `McpApiKey`, else → OAuth.
+
+### 7.4 Connect claude.ai (web) — runbook
+
+1. `python manage.py create_oauth_client --name "claude.ai"` → copy the printed
+   `client_id` + `client_secret` (secret shown once).
+2. In claude.ai → **Add custom connector**: URL `https://datagov.welcomd.com/api/mcp/`;
+   under **Advanced settings** paste the Client ID + Client Secret. Click Add.
+3. Claude discovers the AS via the `401`→PRM→AS-metadata chain and starts the
+   auth-code+PKCE flow. Be **logged into datagov as an org admin in the same
+   browser** (or log in when redirected — the SPA login honours `?next=` back to
+   the authorize page). Approve the consent screen.
+4. Claude can now call the read-only catalog tools. Revoke access anytime in
+   Django admin (Applications / Access tokens).
+
+### 7.5 Not done / future
+
+- RFC 8707 audience binding and Dynamic Client Registration (RFC 7591) are not
+  implemented (manual clients don't need DCR; add a thin `/register` view later
+  if zero-config onboarding is wanted).
+- `McpApiKey` bearer keys remain as the "personal access token" fallback for
+  Claude Desktop/Code.
 
 ## 8. Non-goals / guardrails (from refuted research claims)
 

@@ -20,9 +20,23 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.views.static import serve as media_serve
 
+from catalog.mcp.oauth import (
+    oauth_authorization_server_metadata,
+    oauth_protected_resource_metadata,
+)
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('catalog.urls')),
+
+    # OAuth 2.1 discovery metadata for the MCP server (M5). RFC 8414 / RFC 9728
+    # require these at the site root, so they live here (not under /api/); the
+    # nginx `^~ /.well-known/oauth-` block routes them to Django. The PRM regex
+    # also matches the RFC 9728 path-suffixed probe (…/oauth-protected-resource/api/mcp).
+    path('.well-known/oauth-authorization-server',
+         oauth_authorization_server_metadata, name='oauth-as-metadata'),
+    re_path(r'^\.well-known/oauth-protected-resource(?:/.*)?$',
+            oauth_protected_resource_metadata, name='oauth-prm-metadata'),
     # The classic server-rendered frontend was removed; the React app
     # (welcome-data-catalog-react/frontend) is the UI and talks to /api/.
     # User-uploaded media (the per-org branding icon). nginx proxies /media/*

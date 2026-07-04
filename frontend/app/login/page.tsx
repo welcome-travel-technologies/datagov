@@ -13,7 +13,10 @@ function LoginForm() {
   const { name: orgName } = useBranding();
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/dashboard";
+  // Only accept same-origin, non-protocol-relative paths (guards against an
+  // open-redirect via ?next=https://evil.com or //evil.com).
+  const rawNext = search.get("next") || "/dashboard";
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/dashboard";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -26,7 +29,14 @@ function LoginForm() {
     setError(null);
     try {
       await login(username, password);
-      router.push(next);
+      // The OAuth authorize page (and other Django-served pages) live under
+      // /api/, outside the Next app — hard-navigate there so the browser
+      // actually reaches Django; SPA routes use client-side navigation.
+      if (next.startsWith("/api/")) {
+        window.location.assign(next);
+      } else {
+        router.push(next);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Your credentials didn't match. Please try again.");
     } finally {

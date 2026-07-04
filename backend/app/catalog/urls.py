@@ -22,6 +22,7 @@ from .views import (
 )
 from .slack_views import slack_events, slack_oauth, slack_alerts_oauth
 from .mcp.views import mcp_endpoint
+from .mcp.oauth import OrgAdminAuthorizationView
 from .spa_auth import (
     me_view, branding_view, login_view, logout_view, change_password_view, me_workspaces_view,
     org_members_view, org_members_save_view, org_members_remove_view,
@@ -118,6 +119,13 @@ urlpatterns = [
 
     # MCP server (Streamable HTTP, bearer-key auth — see docs/mcp-server-plan.md)
     path('mcp/', mcp_endpoint, name='api-mcp'),
+
+    # OAuth 2.1 authorization server for the MCP endpoint (M5). Our admin-gated
+    # authorize view shadows DOT's default (same path → first match wins); the
+    # rest (token, revoke, …) come from the DOT include. Mounted under /api/o/
+    # so nginx's existing /api/ proxy covers it — no extra nginx routing.
+    path('o/authorize/', OrgAdminAuthorizationView.as_view(), name='authorize'),
+    path('o/', include('oauth2_provider.urls', namespace='oauth2_provider')),
 
     # Slack
     path('slack/events/', slack_events, name='slack-events'),
