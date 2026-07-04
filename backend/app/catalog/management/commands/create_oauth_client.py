@@ -12,16 +12,7 @@ and cannot be recovered — to rotate, create a new client and delete the old on
 connector dialog → Advanced settings.
 
 Default is a CONFIDENTIAL client (client_secret + PKCE). Pass ``--public`` for a
-PKCE-only public client (no secret) — e.g. a native/CLI client that can't keep
-one. For the **Claude Code CLI** (loopback OAuth callback):
-
-    python manage.py create_oauth_client --name "Claude Code" --public \
-        --redirect-uri http://localhost:8080/callback \
-        --redirect-uri http://127.0.0.1:8080/callback
-
-then ``claude mcp add --transport http --client-id <id> --callback-port 8080
-<name> https://<host>/api/mcp/``. http redirect URIs are allowed only on a
-loopback host (localhost / 127.0.0.1).
+PKCE-only public client (no secret) — e.g. for a client that can't keep one.
 """
 from django.core.management.base import BaseCommand
 
@@ -45,22 +36,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from django.core.management.base import CommandError
         from oauth2_provider.generators import (
             generate_client_id, generate_client_secret,
         )
         from oauth2_provider.models import get_application_model
 
-        from catalog.mcp.oauth import redirect_uri_error
-
         Application = get_application_model()
         redirect_uris = options['redirect_uris'] or DEFAULT_REDIRECT_URIS
-
-        # https anywhere; http only on a loopback host (CLI clients). The global
-        # ALLOWED_REDIRECT_URI_SCHEMES permits http, so enforce loopback here too.
-        scheme_err = redirect_uri_error(redirect_uris)
-        if scheme_err:
-            raise CommandError(scheme_err)
 
         client_id = generate_client_id()
         is_public = options['public']

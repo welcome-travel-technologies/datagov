@@ -677,31 +677,18 @@ def org_oauth_clients_view(request):
     if err:
         return err
 
-    from .mcp.oauth import DEFAULT_CLI_CALLBACK_PORT, DEFAULT_CLI_REDIRECT_URIS
-
     return JsonResponse({
         "clients": [_oauth_client_payload(a) for a in _oauth_clients_for_org(org)],
         "endpoint": request.build_absolute_uri("/api/mcp/"),
-        # Prefill defaults for the two connector kinds: claude.ai (web) vs the
-        # loopback callbacks a CLI client (Claude Code) uses.
         "default_redirect_uri": DEFAULT_OAUTH_REDIRECT_URI,
-        "default_cli_redirect_uris": list(DEFAULT_CLI_REDIRECT_URIS),
-        "default_cli_callback_port": DEFAULT_CLI_CALLBACK_PORT,
     })
 
 
 @require_POST
 def org_oauth_clients_create_view(request):
-    """Create an authorization-code OAuth client and return its ``client_id``
-    (+ ``client_secret`` ONCE for confidential clients).
-
-    Body: ``{name, redirect_uris?, public?}``.
-    - ``public=False`` (default) → a **confidential** client for a web connector
-      (claude.ai); redirect defaults to claude.ai's https callback.
-    - ``public=True`` → a **public** (PKCE-only, no secret) client for a
-      native/CLI connector (Claude Code); redirect defaults to the loopback URIs.
-    Redirect URIs are validated by ``redirect_uri_error`` (https anywhere, http
-    loopback only)."""
+    """Create a confidential authorization-code client and return its
+    ``client_id`` + ``client_secret`` ONCE. Body: ``{name, redirect_uris?}``
+    (``redirect_uris`` defaults to claude.ai's callback; https only)."""
     org, err = _admin_org(request)
     if err:
         return err
@@ -710,7 +697,6 @@ def org_oauth_clients_create_view(request):
         generate_client_id, generate_client_secret,
     )
     from oauth2_provider.models import get_application_model
-    from .mcp.oauth import DEFAULT_CLI_REDIRECT_URIS, redirect_uri_error
 
     try:
         data = json.loads(request.body or b"{}")
@@ -721,10 +707,7 @@ def org_oauth_clients_create_view(request):
     if not name:
         return JsonResponse({"error": "A connector name is required."}, status=400)
 
-    is_public = bool(data.get("public"))
-
-    # Accept a list, or a space/newline-separated string. Default depends on the
-    # client kind: loopback callbacks for a CLI client, claude.ai for a web one.
+    # Accept a list, or a space/newline-separated string; default to claude.ai.
     provided = data.get("redirect_uris")
     if isinstance(provided, str):
         uris = provided.split()
@@ -733,32 +716,30 @@ def org_oauth_clients_create_view(request):
     else:
         uris = []
     if not uris:
-        uris = list(DEFAULT_CLI_REDIRECT_URIS) if is_public else [DEFAULT_OAUTH_REDIRECT_URI]
-
-    scheme_err = redirect_uri_error(uris)
-    if scheme_err:
-        return JsonResponse({"error": scheme_err}, status=400)
+        uris = [DEFAULT_OAUTH_REDIRECT_URI]
+    # Match OAUTH2_PROVIDER['ALLOWED_REDIRECT_URI_SCHEMES'] = ['https'].
+    bad = [u for u in uris if not u.startswith("https://")]
+    if bad:
+        return JsonResponse(
+            {"error": f"Redirect URIs must be https: {', '.join(bad)}"}, status=400
+        )
 
     Application = get_application_model()
     client_id = generate_client_id()
-    # Public clients hold no secret — PKCE (required globally) is their proof.
-    client_secret = "" if is_public else generate_client_secret()
+    client_secret = generate_client_secret()
     app = Application(
         name=name,
         user=request.user,              # owner → org scoping (see module note)
         client_id=client_id,
-        client_type=(
-            Application.CLIENT_PUBLIC if is_public else Application.CLIENT_CONFIDENTIAL
-        ),
+        client_type=Application.CLIENT_CONFIDENTIAL,
         authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
         redirect_uris=" ".join(uris),
         skip_authorization=False,       # explicit consent (M5 decision)
     )
-    if client_secret:
-        app.client_secret = client_secret   # DOT hashes on save; plaintext returned below
+    app.client_secret = client_secret   # DOT hashes on save; plaintext returned below
     app.save()
 
-    # client_secret is the ONLY time the raw value leaves the server (empty for public).
+    # client_secret is the ONLY time the raw value leaves the server.
     return JsonResponse(
         {
             "client": _oauth_client_payload(app),

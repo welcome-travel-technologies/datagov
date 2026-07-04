@@ -241,38 +241,11 @@ duck-typed to the `McpApiKey` fields the registry reads
 4. Claude can now call the read-only catalog tools. Revoke access anytime in
    Django admin (Applications / Access tokens).
 
-### 7.4b Connect Claude Code (CLI, OAuth) — runbook
+### 7.5 Not done / future
 
-Claude Code (unlike claude.ai) has **no field to paste a client secret** and uses
-an **RFC 8252 loopback redirect** (`http://localhost:PORT/callback`), so it needs
-a **public** client, not the confidential claude.ai one. Two options:
-
-1. **Org Settings → Connectors → New connector → CLI (Claude Code)** — creates a
-   public (PKCE, no-secret) client with loopback redirect URIs and shows the exact
-   `claude mcp add …` command to copy. (CLI equivalent: `python manage.py
-   create_oauth_client --name "Claude Code" --public --redirect-uri
-   http://localhost:8080/callback --redirect-uri http://127.0.0.1:8080/callback`.)
-2. Run the shown command:
-   `claude mcp add --transport http --client-id <id> --callback-port 8080 datagov
-   https://datagov.welcomd.com/api/mcp/`, then approve the browser consent
-   (be signed in as an org admin). The `--callback-port` MUST match the port in
-   the registered redirect URIs.
-
-Simpler still for the CLI: skip OAuth and use an `McpApiKey` bearer token —
-`claude mcp add --transport http --header "Authorization: Bearer wdc_…" datagov
-https://datagov.welcomd.com/api/mcp/`.
-
-### 7.5 Done since / not done
-
-- **Public (PKCE) clients + http-loopback redirects** — implemented, so Claude
-  Code's OAuth flow works with a manually-created public client (see §7.4b). http
-  redirect URIs are allowed only on a loopback host
-  (`catalog.mcp.oauth.redirect_uri_error`); `ALLOWED_REDIRECT_URI_SCHEMES` is now
-  `['https','http']` and the AS metadata advertises `none` token-endpoint auth.
-- RFC 8707 audience binding and **Dynamic Client Registration (RFC 7591)** are
-  still not implemented (a manually-created public client removes the need for
-  DCR; add a thin `/register` view later if fully zero-config onboarding is
-  wanted).
+- RFC 8707 audience binding and Dynamic Client Registration (RFC 7591) are not
+  implemented (manual clients don't need DCR; add a thin `/register` view later
+  if zero-config onboarding is wanted).
 - `McpApiKey` bearer keys remain as the "personal access token" fallback for
   Claude Desktop/Code.
 

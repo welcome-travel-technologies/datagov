@@ -587,25 +587,19 @@ export interface OAuthClientsResponse {
   clients: OAuthClient[];
   /** Absolute `/api/mcp/` URL to paste into the connector dialog. */
   endpoint: string;
-  /** claude.ai's callback — prefilled for a web (confidential) connector. */
+  /** claude.ai's callback — prefilled in the create dialog. */
   default_redirect_uri: string;
-  /** Loopback callbacks — prefilled for a CLI (public) connector, e.g. Claude Code. */
-  default_cli_redirect_uris: string[];
-  /** The port baked into `default_cli_redirect_uris` (→ `--callback-port`). */
-  default_cli_callback_port: number;
 }
 
 export interface OAuthClientCreateInput {
   name: string;
   redirect_uris?: string[];
-  /** true → a public (PKCE-only, no secret) client for a native/CLI connector. */
-  public?: boolean;
 }
 
 export interface OAuthClientCreated {
   client: OAuthClient;
   client_id: string;
-  /** The client secret — returned ONCE, never again (empty for public clients). */
+  /** The client secret — returned ONCE, never again (stored hashed). */
   client_secret: string;
 }
 

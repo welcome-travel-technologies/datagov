@@ -70,10 +70,6 @@ def test_list_shape(admin_client):
     assert body["clients"] == []
     assert body["endpoint"].endswith("/api/mcp/")
     assert body["default_redirect_uri"] == "https://claude.ai/api/mcp/auth_callback"
-    # CLI (public) connector prefill — loopback callbacks + the matching port.
-    assert all(u.startswith("http://") for u in body["default_cli_redirect_uris"])
-    assert any("localhost" in u for u in body["default_cli_redirect_uris"])
-    assert isinstance(body["default_cli_callback_port"], int)
 
 
 @pytest.mark.django_db
@@ -122,52 +118,9 @@ def test_create_accepts_custom_https_redirect(admin_client):
 
 @pytest.mark.django_db
 def test_create_rejects_non_https_redirect(admin_client):
-    # http on a NON-loopback host is still rejected (plaintext to a public host).
     resp = _create(admin_client, name="x", redirect_uris=["http://insecure/cb"])
     assert resp.status_code == 400
     assert not _application_model().objects.filter(name="x").exists()
-
-
-# ---- public (CLI) clients -------------------------------------------------
-
-@pytest.mark.django_db
-def test_create_public_cli_client_defaults_to_loopback(admin_client, admin_user):
-    """A public client (Claude Code) has no secret, is CLIENT_PUBLIC, and its
-    redirect URIs default to loopback callbacks."""
-    resp = _create(admin_client, name="Claude Code", public=True)
-    assert resp.status_code == 201
-    body = resp.json()
-    assert body["client_secret"] == ""                       # public → no secret
-    assert body["client"]["client_type"] == "public"
-    uris = body["client"]["redirect_uris"]
-    assert uris and all(u.startswith("http://") for u in uris)
-    assert any("localhost" in u for u in uris)
-
-    Application = _application_model()
-    app = Application.objects.get(id=body["client"]["id"])
-    assert app.user_id == admin_user.id
-    assert app.client_type == Application.CLIENT_PUBLIC
-    assert app.authorization_grant_type == Application.GRANT_AUTHORIZATION_CODE
-
-
-@pytest.mark.django_db
-def test_create_public_accepts_explicit_http_loopback(admin_client):
-    body = _create(
-        admin_client, name="cc", public=True,
-        redirect_uris=["http://127.0.0.1:9000/callback"],
-    ).json()
-    assert body["client"]["redirect_uris"] == ["http://127.0.0.1:9000/callback"]
-
-
-@pytest.mark.django_db
-def test_create_public_still_rejects_http_nonloopback(admin_client):
-    """`public` does not loosen the loopback rule — http to a public host is 400."""
-    resp = _create(
-        admin_client, name="cc", public=True,
-        redirect_uris=["http://evil.example.com/callback"],
-    )
-    assert resp.status_code == 400
-    assert not _application_model().objects.filter(name="cc").exists()
 
 
 @pytest.mark.django_db
