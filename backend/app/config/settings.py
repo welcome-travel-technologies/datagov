@@ -100,14 +100,9 @@ OAUTH2_PROVIDER = {
     'ACCESS_TOKEN_EXPIRE_SECONDS': 3600,           # 1 hour
     'REFRESH_TOKEN_EXPIRE_SECONDS': 60 * 60 * 24 * 14,  # 14 days
     'ROTATE_REFRESH_TOKEN': True,
-    # https for web connectors (claude.ai → https://claude.ai/api/mcp/auth_callback),
-    # plus http so native/CLI clients (Claude Code) can use an RFC 8252 loopback
-    # redirect (http://localhost:PORT/callback — https localhost is impossible for
-    # them). http is permitted HERE at the scheme level, but the client-creation
-    # surfaces (catalog.mcp.oauth.redirect_uri_error, used by the Connectors API
-    # and create_oauth_client) reject http on any NON-loopback host, so a plaintext
-    # redirect to a public host can never be registered.
-    'ALLOWED_REDIRECT_URI_SCHEMES': ['https', 'http'],
+    # claude.ai's redirect URI (https://claude.ai/api/mcp/auth_callback) is https;
+    # restrict redirect schemes to https so no http loopback client can register.
+    'ALLOWED_REDIRECT_URI_SCHEMES': ['https'],
 }
 
 TAILWIND_APP_NAME = 'theme'

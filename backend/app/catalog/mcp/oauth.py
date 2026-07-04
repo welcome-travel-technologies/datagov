@@ -18,9 +18,6 @@ security-critical authorize/token/PKCE/consent/refresh machinery):
 Absolute URLs come from ``request.build_absolute_uri``; ``SECURE_PROXY_SSL_HEADER``
 is set (settings), so behind nginx/Cloudflare these are ``https://…``.
 """
-import ipaddress
-from urllib.parse import urlparse
-
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from oauth2_provider.views import AuthorizationView
@@ -35,55 +32,6 @@ MCP_ENDPOINT_PATH = '/api/mcp/'
 AUTHORIZE_PATH = '/api/o/authorize/'
 TOKEN_PATH = '/api/o/token/'
 REVOKE_PATH = '/api/o/revoke_token/'
-
-# Loopback redirect URIs a native/CLI client registers against (RFC 8252 §7.3).
-# Claude Code opens a local callback server and uses http://localhost:PORT/callback
-# (it also declares the 127.0.0.1 form), so both are registered; the port must
-# match Claude Code's `--callback-port`. Prefilled by the Connectors UI's CLI mode.
-DEFAULT_CLI_CALLBACK_PORT = 8080
-DEFAULT_CLI_REDIRECT_URIS = [
-    f'http://localhost:{DEFAULT_CLI_CALLBACK_PORT}/callback',
-    f'http://127.0.0.1:{DEFAULT_CLI_CALLBACK_PORT}/callback',
-]
-
-
-def is_loopback_redirect_uri(uri: str) -> bool:
-    """True if ``uri``'s host is a loopback address — ``localhost`` or any IP in
-    the 127/8 or ::1 loopback ranges (RFC 8252 §7.3 native-app redirect). Such an
-    http redirect never leaves the user's machine, so it is safe without TLS."""
-    try:
-        host = (urlparse(uri).hostname or '').lower()
-    except ValueError:
-        return False
-    if host == 'localhost':
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def redirect_uri_error(uris):
-    """Validate redirect URIs for a to-be-created OAuth client; return an error
-    string if any is disallowed, else ``None``.
-
-    Policy (RFC 8252-aligned): ``https`` for any host; ``http`` ONLY for a
-    loopback host (CLI/native clients like Claude Code). This is the gate that
-    keeps ``ALLOWED_REDIRECT_URI_SCHEMES=['https','http']`` from allowing a
-    plaintext redirect to a public host — enforce it on EVERY creation path."""
-    bad = []
-    for u in uris:
-        if u.startswith('https://'):
-            continue
-        if u.startswith('http://') and is_loopback_redirect_uri(u):
-            continue
-        bad.append(u)
-    if bad:
-        return (
-            'Redirect URIs must be https, or http on a loopback host '
-            f'(localhost / 127.0.0.1) for CLI clients: {", ".join(bad)}'
-        )
-    return None
 
 
 class OrgAdminAuthorizationView(AuthorizationView):
@@ -142,10 +90,7 @@ def oauth_authorization_server_metadata(request):
         'response_types_supported': ['code'],
         'grant_types_supported': ['authorization_code', 'refresh_token'],
         'code_challenge_methods_supported': ['S256'],
-        # 'none' = a public (PKCE-only) client that authenticates with no secret —
-        # what a native/CLI client (Claude Code) registers as; the two
-        # client_secret_* methods are for confidential web clients (claude.ai).
         'token_endpoint_auth_methods_supported': [
-            'client_secret_post', 'client_secret_basic', 'none',
+            'client_secret_post', 'client_secret_basic',
         ],
     })
