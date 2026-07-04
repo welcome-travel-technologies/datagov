@@ -18,6 +18,8 @@ security-critical authorize/token/PKCE/consent/refresh machinery):
 Absolute URLs come from ``request.build_absolute_uri``; ``SECURE_PROXY_SSL_HEADER``
 is set (settings), so behind nginx/Cloudflare these are ``https://…``.
 """
+import re
+
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from oauth2_provider.views import AuthorizationView
@@ -53,12 +55,19 @@ class OrgAdminAuthorizationView(AuthorizationView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
-        """Surface the acting user's org name to the styled consent template
-        (templates/oauth2_provider/authorize.html) for the branded eyebrow."""
+        """Surface the acting user's org branding — name, uploaded icon, and
+        primary colour — to the styled consent template so its logo/accent match
+        the SPA login's ``BrandLogo`` exactly."""
         context = super().get_context_data(**kwargs)
         org = resolve_org(self.request.user)
         if org is not None:
             context['org_name'] = getattr(org, 'name', None)
+            icon = getattr(org, 'icon', None)
+            context['org_icon_url'] = icon.url if icon else None
+            color = (getattr(org, 'primary_color', None) or '').strip()
+            # Only a strict hex — it is injected into a <style> block below.
+            if re.fullmatch(r'#[0-9A-Fa-f]{3,8}', color):
+                context['org_primary_color'] = color
         return context
 
 

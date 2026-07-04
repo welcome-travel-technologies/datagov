@@ -98,17 +98,19 @@ Next app. The form contract (hidden fields, {% templatetag openblock %} csrf_tok
             text-align: center;
             margin-bottom: 22px;
         }
+        /* Matches the SPA login's BrandLogo: transparent chip, teal glyph at
+           64%, or the org's uploaded icon filling a rounded box. */
         .mark {
-            width: 52px;
-            height: 52px;
-            border-radius: 14px;
-            background: oklch(0.74 0.15 168 / 0.12);
+            width: 56px;
+            height: 56px;
             display: grid;
             place-items: center;
             margin-bottom: 14px;
         }
         .mark svg { width: 64%; height: 64%; }
         .mark path { fill: var(--brand); }
+        .mark--img { border-radius: 14px; overflow: hidden; }
+        .mark--img img { width: 100%; height: 100%; object-fit: contain; }
         .eyebrow {
             font-size: 10px;
             font-weight: 600;
@@ -229,13 +231,18 @@ Next app. The form contract (hidden fields, {% templatetag openblock %} csrf_tok
             color: var(--faint);
         }
     </style>
+    {% if org_primary_color %}<style>:root{--brand:{{ org_primary_color }};--brand-hover:color-mix(in oklab, {{ org_primary_color }}, #000 14%);}</style>{% endif %}
 </head>
 <body>
     <main class="card">
         <div class="brand-head">
+            {% if org_icon_url %}
+            <span class="mark mark--img"><img src="{{ org_icon_url }}" alt="{{ org_name|default:'DataGov' }} logo"></span>
+            {% else %}
             <span class="mark" aria-hidden="true">
                 <svg viewBox="0 0 28 28"><path fill-rule="evenodd" d="M14 0c7.732 0 14 6.268 14 13.999 0 7.731-6.268 13.999-14 13.999S0 21.73 0 13.999C0 6.268 6.268 0 14 0zm8.827 12.772a.836.836 0 0 0-1.077-.088l-.104.088-5.052 5.052a.834.834 0 0 0 1.077 1.269l.104-.088 5.052-5.052a.835.835 0 0 0 0-1.181zm-11.42 5.052L6.354 12.77a.836.836 0 0 0-1.27 1.077l.089.104 5.052 5.052a.833.833 0 0 0 1.182 0 .835.835 0 0 0 .088-1.078l-.088-.103-5.053-5.052 5.053 5.052zM14 9.897a3.26 3.26 0 0 0-3.257 3.256A3.26 3.26 0 0 0 14 16.41a3.26 3.26 0 0 0 3.257-3.257A3.26 3.26 0 0 0 14 9.896z"/></svg>
             </span>
+            {% endif %}
             <span class="eyebrow">{{ org_name|default:"DataGov" }}</span>
             <span class="wordmark">DataGov</span>
         </div>
