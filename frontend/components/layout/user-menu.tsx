@@ -38,14 +38,13 @@ export function UserMenu() {
     <div className="group relative">
       <button
         type="button"
-        className="flex h-9 items-center gap-2 rounded-full border border-transparent pl-1 pr-2.5 text-[13px] font-medium transition-colors hover:border-line hover:bg-foreground/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+        className="flex h-9 items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
         aria-haspopup="menu"
         aria-label="User menu"
       >
         <span className="grid h-7 w-7 place-items-center rounded-full bg-brand/10 text-[12px] font-semibold text-brand">
           {initials || "—"}
         </span>
-        <ChevronDown className="h-3.5 w-3.5 text-faint transition-transform group-hover:rotate-180" />
       </button>
 
       {/* Hover/focus-within dropdown. Stays open while hovering into it. */}
