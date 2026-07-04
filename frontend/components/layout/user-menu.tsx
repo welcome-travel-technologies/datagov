@@ -59,11 +59,10 @@ export function UserMenu() {
             <div className="truncate text-[13px] font-semibold text-foreground">
               {user?.email ?? "Guest"}
             </div>
-            <div className="truncate text-[11px] text-faint">
-              {user?.organization?.name ?? "—"}
-            </div>
-            <div className="text-[11px] capitalize text-faint">
-              {user?.role ?? "—"}
+            <div className="flex items-center gap-1.5 truncate text-[11px] text-faint">
+              <span className="truncate">{user?.organization?.name ?? "—"}</span>
+              <span className="text-faint">·</span>
+              <span className="capitalize">{user?.role ?? "—"}</span>
             </div>
           </div>
 
