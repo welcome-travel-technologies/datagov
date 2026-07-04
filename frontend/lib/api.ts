@@ -573,6 +573,36 @@ export interface McpKeyCreated {
   token: string;
 }
 
+/** An OAuth 2.1 client (MCP connector) for browser clients like claude.ai. */
+export interface OAuthClient {
+  id: number;
+  name: string;
+  client_id: string;
+  redirect_uris: string[];
+  client_type: string;
+  created_at: string | null;
+}
+
+export interface OAuthClientsResponse {
+  clients: OAuthClient[];
+  /** Absolute `/api/mcp/` URL to paste into the connector dialog. */
+  endpoint: string;
+  /** claude.ai's callback — prefilled in the create dialog. */
+  default_redirect_uri: string;
+}
+
+export interface OAuthClientCreateInput {
+  name: string;
+  redirect_uris?: string[];
+}
+
+export interface OAuthClientCreated {
+  client: OAuthClient;
+  client_id: string;
+  /** The client secret — returned ONCE, never again (stored hashed). */
+  client_secret: string;
+}
+
 export interface OrgMembersResponse {
   organization: { id: number; name: string; primary_color?: string | null };
   members: OrgMember[];
@@ -1093,6 +1123,21 @@ export const api = {
       request<{ status: string }>("/org/mcp-keys/revoke/", {
         method: "POST",
         body: JSON.stringify({ key_id: keyId }),
+      }),
+    /** OAuth clients (MCP connectors) for the org. Never includes the secret. */
+    oauthClients: () => request<OAuthClientsResponse>("/org/oauth-clients/"),
+    /** Create a connector. The response's `client_secret` is the ONLY time the
+     *  raw value is returned — surface it once and let the user copy it. */
+    createOauthClient: (body: OAuthClientCreateInput) =>
+      request<OAuthClientCreated>("/org/oauth-clients/create/", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    /** Delete a connector (cascades its tokens; connection stops immediately). */
+    revokeOauthClient: (id: number) =>
+      request<{ status: string }>("/org/oauth-clients/revoke/", {
+        method: "POST",
+        body: JSON.stringify({ id }),
       }),
   },
 

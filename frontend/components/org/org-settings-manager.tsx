@@ -19,6 +19,7 @@ import {
 import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { MemberDialog } from "@/components/org/member-dialog";
 import { McpKeysManager } from "@/components/org/mcp-keys-manager";
+import { OAuthClientsManager } from "@/components/org/oauth-clients-manager";
 import {
   api,
   getApiErrorMessage,
@@ -83,6 +84,7 @@ export function OrgSettingsManager() {
           <TabsTrigger value="members">Members ({data.members.length})</TabsTrigger>
           <TabsTrigger value="settings">Assistant &amp; Display</TabsTrigger>
           <TabsTrigger value="mcp">MCP Keys</TabsTrigger>
+          <TabsTrigger value="connectors">Connectors</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members">
@@ -190,6 +192,10 @@ export function OrgSettingsManager() {
 
         <TabsContent value="mcp">
           <McpKeysManager />
+        </TabsContent>
+
+        <TabsContent value="connectors">
+          <OAuthClientsManager />
         </TabsContent>
       </Tabs>
 

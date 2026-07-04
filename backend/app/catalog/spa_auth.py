@@ -596,6 +596,162 @@ def org_mcp_keys_revoke_view(request):
     return JsonResponse({"status": "revoked"})
 
 
+# ---------------------------------------------------------------------------
+# MCP OAuth connectors (Org Settings → Connectors tab)
+#
+# Self-service management of django-oauth-toolkit ``Application`` rows — the
+# OAuth clients a browser MCP client (claude.ai's custom connector) uses to
+# authenticate to /api/mcp/ via OAuth 2.1 (docs/mcp-server-plan.md M5). This is
+# the UI counterpart to ``python manage.py create_oauth_client``; both create
+# the same confidential authorization-code client. The client_secret is returned
+# exactly ONCE (DOT hashes it on save), so this lives in an API the UI can
+# surface a one-time "copy it now" reveal on. Admin-gated via ``_admin_org``.
+#
+# DOT's ``Application`` has no organization FK, so we scope by owner: the
+# creating admin is set as ``Application.user`` and the list filters to clients
+# owned by a member of this org (single-tenant in practice; correct if it grows).
+# ---------------------------------------------------------------------------
+
+# claude.ai (web/desktop/mobile) posts the OAuth response here.
+DEFAULT_OAUTH_REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
+
+
+def _oauth_client_payload(app):
+    """Serialize one DOT Application for the table — never the client_secret
+    (hashed, unrecoverable); only the client_id and redirect URIs."""
+    return {
+        "id": app.id,
+        "name": app.name,
+        "client_id": app.client_id,
+        "redirect_uris": app.redirect_uris.split() if app.redirect_uris else [],
+        "client_type": app.client_type,
+        "created_at": app.created.isoformat() if getattr(app, "created", None) else None,
+    }
+
+
+def _oauth_clients_for_org(org):
+    from oauth2_provider.models import get_application_model
+
+    return (
+        get_application_model().objects
+        .filter(user__memberships__organization=org)
+        .distinct()
+        .order_by("-created")
+    )
+
+
+@require_GET
+def org_oauth_clients_view(request):
+    """Everything the Connectors tab needs: the org's OAuth clients, the MCP
+    endpoint URL, and the default redirect URI to prefill (claude.ai)."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    return JsonResponse({
+        "clients": [_oauth_client_payload(a) for a in _oauth_clients_for_org(org)],
+        "endpoint": request.build_absolute_uri("/api/mcp/"),
+        "default_redirect_uri": DEFAULT_OAUTH_REDIRECT_URI,
+    })
+
+
+@require_POST
+def org_oauth_clients_create_view(request):
+    """Create a confidential authorization-code client and return its
+    ``client_id`` + ``client_secret`` ONCE. Body: ``{name, redirect_uris?}``
+    (``redirect_uris`` defaults to claude.ai's callback; https only)."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from oauth2_provider.generators import (
+        generate_client_id, generate_client_secret,
+    )
+    from oauth2_provider.models import get_application_model
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"error": "A connector name is required."}, status=400)
+
+    # Accept a list, or a space/newline-separated string; default to claude.ai.
+    provided = data.get("redirect_uris")
+    if isinstance(provided, str):
+        uris = provided.split()
+    elif isinstance(provided, list):
+        uris = [str(u).strip() for u in provided if str(u).strip()]
+    else:
+        uris = []
+    if not uris:
+        uris = [DEFAULT_OAUTH_REDIRECT_URI]
+    # Match OAUTH2_PROVIDER['ALLOWED_REDIRECT_URI_SCHEMES'] = ['https'].
+    bad = [u for u in uris if not u.startswith("https://")]
+    if bad:
+        return JsonResponse(
+            {"error": f"Redirect URIs must be https: {', '.join(bad)}"}, status=400
+        )
+
+    Application = get_application_model()
+    client_id = generate_client_id()
+    client_secret = generate_client_secret()
+    app = Application(
+        name=name,
+        user=request.user,              # owner → org scoping (see module note)
+        client_id=client_id,
+        client_type=Application.CLIENT_CONFIDENTIAL,
+        authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        redirect_uris=" ".join(uris),
+        skip_authorization=False,       # explicit consent (M5 decision)
+    )
+    app.client_secret = client_secret   # DOT hashes on save; plaintext returned below
+    app.save()
+
+    # client_secret is the ONLY time the raw value leaves the server.
+    return JsonResponse(
+        {
+            "client": _oauth_client_payload(app),
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        status=201,
+    )
+
+
+@require_POST
+def org_oauth_clients_revoke_view(request):
+    """Delete an OAuth client (``{id}``) — DOT cascades its access/refresh
+    tokens + grants, so any connection using it stops immediately. There is no
+    soft-disable on DOT's Application, so this is a hard delete."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from oauth2_provider.models import get_application_model
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    client_pk = data.get("id")
+    if client_pk is None:
+        return JsonResponse({"error": "id is required."}, status=400)
+
+    app = (
+        get_application_model().objects
+        .filter(id=client_pk, user__memberships__organization=org)
+        .first()
+    )
+    if app is None:
+        return JsonResponse({"error": "Connector not found."}, status=404)
+    app.delete()
+    return JsonResponse({"status": "revoked"})
+
+
 def _q_short_result(value, limit=200, keep_newlines=False):
     """Best-effort string preview of a Django-Q task result (may be any pickled
     object, and unpickling can raise if the class isn't importable here).

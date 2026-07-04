@@ -29,6 +29,7 @@ from .spa_auth import (
     org_settings_save_view, org_queues_view, org_queue_task_kill_view,
     org_assistant_scope_view,
     org_mcp_keys_view, org_mcp_keys_create_view, org_mcp_keys_revoke_view,
+    org_oauth_clients_view, org_oauth_clients_create_view, org_oauth_clients_revoke_view,
 )
 
 router = DefaultRouter()
@@ -65,6 +66,10 @@ urlpatterns = [
     path('org/mcp-keys/', org_mcp_keys_view, name='api-org-mcp-keys'),
     path('org/mcp-keys/create/', org_mcp_keys_create_view, name='api-org-mcp-keys-create'),
     path('org/mcp-keys/revoke/', org_mcp_keys_revoke_view, name='api-org-mcp-keys-revoke'),
+    # MCP OAuth connectors (django-oauth-toolkit Applications) — Org Settings → Connectors
+    path('org/oauth-clients/', org_oauth_clients_view, name='api-org-oauth-clients'),
+    path('org/oauth-clients/create/', org_oauth_clients_create_view, name='api-org-oauth-clients-create'),
+    path('org/oauth-clients/revoke/', org_oauth_clients_revoke_view, name='api-org-oauth-clients-revoke'),
     path('org/queues/', org_queues_view, name='api-org-queues'),
     path('org/queues/<int:ormq_id>/kill/', org_queue_task_kill_view, name='api-org-queue-kill'),
     path('summary/', get_summary, name='api-summary'),

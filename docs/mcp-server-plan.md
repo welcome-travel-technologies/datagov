@@ -205,8 +205,11 @@ using bearer keys.
 ### 7.2 Decisions
 
 - **Manual client registration only** — no public Dynamic Client Registration
-  endpoint (smaller attack surface). Mint a client with
-  `python manage.py create_oauth_client`.
+  endpoint (smaller attack surface). Mint a client self-service in **Org
+  Settings → Connectors** (the `Application` list/create/delete API in
+  `spa_auth.py` + `OAuthClientsManager` tab, mirroring the MCP Keys tab; the
+  secret is revealed once). `python manage.py create_oauth_client` is the
+  automation/headless fallback — both create the same confidential client.
 - **Org admins only** may complete the consent flow
   (`OrgAdminAuthorizationView` gates DOT's authorize view via
   `access.is_org_admin`).
@@ -224,10 +227,13 @@ duck-typed to the `McpApiKey` fields the registry reads
 
 ### 7.4 Connect claude.ai (web) — runbook
 
-1. `python manage.py create_oauth_client --name "claude.ai"` → copy the printed
-   `client_id` + `client_secret` (secret shown once).
-2. In claude.ai → **Add custom connector**: URL `https://datagov.welcomd.com/api/mcp/`;
-   under **Advanced settings** paste the Client ID + Client Secret. Click Add.
+1. In DataGov → **Org Settings → Connectors → New connector** (name it
+   "claude.ai"). Copy the MCP endpoint URL, Client ID and Client Secret from the
+   one-time reveal. (CLI equivalent: `python manage.py create_oauth_client
+   --name "claude.ai"`.)
+2. In claude.ai → **Add custom connector**: paste the endpoint URL
+   (`https://datagov.welcomd.com/api/mcp/`) in the URL field; under **Advanced
+   settings** paste the Client ID + Client Secret. Click Add.
 3. Claude discovers the AS via the `401`→PRM→AS-metadata chain and starts the
    auth-code+PKCE flow. Be **logged into datagov as an org admin in the same
    browser** (or log in when redirected — the SPA login honours `?next=` back to
