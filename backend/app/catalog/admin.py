@@ -7,7 +7,7 @@ from .models import (
     ChatSession, ChatMessage, Organization, OrganizationMembership,
     IntegrationSource, SourceSchedule, SourceRunLog,
     IntegrationDestination, IntegrationHook,
-    UserActivityLog, StatusChangeLog, MetricsMap,
+    UserActivityLog, StatusChangeLog, MetricsMap, McpApiKey,
 )
 
 admin.site.register(CustomUser, UserAdmin)
@@ -190,6 +190,24 @@ class MetricsMapAdmin(admin.ModelAdmin):
     def metric_count(self, obj):
         return len(obj.metrics) if isinstance(obj.metrics, list) else 0
     metric_count.short_description = 'Metrics'
+
+
+@admin.register(McpApiKey)
+class McpApiKeyAdmin(admin.ModelAdmin):
+    """Revoke a key by unticking ``is_active``. Keys are minted from the CLI
+    (``python manage.py create_mcp_key``) — the raw token is never stored, so
+    there is nothing secret to view or edit here beyond the label/scopes."""
+    list_display = ('name', 'user', 'organization', 'key_prefix', 'scopes',
+                    'is_active', 'created_at', 'last_used_at')
+    list_filter = ('organization', 'is_active', 'created_at')
+    search_fields = ('name', 'key_prefix', 'user__email', 'user__username')
+    list_select_related = ('user', 'organization')
+    readonly_fields = ('key_prefix', 'key_hash', 'created_at', 'last_used_at')
+    autocomplete_fields = ('user',)
+
+    def has_add_permission(self, request):
+        # Minted via CLI so the raw token can be shown exactly once.
+        return False
 
 
 @admin.register(UserActivityLog)

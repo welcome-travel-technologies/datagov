@@ -21,11 +21,13 @@ from .views import (
     governance_export_csv, governance_import_csv,
 )
 from .slack_views import slack_events, slack_oauth, slack_alerts_oauth
+from .mcp.views import mcp_endpoint
 from .spa_auth import (
     me_view, branding_view, login_view, logout_view, change_password_view, me_workspaces_view,
     org_members_view, org_members_save_view, org_members_remove_view,
     org_settings_save_view, org_queues_view, org_queue_task_kill_view,
     org_assistant_scope_view,
+    org_mcp_keys_view, org_mcp_keys_create_view, org_mcp_keys_revoke_view,
 )
 
 router = DefaultRouter()
@@ -59,6 +61,9 @@ urlpatterns = [
     path('org/members/remove/', org_members_remove_view, name='api-org-members-remove'),
     path('org/settings/', org_settings_save_view, name='api-org-settings-save'),
     path('org/assistant-scope/', org_assistant_scope_view, name='api-org-assistant-scope'),
+    path('org/mcp-keys/', org_mcp_keys_view, name='api-org-mcp-keys'),
+    path('org/mcp-keys/create/', org_mcp_keys_create_view, name='api-org-mcp-keys-create'),
+    path('org/mcp-keys/revoke/', org_mcp_keys_revoke_view, name='api-org-mcp-keys-revoke'),
     path('org/queues/', org_queues_view, name='api-org-queues'),
     path('org/queues/<int:ormq_id>/kill/', org_queue_task_kill_view, name='api-org-queue-kill'),
     path('summary/', get_summary, name='api-summary'),
@@ -110,6 +115,9 @@ urlpatterns = [
     # Governance CSV round-trip (Data Dictionary)
     path('governance/export-csv/', governance_export_csv, name='governance-export-csv'),
     path('governance/import-csv/', governance_import_csv, name='governance-import-csv'),
+
+    # MCP server (Streamable HTTP, bearer-key auth — see docs/mcp-server-plan.md)
+    path('mcp/', mcp_endpoint, name='api-mcp'),
 
     # Slack
     path('slack/events/', slack_events, name='slack-events'),

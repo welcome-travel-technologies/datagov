@@ -419,6 +419,183 @@ def org_members_remove_view(request):
     return JsonResponse({"status": "removed"})
 
 
+# ---------------------------------------------------------------------------
+# MCP API keys (Org Settings → MCP Keys tab)
+#
+# Self-service front-end for the same keys the ``create_mcp_key`` CLI mints —
+# they share ``catalog.mcp.auth.mint_key`` so there is one minting path. The
+# raw token is returned exactly ONCE, in the create response (only its SHA-256
+# digest is stored), which is why this lives in an API the UI can surface a
+# one-time "copy it now" callout on, unlike the Django admin add form.
+# Admin-gated via ``_admin_org`` like the rest of /org/.
+# ---------------------------------------------------------------------------
+
+def _mcp_scope_catalog(org):
+    """Grantable MCP scopes with labels + whether the org currently has the
+    backing tools on. A scope still mints when ``active`` is False, but has no
+    effect until the flag is enabled (effective tools = scopes ∩ org flags),
+    so the UI can warn instead of silently minting a dead capability."""
+    from .mcp import auth as mcp_auth
+
+    return [
+        {
+            "value": mcp_auth.SCOPE_CATALOG_READ,
+            "label": "Catalog read",
+            "hint": "Catalog overview, lineage, and PowerBI/dbt profilers (read-only).",
+            "active": True,
+        },
+        {
+            "value": mcp_auth.SCOPE_POWERBI_QUERY,
+            "label": "PowerBI live query (DAX)",
+            "hint": "Run live PowerBI DAX queries. Needs PowerBI live tools enabled.",
+            "active": bool(getattr(org, "powerbi_live_tools_enabled", False)),
+        },
+        {
+            "value": mcp_auth.SCOPE_BIGQUERY_QUERY,
+            "label": "BigQuery live query (SQL)",
+            "hint": "Run live read-only BigQuery SQL. Needs BigQuery live tools enabled.",
+            "active": bool(getattr(org, "bigquery_live_tools_enabled", False)),
+        },
+    ]
+
+
+def _mcp_key_payload(key, request_user_id):
+    """Serialize one McpApiKey for the table — never the token (unrecoverable);
+    only its display prefix (``wdc_xxxx…``)."""
+    u = key.user
+    return {
+        "id": key.id,
+        "name": key.name,
+        "key_prefix": key.key_prefix,
+        "scopes": list(key.scopes or []),
+        "is_active": key.is_active,
+        "owner_user_id": key.user_id,
+        "owner_email": (u.email if u else None),
+        "owner_display": ((u.get_full_name() or u.email) if u else None),
+        "is_self": key.user_id == request_user_id,
+        "created_at": key.created_at.isoformat() if key.created_at else None,
+        "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
+    }
+
+
+@require_GET
+def org_mcp_keys_view(request):
+    """Everything the MCP Keys tab needs: the org's keys, the grantable scopes
+    (with active flags), the members a key can be minted for, and the absolute
+    MCP endpoint URL for the client-config snippet."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from .models import McpApiKey
+
+    keys = (
+        McpApiKey.objects.filter(organization=org)
+        .select_related("user")
+        .order_by("-created_at")
+    )
+    members = (
+        OrganizationMembership.objects.filter(organization=org)
+        .select_related("user")
+        .order_by("user__email")
+    )
+    return JsonResponse(
+        {
+            "keys": [_mcp_key_payload(k, request.user.id) for k in keys],
+            "available_scopes": _mcp_scope_catalog(org),
+            "members": [
+                {
+                    "user_id": m.user_id,
+                    "email": m.user.email,
+                    "display_name": m.user.get_full_name() or m.user.email,
+                    "is_self": m.user_id == request.user.id,
+                }
+                for m in members
+            ],
+            "endpoint": request.build_absolute_uri("/api/mcp/"),
+        }
+    )
+
+
+@require_POST
+def org_mcp_keys_create_view(request):
+    """Mint a key and return its raw token ONCE. Body:
+    ``{name, scopes[], user_id?}`` — ``user_id`` defaults to the acting admin
+    and must be a member of THIS org (a token always acts within one tenant)."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from .mcp import auth as mcp_auth
+    from .models import CustomUser
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"error": "A key name is required."}, status=400)
+
+    scopes = [s for s in (data.get("scopes") or []) if isinstance(s, str)]
+    if not scopes:
+        return JsonResponse({"error": "Select at least one scope."}, status=400)
+
+    # Owner: a member of this org; default to the acting admin. Minting for a
+    # user outside the org would create a token acting in the wrong tenant.
+    owner = request.user
+    if data.get("user_id") and str(data["user_id"]) != str(request.user.id):
+        owner = CustomUser.objects.filter(
+            id=data["user_id"], memberships__organization=org
+        ).first()
+        if owner is None:
+            return JsonResponse(
+                {"error": "Selected member is not part of this organization."},
+                status=400,
+            )
+
+    try:
+        key, raw = mcp_auth.mint_key(
+            user=owner, organization=org, name=name, scopes=scopes
+        )
+    except ValueError as exc:  # unknown scope
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    # ``token`` is the ONLY time the raw value leaves the server.
+    return JsonResponse(
+        {"key": _mcp_key_payload(key, request.user.id), "token": raw}, status=201
+    )
+
+
+@require_POST
+def org_mcp_keys_revoke_view(request):
+    """Revoke a key (``is_active=False``) — it stops authenticating immediately.
+    Kept (not deleted) so ``last_used_at`` / audit remain. Body: ``{key_id}``."""
+    org, err = _admin_org(request)
+    if err:
+        return err
+
+    from .models import McpApiKey
+
+    try:
+        data = json.loads(request.body or b"{}")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+
+    key_id = data.get("key_id")
+    if key_id is None:
+        return JsonResponse({"error": "key_id is required."}, status=400)
+
+    key = McpApiKey.objects.filter(id=key_id, organization=org).first()
+    if key is None:
+        return JsonResponse({"error": "Key not found."}, status=404)
+    if key.is_active:
+        key.is_active = False
+        key.save(update_fields=["is_active"])
+    return JsonResponse({"status": "revoked"})
+
+
 def _q_short_result(value, limit=200, keep_newlines=False):
     """Best-effort string preview of a Django-Q task result (may be any pickled
     object, and unpickling can raise if the class isn't importable here).

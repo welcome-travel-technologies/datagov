@@ -1168,3 +1168,42 @@ class MetricsMap(models.Model):
 
     def __str__(self):
         return self.name or f'Metrics map #{self.pk}'
+
+
+class McpApiKey(models.Model):
+    """Bearer API key for the MCP server (``POST /api/mcp/``).
+
+    One row per issued key, bound to a **user + organization** so MCP tool
+    calls resolve the same org feature-flags and per-user workspace defaults
+    the chat assistant uses. The raw token (``wdc_…``) is shown ONCE at mint
+    time (``python manage.py create_mcp_key``) and never stored — only its
+    SHA-256 hex digest (``key_hash``) is kept; ``key_prefix`` is a short
+    display fragment so a key can be recognised in admin without revealing it.
+
+    ``scopes`` is a JSON list of OAuth-style scope strings (see
+    ``catalog/mcp/auth.py``: ``catalog:read``, ``powerbi:query``,
+    ``bigquery:query``). The effective MCP toolset is scopes ∩ org flags.
+    Revoke by clearing ``is_active``; rotation = mint new + revoke old.
+    """
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name='mcp_api_keys',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='mcp_api_keys',
+    )
+    name = models.CharField(
+        max_length=100,
+        help_text='Human label for the key, e.g. "Jason – Claude Desktop".',
+    )
+    key_prefix = models.CharField(max_length=12, editable=False)
+    key_hash = models.CharField(max_length=64, unique=True, editable=False)
+    scopes = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.key_prefix}…)'

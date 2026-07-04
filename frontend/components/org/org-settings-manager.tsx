@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { MemberDialog } from "@/components/org/member-dialog";
+import { McpKeysManager } from "@/components/org/mcp-keys-manager";
 import {
   api,
   getApiErrorMessage,
@@ -81,6 +82,7 @@ export function OrgSettingsManager() {
         <TabsList>
           <TabsTrigger value="members">Members ({data.members.length})</TabsTrigger>
           <TabsTrigger value="settings">Assistant &amp; Display</TabsTrigger>
+          <TabsTrigger value="mcp">MCP Keys</TabsTrigger>
         </TabsList>
 
         <TabsContent value="members">
@@ -184,6 +186,10 @@ export function OrgSettingsManager() {
             models={data.chatbot_models}
             onSaved={() => qc.invalidateQueries({ queryKey: QK })}
           />
+        </TabsContent>
+
+        <TabsContent value="mcp">
+          <McpKeysManager />
         </TabsContent>
       </Tabs>
 

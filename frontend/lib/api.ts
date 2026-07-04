@@ -520,6 +520,59 @@ export interface AssistantScopeResponse {
   bigquery: ScopeOption[];
 }
 
+// ---- MCP API keys (Org Settings → MCP Keys tab) ---------------------------
+
+export interface McpScopeOption {
+  value: string;
+  label: string;
+  hint: string;
+  /** Whether the org currently has the backing tools enabled. A scope still
+   *  mints when false, but has no effect until the flag is on. */
+  active: boolean;
+}
+
+export interface McpKey {
+  id: number;
+  name: string;
+  /** Display-only prefix, e.g. `wdc_j0O2Kod…` — never the full token. */
+  key_prefix: string;
+  scopes: string[];
+  is_active: boolean;
+  owner_user_id: number | null;
+  owner_email: string | null;
+  owner_display: string | null;
+  is_self: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface McpKeyMember {
+  user_id: number;
+  email: string;
+  display_name: string;
+  is_self: boolean;
+}
+
+export interface McpKeysResponse {
+  keys: McpKey[];
+  available_scopes: McpScopeOption[];
+  members: McpKeyMember[];
+  /** Absolute `/api/mcp/` URL for the client-config snippet. */
+  endpoint: string;
+}
+
+export interface McpKeyCreateInput {
+  name: string;
+  scopes: string[];
+  user_id?: number;
+}
+
+export interface McpKeyCreated {
+  key: McpKey;
+  /** The raw `wdc_…` token — returned ONCE, never again. */
+  token: string;
+}
+
 export interface OrgMembersResponse {
   organization: { id: number; name: string; primary_color?: string | null };
   members: OrgMember[];
@@ -1025,6 +1078,21 @@ export const api = {
     killQueued: (id: number) =>
       request<{ status: string; signalled: string | null }>(`/org/queues/${id}/kill/`, {
         method: "POST",
+      }),
+    /** MCP API keys for the org. The list never includes the raw token. */
+    mcpKeys: () => request<McpKeysResponse>("/org/mcp-keys/"),
+    /** Mint a key. The response's `token` is the ONLY time the raw value is
+     *  returned — surface it once and let the user copy it. */
+    createMcpKey: (body: McpKeyCreateInput) =>
+      request<McpKeyCreated>("/org/mcp-keys/create/", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    /** Revoke a key (deactivates it immediately; kept for audit). */
+    revokeMcpKey: (keyId: number) =>
+      request<{ status: string }>("/org/mcp-keys/revoke/", {
+        method: "POST",
+        body: JSON.stringify({ key_id: keyId }),
       }),
   },
 

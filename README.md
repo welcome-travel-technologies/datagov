@@ -127,10 +127,56 @@ Backend configuration lives in `backend/.env` (start from [`backend/.env.sample`
 | `DEBUG` | `True` for local development |
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated allowed hosts |
 | `GEMINI_API_KEY` | Google Gemini key for the AI assistant |
-| `MCP_TOKEN` | Token for the catalog MCP/tooling layer |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth app credentials |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | PostgreSQL connection |
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASSWORD` | Bootstrap admin account |
+
+## MCP server
+
+The catalog exposes its assistant tools over the [Model Context Protocol](https://modelcontextprotocol.io) so external MCP clients (Claude Desktop, Claude Code, IDE agents) can query your catalog directly. It's the **same tool layer** the built-in AI assistant uses, served as a stateless JSON-RPC endpoint at **`POST /api/mcp/`**.
+
+**1. Mint an API key** (per user + organization) — the raw token is shown **once**.
+
+The easiest way is the UI: **Org Settings → MCP Keys → New key** (org admins only). Name the key, pick who it acts as, choose scopes, and copy the token (and a ready-to-paste client config) from the one-time reveal. Revoke any key from the same tab.
+
+For automation, mint from the backend instead:
+
+```bash
+# in the web container (or your backend venv)
+python manage.py create_mcp_key \
+  --email you@yourorg.com \
+  --name "Claude Desktop" \
+  --scopes catalog:read
+# → Token (shown ONCE): wdc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Available scopes (the effective toolset is **your scopes ∩ your org's enabled features**):
+
+| Scope | Grants |
+|---|---|
+| `catalog:read` | Catalog overview, lineage, and Power BI / dbt asset profilers (read-only) |
+| `powerbi:query` | Live DAX queries (`EVALUATE`-only guardrails) |
+| `bigquery:query` | Live SQL queries (`SELECT`/`WITH`-only, 1 GB cap, capped rows) |
+
+Revoke a key any time from **Org Settings → MCP Keys**, or by unticking **is_active** on the *MCP api keys* row in the Django admin.
+
+**2. Point your MCP client at the endpoint**, passing the token as a bearer header:
+
+```json
+{
+  "mcpServers": {
+    "welcome-data-catalog": {
+      "type": "http",
+      "url": "https://your-host/api/mcp/",
+      "headers": { "Authorization": "Bearer wdc_…" }
+    }
+  }
+}
+```
+
+Have the client call **`get_catalog_overview`** first — it returns the authoritative inventory (measures, reports, models, tables) that the other tools resolve names against.
+
+> Auth today is bearer keys (SHA-256 hashed at rest, never passed through to BigQuery/Power BI — those keep using the org's own service credentials). A spec-compliant OAuth 2.1 upgrade is planned. Full design and roadmap: [docs/mcp-server-plan.md](docs/mcp-server-plan.md).
 
 ## Project structure
 
@@ -161,6 +207,7 @@ Full developer documentation lives in [`docs/`](docs/) ([index](docs/README.md))
 - [ETL & integrations](docs/etl.md) — sources, the transform/load pipeline, the full workflow, destinations, scheduling, Slack alerts.
 - [Lineage](docs/lineage.md) — column-level lineage, the dbt ↔ Power BI bridge, and the React Flow explorer.
 - [AI assistant](docs/assistant.md) — the async pydantic-ai agent, model selection, tools, and guardrails.
+- [MCP server](docs/mcp-server-plan.md) — exposing the assistant tools over the Model Context Protocol, auth, scopes, and roadmap.
 - [Governance & access control](docs/governance.md) — ownership, status workflow, tasks, audit trail, and the access model.
 - [REST API](docs/api.md) — the `/api/` endpoint reference.
 - [Frontend](docs/frontend.md) — the Next.js SPA architecture.
