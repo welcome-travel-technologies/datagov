@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plug, Plus, Trash2, Copy, Check, AlertTriangle, ShieldCheck } from "lucide-react";
+import {
+  Plug, Plus, Trash2, Copy, Check, AlertTriangle, ShieldCheck, Globe, Terminal,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -167,6 +169,29 @@ export function OAuthClientsManager() {
   );
 }
 
+type ConnectorKind = "web" | "cli";
+
+/** A safe Claude Code server name derived from the connector name. */
+function cliServerName(name: string): string {
+  return (
+    name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "datagov"
+  );
+}
+
+/** Port from a loopback redirect URI (→ Claude Code's `--callback-port`). */
+function portOf(uri: string, fallback: number): number {
+  try {
+    const p = new URL(uri).port;
+    return p ? Number(p) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function CreateClientDialog({
   open,
   onOpenChange,
@@ -178,13 +203,17 @@ function CreateClientDialog({
   data: OAuthClientsResponse;
   onCreated: () => void;
 }) {
+  const [kind, setKind] = useState<ConnectorKind>("web");
   const [name, setName] = useState("");
   const [redirectUri, setRedirectUri] = useState(data.default_redirect_uri);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<OAuthClientCreated | null>(null);
 
+  const cliDefault = data.default_cli_redirect_uris.join("\n");
+
   useEffect(() => {
     if (open) {
+      setKind("web");
       setName("");
       setRedirectUri(data.default_redirect_uri);
       setError(null);
@@ -192,10 +221,17 @@ function CreateClientDialog({
     }
   }, [open, data.default_redirect_uri]);
 
+  function pickKind(next: ConnectorKind) {
+    setKind(next);
+    setRedirectUri(next === "cli" ? cliDefault : data.default_redirect_uri);
+    setError(null);
+  }
+
   const createMut = useMutation({
     mutationFn: () =>
       api.org.createOauthClient({
         name: name.trim(),
+        public: kind === "cli",
         redirect_uris: redirectUri
           .split(/[\s,]+/)
           .map((u) => u.trim())
@@ -221,35 +257,76 @@ function CreateClientDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         {created ? (
-          <CredentialsReveal created={created} endpoint={data.endpoint} onDone={() => onOpenChange(false)} />
+          <CredentialsReveal
+            created={created}
+            endpoint={data.endpoint}
+            fallbackPort={data.default_cli_callback_port}
+            onDone={() => onOpenChange(false)}
+          />
         ) : (
           <>
             <DialogHeader>
               <DialogTitle>New MCP connector</DialogTitle>
               <DialogDescription>
-                The Client Secret is shown once, right after you create it — copy it then.
+                Pick where this connector runs. Credentials are shown once, right after you create
+                it — copy them then.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
+              <Field label="Connector type">
+                <div className="grid grid-cols-2 gap-2">
+                  <KindOption
+                    active={kind === "web"}
+                    onClick={() => pickKind("web")}
+                    icon={<Globe className="h-4 w-4" />}
+                    title="Web (claude.ai)"
+                    sub="Confidential · client secret"
+                  />
+                  <KindOption
+                    active={kind === "cli"}
+                    onClick={() => pickKind("cli")}
+                    icon={<Terminal className="h-4 w-4" />}
+                    title="CLI (Claude Code)"
+                    sub="Public · PKCE, no secret"
+                  />
+                </div>
+              </Field>
+
               <Field label="Name">
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. claude.ai"
+                  placeholder={kind === "cli" ? "e.g. Claude Code" : "e.g. claude.ai"}
                   autoFocus
                 />
               </Field>
 
-              <Field label="Redirect URI">
+              <Field label={kind === "cli" ? "Redirect URIs (loopback callback)" : "Redirect URI"}>
                 <Input
                   value={redirectUri}
                   onChange={(e) => setRedirectUri(e.target.value)}
-                  placeholder="https://claude.ai/api/mcp/auth_callback"
+                  placeholder={
+                    kind === "cli"
+                      ? "http://localhost:8080/callback"
+                      : "https://claude.ai/api/mcp/auth_callback"
+                  }
                 />
                 <p className="mt-1 text-[12px] text-muted-foreground">
-                  Where the OAuth response is sent back. The default is claude.ai&apos;s callback —
-                  leave it unless you know you need another. Must be https.
+                  {kind === "cli" ? (
+                    <>
+                      Where Claude Code&apos;s local callback server listens. The port must match
+                      its <code className="font-mono">--callback-port</code>. Both{" "}
+                      <code className="font-mono">localhost</code> and{" "}
+                      <code className="font-mono">127.0.0.1</code> are registered; http is allowed
+                      only on a loopback host.
+                    </>
+                  ) : (
+                    <>
+                      Where the OAuth response is sent back. The default is claude.ai&apos;s callback
+                      — leave it unless you know you need another. Must be https.
+                    </>
+                  )}
                 </p>
               </Field>
 
@@ -272,34 +349,106 @@ function CreateClientDialog({
   );
 }
 
+function KindOption({
+  active,
+  onClick,
+  icon,
+  title,
+  sub,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  title: string;
+  sub: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors",
+        active
+          ? "border-brand bg-brand/[0.06] ring-1 ring-brand"
+          : "border-line hover:border-line-strong hover:bg-panel2",
+      )}
+    >
+      <span className={cn("flex items-center gap-1.5", active ? "text-brand" : "text-foreground")}>
+        {icon}
+        <span className="text-[13px] font-semibold">{title}</span>
+      </span>
+      <span className="text-[11.5px] text-muted-foreground">{sub}</span>
+    </button>
+  );
+}
+
 function CredentialsReveal({
   created,
   endpoint,
+  fallbackPort,
   onDone,
 }: {
   created: OAuthClientCreated;
   endpoint: string;
+  fallbackPort: number;
   onDone: () => void;
 }) {
+  const isPublic = created.client.client_type === "public";
+  const port = portOf(created.client.redirect_uris[0] ?? "", fallbackPort);
+  const serverName = cliServerName(created.client.name);
+  const cliCommand = [
+    "claude mcp add --transport http",
+    `  --client-id ${created.client_id}`,
+    `  --callback-port ${port}`,
+    `  ${serverName} ${endpoint}`,
+  ].join(" \\\n");
+
   return (
     <>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-ok" />
-          Connector created — copy the secret now
+          Connector created{isPublic ? "" : " — copy the secret now"}
         </DialogTitle>
         <DialogDescription>
-          This is the <span className="font-medium text-foreground">only</span> time the Client
-          Secret is shown. Paste all three into claude.ai → Add custom connector (URL field +
-          Advanced settings). If you lose the secret, delete this connector and create a new one.
+          {isPublic ? (
+            <>
+              A <span className="font-medium text-foreground">public</span> client — no secret to
+              store. Run the command below to add it to Claude Code, then approve the browser
+              consent screen (be signed in as an org admin).
+            </>
+          ) : (
+            <>
+              This is the <span className="font-medium text-foreground">only</span> time the Client
+              Secret is shown. Paste all three into claude.ai → Add custom connector (URL field +
+              Advanced settings). If you lose the secret, delete this connector and create a new one.
+            </>
+          )}
         </DialogDescription>
       </DialogHeader>
 
-      <div className="space-y-3">
-        <RevealRow label="MCP endpoint URL (URL field)" value={endpoint} />
-        <RevealRow label="OAuth Client ID" value={created.client_id} />
-        <RevealRow label="OAuth Client Secret" value={created.client_secret} mono />
-      </div>
+      {isPublic ? (
+        <div className="space-y-3">
+          <RevealRow label="OAuth Client ID" value={created.client_id} />
+          <div>
+            <div className="mb-1 text-[12px] font-medium text-muted-foreground">
+              Add to Claude Code
+            </div>
+            <div className="flex items-start gap-2">
+              <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-line bg-panel2 px-3 py-2 font-mono text-[12px] leading-relaxed">
+                {cliCommand}
+              </pre>
+              <CopyButton text={cliCommand} label="Copy" variant="outline" />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <RevealRow label="MCP endpoint URL (URL field)" value={endpoint} />
+          <RevealRow label="OAuth Client ID" value={created.client_id} />
+          <RevealRow label="OAuth Client Secret" value={created.client_secret} mono />
+        </div>
+      )}
 
       <div className="flex justify-end pt-1">
         <Button variant="brand" onClick={onDone}>

@@ -1,0 +1,292 @@
+{% load i18n %}<!DOCTYPE html>
+{% comment %}
+Styled override of django-oauth-toolkit's default authorize/consent screen so
+the OAuth 2.1 consent step for the MCP server matches the DataGov SPA (Welcome
+teal accent, Hanken Grotesk, card-on-gradient, light + dark). Self-contained —
+no Tailwind build, no external CSS — because it is served by Django, outside the
+Next app. The form contract (hidden fields, {% templatetag openblock %} csrf_token {% templatetag closeblock %}, the `allow` submit button,
+`scopes_descriptions`, `error`) is DOT's; only the presentation changed.
+{% endcomment %}
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Authorize · DataGov</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: oklch(0.986 0.003 95);
+            --fg: oklch(0.24 0.008 70);
+            --card: oklch(1 0 0);
+            --muted-fg: oklch(0.52 0.006 70);
+            --faint: oklch(0.66 0.005 70);
+            --line: oklch(0.915 0.004 90);
+            --line-strong: oklch(0.865 0.005 90);
+            --brand: oklch(0.74 0.15 168);
+            --brand-hover: oklch(0.66 0.14 168);
+            --err: oklch(0.57 0.17 25);
+            --blob-teal: oklch(0.74 0.15 168 / 0.18);
+            --blob-blue: oklch(0.34 0.035 250 / 0.14);
+            --shadow: 0 20px 55px -20px oklch(0.24 0.02 250 / 0.28), 0 2px 8px -2px oklch(0.24 0.02 250 / 0.12);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: oklch(0.175 0.006 265);
+                --fg: oklch(0.96 0.003 265);
+                --card: oklch(0.205 0.007 265);
+                --muted-fg: oklch(0.68 0.010 265);
+                --faint: oklch(0.55 0.010 265);
+                --line: oklch(0.285 0.008 265);
+                --line-strong: oklch(0.345 0.010 265);
+                --brand: oklch(0.78 0.15 168);
+                --brand-hover: oklch(0.70 0.14 168);
+                --err: oklch(0.70 0.15 25);
+                --blob-teal: oklch(0.78 0.15 168 / 0.16);
+                --blob-blue: oklch(0.42 0.04 250 / 0.20);
+                --shadow: 0 24px 60px -20px oklch(0 0 0 / 0.55), 0 2px 8px -2px oklch(0 0 0 / 0.4);
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            min-height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background-color: var(--bg);
+            color: var(--fg);
+            font-family: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+            letter-spacing: -0.006em;
+            -webkit-font-smoothing: antialiased;
+            position: relative;
+            overflow-x: hidden;
+        }
+        /* Soft teal + blue blur blobs — the app's welcome-gradient, lightweight. */
+        body::before, body::after {
+            content: "";
+            position: fixed;
+            width: 34rem;
+            height: 34rem;
+            border-radius: 50%;
+            filter: blur(80px);
+            z-index: 0;
+            pointer-events: none;
+        }
+        body::before { background: var(--blob-teal); top: -12rem; right: -10rem; }
+        body::after  { background: var(--blob-blue); bottom: -14rem; left: -12rem; }
+
+        .card {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 27rem;
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            box-shadow: var(--shadow);
+            padding: 32px 30px;
+        }
+        .brand-head {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin-bottom: 22px;
+        }
+        .mark {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: oklch(0.74 0.15 168 / 0.12);
+            display: grid;
+            place-items: center;
+            margin-bottom: 14px;
+        }
+        .mark svg { width: 64%; height: 64%; }
+        .mark path { fill: var(--brand); }
+        .eyebrow {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.26em;
+            color: var(--brand);
+        }
+        .wordmark {
+            margin-top: 3px;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .lede {
+            text-align: center;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--fg);
+            margin: 0 0 4px;
+        }
+        .lede strong { font-weight: 600; }
+        .signed-in {
+            text-align: center;
+            font-size: 12px;
+            color: var(--faint);
+            margin: 0 0 22px;
+        }
+
+        .perms-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted-fg);
+            margin: 0 0 10px 2px;
+        }
+        .perms {
+            list-style: none;
+            margin: 0 0 8px;
+            padding: 0;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .perms li {
+            display: flex;
+            align-items: flex-start;
+            gap: 11px;
+            padding: 12px 14px;
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--fg);
+        }
+        .perms li + li { border-top: 1px solid var(--line); }
+        .perms .check {
+            flex: none;
+            width: 18px;
+            height: 18px;
+            margin-top: 1px;
+            color: var(--brand);
+        }
+
+        .note {
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: var(--faint);
+            text-align: center;
+            margin: 14px 2px 24px;
+        }
+
+        .actions { display: flex; gap: 10px; }
+        .btn {
+            flex: 1;
+            appearance: none;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            padding: 0 16px;
+            height: 46px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: -0.006em;
+            cursor: pointer;
+            transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+        }
+        .btn-primary { background: var(--brand); color: #fff; }
+        .btn-primary:hover { background: var(--brand-hover); }
+        .btn-ghost {
+            background: transparent;
+            color: var(--muted-fg);
+            border-color: var(--line-strong);
+        }
+        .btn-ghost:hover { color: var(--fg); background: oklch(0.5 0.01 250 / 0.06); }
+
+        .form-errors { margin: 0 0 16px; }
+        .form-errors ul { margin: 0; padding-left: 18px; }
+        .alert {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            background: oklch(0.57 0.17 25 / 0.08);
+            border: 1px solid oklch(0.57 0.17 25 / 0.22);
+            color: var(--err);
+            border-radius: 12px;
+            padding: 12px 14px;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .alert svg { flex: none; width: 18px; height: 18px; margin-top: 1px; }
+        .error-title { font-size: 17px; font-weight: 600; margin: 0 0 6px; text-align: center; }
+        .footer {
+            margin-top: 24px;
+            padding-top: 18px;
+            border-top: 1px solid var(--line);
+            text-align: center;
+            font-size: 11px;
+            color: var(--faint);
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="brand-head">
+            <span class="mark" aria-hidden="true">
+                <svg viewBox="0 0 28 28"><path fill-rule="evenodd" d="M14 0c7.732 0 14 6.268 14 13.999 0 7.731-6.268 13.999-14 13.999S0 21.73 0 13.999C0 6.268 6.268 0 14 0zm8.827 12.772a.836.836 0 0 0-1.077-.088l-.104.088-5.052 5.052a.834.834 0 0 0 1.077 1.269l.104-.088 5.052-5.052a.835.835 0 0 0 0-1.181zm-11.42 5.052L6.354 12.77a.836.836 0 0 0-1.27 1.077l.089.104 5.052 5.052a.833.833 0 0 0 1.182 0 .835.835 0 0 0 .088-1.078l-.088-.103-5.053-5.052 5.053 5.052zM14 9.897a3.26 3.26 0 0 0-3.257 3.256A3.26 3.26 0 0 0 14 16.41a3.26 3.26 0 0 0 3.257-3.257A3.26 3.26 0 0 0 14 9.896z"/></svg>
+            </span>
+            <span class="eyebrow">{{ org_name|default:"DataGov" }}</span>
+            <span class="wordmark">DataGov</span>
+        </div>
+
+        {% if not error %}
+            <p class="lede"><strong>{{ application.name }}</strong> {% trans "wants to connect to your DataGov account." %}</p>
+            {% if request.user.is_authenticated %}
+                <p class="signed-in">{% trans "Signed in as" %} {{ request.user.email|default:request.user.username }}</p>
+            {% endif %}
+
+            <form id="authorizationForm" method="post">
+                {% csrf_token %}
+                {% for field in form %}
+                    {% if field.is_hidden %}{{ field }}{% endif %}
+                {% endfor %}
+
+                <p class="perms-label">{% trans "This will allow it to" %}</p>
+                <ul class="perms">
+                    {% for scope in scopes_descriptions %}
+                        <li>
+                            <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                            <span>{{ scope }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+
+                <p class="note">{% trans "Access is read-only against your catalog and can be revoked at any time from Org Settings → Connectors." %}</p>
+
+                {% if form.errors or form.non_field_errors %}
+                    <div class="form-errors alert">
+                        <div>{{ form.errors }}{{ form.non_field_errors }}</div>
+                    </div>
+                {% endif %}
+
+                <div class="actions">
+                    <input type="submit" class="btn btn-ghost" value="{% trans 'Cancel' %}"/>
+                    <input type="submit" class="btn btn-primary" name="allow" value="{% trans 'Authorize' %}"/>
+                </div>
+            </form>
+        {% else %}
+            <p class="error-title">{% trans "Authorization error" %}</p>
+            <div class="alert">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <div>
+                    <strong>{{ error.error }}</strong><br>
+                    {{ error.description }}
+                </div>
+            </div>
+        {% endif %}
+
+        <div class="footer">{% trans "DataGov · secure OAuth 2.1 authorization" %}</div>
+    </main>
+</body>
+</html>
