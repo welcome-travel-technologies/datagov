@@ -427,7 +427,7 @@ function TokenReveal({
               {copied === "config" ? "Copied" : "Copy JSON"}
             </Button>
           </div>
-          <pre className="max-h-56 overflow-auto rounded-md border border-line bg-panel2 p-3 font-mono text-[12px] leading-relaxed">
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-line bg-panel2 p-3 font-mono text-[12px] leading-relaxed">
             {config}
           </pre>
         </div>

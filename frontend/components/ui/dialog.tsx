@@ -19,7 +19,7 @@ export const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         "fixed left-1/2 top-1/2 z-50 grid w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-line bg-card p-6 shadow-xl",
-        "max-h-[90vh] overflow-y-auto",
+        "max-h-[90vh] overflow-y-auto overflow-x-hidden [&>*]:min-w-0",
         className,
       )}
       {...props}
