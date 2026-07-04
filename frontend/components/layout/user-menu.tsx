@@ -59,6 +59,9 @@ export function UserMenu() {
             <div className="truncate text-[13px] font-semibold text-foreground">
               {user?.email ?? "Guest"}
             </div>
+            <div className="truncate text-[11px] text-faint">
+              {user?.organization?.name ?? "—"}
+            </div>
             <div className="text-[11px] capitalize text-faint">
               {user?.role ?? "—"}
             </div>
