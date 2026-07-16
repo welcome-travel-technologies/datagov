@@ -59,8 +59,8 @@ def push_to_bigquery(dest, data_dir, log):
             data_frames = {
                 'catalog_items': pd.DataFrame.from_records(items_qs),
                 'catalog_powerbireportusage': pd.DataFrame.from_records(PowerBIReportUsage.objects.all().values()),
-                # 'network_nodes': pd.DataFrame.from_records(NetworkNode.objects.all().values()),
-                # 'network_edges': pd.DataFrame.from_records(NetworkEdge.objects.all().values())
+                'network_nodes': pd.DataFrame.from_records(NetworkNode.objects.all().values()),
+                'network_edges': pd.DataFrame.from_records(NetworkEdge.objects.all().values()),
             }
             
             for table_name, df in data_frames.items():
