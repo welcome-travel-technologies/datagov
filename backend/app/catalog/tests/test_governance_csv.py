@@ -53,7 +53,9 @@ def group(db, org):
         group_key='gov::test', kind=ItemGroup.KIND_MEASURE_NAME, organization=org)
     Item.objects.create(
         item_id='m1', item_name='Revenue', item_type='PB_MEASURE',
-        service='powerbi', organization=org, item_group=g)
+        service='powerbi', organization=org, item_group=g,
+        workspace_name='Finance WS', dataset_name='Sales DS',
+        table_name='FactSales')
     return g
 
 
@@ -66,6 +68,7 @@ def _read_csv(response):
 def _upload(client, rows, header=None):
     header = header or [
         'group_pk', 'group_id', 'kind', 'name', 'service', 'item_type',
+        'workspace', 'dataset', 'table',
         'status', 'owner', 'steward', 'department', 'category',
         'custom_description',
     ]
@@ -101,6 +104,9 @@ def test_export_headers_and_one_row_per_group(client, group, people):
 
     rows, raw = _read_csv(resp)
     assert raw.startswith(b'\xef\xbb\xbf')  # UTF-8 BOM so Excel opens it right
+    # No "sep=" hint line: the header must be the first line so Google Sheets
+    # and other tools can parse the file directly.
+    assert raw.decode('utf-8-sig').startswith('group_pk,')
     assert len(rows) == 1
     r = rows[0]
     assert r['group_pk'] == str(group.id)
@@ -108,6 +114,9 @@ def test_export_headers_and_one_row_per_group(client, group, people):
     assert r['kind'] == 'measure_name'
     assert r['name'] == 'Revenue'
     assert r['service'] == 'powerbi'
+    assert r['workspace'] == 'Finance WS'
+    assert r['dataset'] == 'Sales DS'
+    assert r['table'] == 'FactSales'
     assert r['status'] == 'VERIFIED'
     assert r['owner'] == 'Alice'
     assert r['steward'] == 'Bob'
@@ -243,6 +252,44 @@ def test_context_columns_are_ignored(client, group, people):
     group.refresh_from_db()
     assert group.kind == ItemGroup.KIND_MEASURE_NAME  # unchanged
     assert group.ownership_person_id == alice.id
+
+
+def test_import_strips_legacy_sep_line(client, group, people):
+    """Files downloaded before the "sep=," hint line was removed (or re-saved
+    by Excel, which can keep it as a literal row) must still import."""
+    alice, _ = people
+    body = f'sep=,\r\ngroup_pk,owner\r\n{group.id},Alice\r\n'
+    f = SimpleUploadedFile('gov.csv', body.encode('utf-8'), 'text/csv')
+    resp = client.post(IMPORT_URL, {'file': f})
+    assert resp.json()['updated'] == 1
+    group.refresh_from_db()
+    assert group.ownership_person_id == alice.id
+
+
+def test_import_accepts_frontend_generated_csv(client, group, people, org):
+    """Byte-exact shape of the file the dictionary's client-side "Download
+    CSV" button produces: UTF-8 BOM, CRLF, quoted cells, workspace / dataset /
+    table context columns."""
+    alice, _ = people
+    Department.objects.create(name='Ops', organization=org)
+    body = (
+        '﻿'
+        'group_pk,group_id,kind,name,service,item_type,'
+        'workspace,dataset,table,'
+        'status,owner,steward,department,category,custom_description\r\n'
+        f'{group.id},gov::test,measure_name,Revenue,powerbi,PB_MEASURE,'
+        'Finance WS,Sales DS,FactSales,'
+        'VERIFIED,Alice,,Ops,,"hello, ""world"""\r\n'
+    )
+    f = SimpleUploadedFile('governance_2026-07-13.csv', body.encode('utf-8'), 'text/csv')
+    resp = client.post(IMPORT_URL, {'file': f})
+    data = resp.json()
+    assert data['updated'] == 1, data
+    group.refresh_from_db()
+    assert group.status == 'VERIFIED'
+    assert group.ownership_person_id == alice.id
+    assert group.ownership_department.name == 'Ops'
+    assert group.custom_description == 'hello, "world"'
 
 
 def test_round_trip(client, group, people, org):
