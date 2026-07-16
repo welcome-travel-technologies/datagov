@@ -65,7 +65,7 @@ const STATUS_LABELS: Record<ItemStatus, string> = {
   ATTENTION: "Attention",
 };
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const CELL_SELECT_CLS = "h-7 px-1.5 text-[12px]";
 
@@ -89,6 +89,66 @@ function govIdMatch(sel: string, val: number | null | undefined): boolean {
   return String(val ?? "") === sel;
 }
 
+// ---- governance CSV export ------------------------------------------------
+// Mirrors the backend /governance/export-csv/ format (same columns, UTF-8 BOM,
+// no "sep=" hint line) but is built client-side from the CURRENTLY FILTERED
+// rows, so "what you see is what you download". Rows stay import-compatible:
+// the importer matches by group_pk (then group_id) and ignores the read-only
+// context columns.
+const GOV_CSV_COLUMNS = [
+  "group_pk", "group_id", "kind", "name", "service", "item_type",
+  "workspace", "dataset", "table",
+  "status", "owner", "steward", "department", "category",
+  "custom_description",
+] as const;
+
+function csvCell(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function buildGovernanceCsv(rows: GroupedItem[]): string {
+  const lines = [GOV_CSV_COLUMNS.join(",")];
+  for (const row of rows) {
+    lines.push(
+      [
+        row.group ?? "",
+        row.group_id ?? "",
+        row.group_kind ?? "",
+        row.item_name ?? "",
+        row.service ?? "",
+        row.item_type ?? "",
+        row.workspace_name ?? "",
+        row.dataset_name ?? "",
+        row.table_name ?? "",
+        row.status ?? "",
+        row.ownership_person_name ?? "",
+        row.steward_name ?? "",
+        row.ownership_department_name ?? "",
+        row.category_name ?? "",
+        (row.custom_description ?? "").replace(/\r?\n/g, " ").trim(),
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+  }
+  // UTF-8 BOM so Excel decodes correctly; plain header first line so Google
+  // Sheets & co. parse it out of the box.
+  return "﻿" + lines.join("\r\n") + "\r\n";
+}
+
+function downloadGovernanceCsv(rows: GroupedItem[]) {
+  const blob = new Blob([buildGovernanceCsv(rows)], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `governance_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function DictionaryView() {
   // ---- filter state -------------------------------------------------------
   const [itemType, setItemType] = useState("PB_MEASURE");
@@ -106,6 +166,7 @@ export function DictionaryView() {
   const [steward, setSteward] = useState("");
   const [category, setCategory] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [detail, setDetail] = useState<GroupedItem | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -241,8 +302,8 @@ export function DictionaryView() {
     sharing,
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   // Dept-narrowed option lists for the FILTER dropdowns (cascade).
   const filterOwners = useMemo(() => narrowByDept(owners, dept), [owners, dept]);
@@ -356,7 +417,7 @@ export function DictionaryView() {
       alert(msg);
       if ((r.updated ?? 0) > 0) itemsQ.refetch();
     } catch (e) {
-      alert((e as Error).message || "Upload failed. Use a file from “Governance CSV”.");
+      alert((e as Error).message || "Upload failed. Use a file from “Download CSV”.");
     } finally {
       setBusy(false);
     }
@@ -372,14 +433,15 @@ export function DictionaryView() {
           Searchable dictionary across PowerBI and dbt assets. Pick a type to load.
         </p>
         <div className="flex items-center gap-2">
-          <a
-            href={api.governance.exportCsvUrl}
-            download
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-panel px-3 text-[12px] font-semibold text-foreground transition-colors hover:bg-panel2"
-            title="Download governance (owner / steward / status / category / annotation), one row per group"
+          <button
+            type="button"
+            disabled={loading || filtered.length === 0}
+            onClick={() => downloadGovernanceCsv(filtered)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong bg-panel px-3 text-[12px] font-semibold text-foreground transition-colors hover:bg-panel2 disabled:opacity-50"
+            title="Download the rows matching the current filters as CSV (one row per group, incl. workspace / dataset / table). The file can be edited and re-uploaded."
           >
-            <Download className="h-3.5 w-3.5" /> Governance CSV
-          </a>
+            <Download className="h-3.5 w-3.5" /> Download CSV ({filtered.length.toLocaleString()})
+          </button>
           <button
             type="button"
             disabled={busy}
@@ -618,7 +680,18 @@ export function DictionaryView() {
             </Table>
 
             <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-[12.5px] text-muted-foreground">
-              <span>Page {page} of {totalPages}</span>
+              <div className="flex items-center gap-3">
+                <span>Page {page} of {totalPages}</span>
+                <label className="flex items-center gap-1.5">
+                  <span className="text-faint">Rows per page</span>
+                  <SimpleSelect
+                    value={String(pageSize)}
+                    onValueChange={(v) => { setPageSize(Number(v)); resetPage(); }}
+                    className="h-8 w-[68px] px-2 text-[12px]"
+                    options={PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: String(n) }))}
+                  />
+                </label>
+              </div>
               <div className="flex items-center gap-1">
                 <button
                   disabled={page <= 1}

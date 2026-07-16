@@ -77,9 +77,19 @@ delete) and `send_slack_task_alert` (📋, tagging the assignee's `slack_handle`
 
 The Data Dictionary supports bulk governance editing via CSV:
 
-- `GET /api/governance/export-csv/` — download the current catalog + governance.
-- `POST /api/governance/import-csv/` — multipart upload to apply changes (handles
-  cp1252/cp1253 encodings; nginx allows up to 10 MB).
+- **Download CSV** button — built client-side from the **currently filtered**
+  rows (one row per group), so what you see is what you download. Includes the
+  read-only context columns `workspace` / `dataset` / `table` for local
+  filtering in Sheets/Excel.
+- `GET /api/governance/export-csv/` — full server-side export (every group,
+  same columns).
+- `POST /api/governance/import-csv/` — multipart upload to apply changes.
+  Matches rows by `group_pk` (then `group_id`), ignores context columns and
+  empty cells, handles cp1252/cp1253 encodings and `;`/tab delimiters, and
+  strips a legacy leading `sep=,` line; nginx allows up to 10 MB.
+
+Both exports start with the plain header row (UTF-8 BOM, no `sep=` hint line)
+so the file opens directly in Google Sheets and other CSV consumers.
 
 ---
 

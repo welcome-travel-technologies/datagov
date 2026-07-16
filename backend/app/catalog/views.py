@@ -3291,6 +3291,7 @@ def integrations_clean_logs(request):
 
 _GOV_CSV_COLUMNS = [
     'group_pk', 'group_id', 'kind', 'name', 'service', 'item_type',
+    'workspace', 'dataset', 'table',
     'status', 'owner', 'steward', 'department', 'category',
     'custom_description',
 ]
@@ -3313,6 +3314,9 @@ def _gov_csv_groups(user):
         _any_name=Subquery(any_item.values('item_name')[:1]),
         _any_service=Subquery(any_item.values('service')[:1]),
         _any_type=Subquery(any_item.values('item_type')[:1]),
+        _any_ws=Subquery(any_item.values('workspace_name')[:1]),
+        _any_ds=Subquery(any_item.values('dataset_name')[:1]),
+        _any_tbl=Subquery(any_item.values('table_name')[:1]),
     ).order_by('kind', 'group_key')
     return org, qs
 
@@ -3333,12 +3337,11 @@ def governance_export_csv(request):
     writer = csv.writer(_CsvEcho())
 
     def _stream():
-        yield '﻿'  # BOM so Excel opens UTF-8 correctly
-        # Excel honours a leading "sep=" line and uses it as the delimiter
-        # regardless of the OS locale's list separator, so an EU-locale user
-        # gets correctly split columns on a plain double-click. The importer
-        # strips this line on round-trip.
-        yield 'sep=,\r\n'
+        # BOM so Excel opens UTF-8 correctly. No "sep=" hint line: Google
+        # Sheets (and most non-Excel tools) treat it as a data row, which
+        # shifts the real header down and breaks direct imports. The importer
+        # still strips a leading "sep=" line from files that carry one.
+        yield '﻿'
         yield writer.writerow(_GOV_CSV_COLUMNS)
         for g in groups.iterator(chunk_size=1000):
             pi = g.primary_item
@@ -3349,6 +3352,9 @@ def governance_export_csv(request):
                 (pi.item_name if pi else g._any_name) or '',
                 (pi.service if pi else g._any_service) or '',
                 (pi.item_type if pi else g._any_type) or '',
+                (pi.workspace_name if pi else g._any_ws) or '',
+                (pi.dataset_name if pi else g._any_ds) or '',
+                (pi.table_name if pi else g._any_tbl) or '',
                 g.status or '',
                 g.ownership_person.name if g.ownership_person else '',
                 g.steward.name if g.steward else '',
