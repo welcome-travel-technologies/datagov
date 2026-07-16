@@ -65,7 +65,7 @@ const STATUS_LABELS: Record<ItemStatus, string> = {
   ATTENTION: "Attention",
 };
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 const CELL_SELECT_CLS = "h-7 px-1.5 text-[12px]";
 
@@ -106,6 +106,7 @@ export function DictionaryView() {
   const [steward, setSteward] = useState("");
   const [category, setCategory] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [detail, setDetail] = useState<GroupedItem | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -241,8 +242,8 @@ export function DictionaryView() {
     sharing,
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   // Dept-narrowed option lists for the FILTER dropdowns (cascade).
   const filterOwners = useMemo(() => narrowByDept(owners, dept), [owners, dept]);
@@ -618,7 +619,18 @@ export function DictionaryView() {
             </Table>
 
             <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-[12.5px] text-muted-foreground">
-              <span>Page {page} of {totalPages}</span>
+              <div className="flex items-center gap-3">
+                <span>Page {page} of {totalPages}</span>
+                <label className="flex items-center gap-1.5">
+                  <span className="text-faint">Rows per page</span>
+                  <SimpleSelect
+                    value={String(pageSize)}
+                    onValueChange={(v) => { setPageSize(Number(v)); resetPage(); }}
+                    className="h-8 w-[68px] px-2 text-[12px]"
+                    options={PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: String(n) }))}
+                  />
+                </label>
+              </div>
               <div className="flex items-center gap-1">
                 <button
                   disabled={page <= 1}
