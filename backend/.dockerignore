@@ -10,3 +10,9 @@ node_modules
 *.db
 db.sqlite3
 staticfiles
+# Generated ETL working data — must never ship inside the image (deleting it
+# at runtime can't free image-layer space, it only adds overlay whiteouts).
+**/dbt_artifacts
+**/raw_fabric_definitions
+app/etl/sources/*/data
+media

@@ -461,6 +461,22 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
         log(f'  Triggered by : {triggered_by}')
         log('')
 
+        # Sweep leftovers from a previous hard-killed run (OOM / host restart
+        # skips the finally-block cleanup) so we start with a clean disk.
+        _cleanup_local_files(log)
+
+        # Pre-flight disk check — the run writes gigabytes of temp files, so
+        # fail fast with a clear message instead of dying mid-extraction with
+        # a cryptic [Errno 28] halfway through a CSV write.
+        from catalog.health import check_disk
+        disk = check_disk()
+        log(f"  Disk: {disk['detail']}")
+        if disk['status'] == 'down':
+            raise RuntimeError(
+                f"Insufficient disk space to start the workflow ({disk['detail']}). "
+                f"Free up space on the host (docker system prune, old logs) and retry."
+            )
+
         # Run transformation sources before visualization sources — the
         # warehouse must be reshaped (dbt etc.) before BI tools (PowerBI)
         # read it. Within each category we keep the model's default ordering
@@ -579,6 +595,12 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
                 run_log.log_output = '\n'.join(log_lines)
                 run_log.save()
                 send_slack_alert(source, run_log)
+                # Free disk immediately — this source's raw downloads and CSVs
+                # are already loaded into the DB (or the run failed), and the
+                # next source / destination push needs the space. Waiting for
+                # the workflow-level cleanup keeps e.g. the whole cloned dbt
+                # repo on disk during the entire PowerBI extraction.
+                _cleanup_local_files(log)
 
         raise_if_cancelled(wf)
 

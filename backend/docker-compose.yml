@@ -1,3 +1,12 @@
+# Cap container stdout logs — the ETL worker prints thousands of lines per
+# workflow run and docker's default json-file driver never rotates, slowly
+# filling the host disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   web:
     build: .
@@ -8,6 +17,7 @@ services:
     env_file:
       - .env
     restart: always
+    logging: *default-logging
 
   worker:
     build: .
@@ -17,6 +27,7 @@ services:
     env_file:
       - .env
     restart: always
+    logging: *default-logging
 
   nginx:
     image: nginx:1.25-alpine
@@ -28,6 +39,7 @@ services:
     depends_on:
       - web
     restart: always
+    logging: *default-logging
 
 volumes:
   static_volume:
