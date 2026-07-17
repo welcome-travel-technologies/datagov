@@ -134,13 +134,21 @@ the derived React Flow nodes/edges are computed in `useMemo` and never stored, s
 they can't drift from the raw graph.
 
 1. **Focus** an element (sidebar tree or `?node_id=` deep link) → load just that
-   card (`api.network.ego({node_id, depth: 0, direction})`).
+   card (`api.network.ego({node_id, depth: 0, direction})`). Focusing a single
+   column/measure auto-pins its trace, so its card renders as title + that
+   column (focused collapse) instead of the whole table.
 2. **Build** — `buildColibriFlow(rawNodes, rawEdges, centerId, opts)`
    ([`build-flow.ts`](../frontend/lib/lineage/build-flow.ts)) produces the React
    Flow `{nodes, edges, model}`.
-3. **Expand** a card's +/- buttons → `ego(depth: 1)` → `mergeGraph` dedupes nodes
-   by id and edges by `(kind, source, target)` and freezes existing card
-   positions so only new cards auto-layout.
+3. **Step levels** — the canvas level stepper
+   ([`panels/level-stepper.tsx`](../frontend/components/lineage/panels/level-stepper.tsx))
+   loads exactly N levels upstream and M downstream (`loadLevels`: one ego fetch
+   per direction, merged client-side), so the graph grows/shrinks one
+   predictable level at a time.
+4. **Expand** a card's +/- buttons → `ego(depth: 1)` → `mergeGraph` dedupes nodes
+   by id and edges by `(kind, source, target)`. Every merge clears manual
+   positions and re-lays-out the whole graph — freezing old positions while new
+   cards took fresh-layout coordinates used to stack new cards on top of old ones.
 
 `buildColumnModel` ([`column-model.ts`](../frontend/lib/lineage/column-model.ts))
 turns the payload into cards. Power BI **measures are re-parented** into one

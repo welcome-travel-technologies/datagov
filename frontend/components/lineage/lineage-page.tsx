@@ -14,6 +14,7 @@ import {
 import { CanvasProvider, EMPTY_HIGHLIGHT, type Highlight } from "@/components/lineage/canvas/context";
 import { LeftSidebar, type Grouping } from "@/components/lineage/panels/left-sidebar";
 import { BottomToolbar } from "@/components/lineage/panels/bottom-toolbar";
+import { LevelStepper } from "@/components/lineage/panels/level-stepper";
 import { LensLegend } from "@/components/lineage/panels/legend";
 import { ModelDetailSidebar } from "@/components/lineage/model-detail-sidebar";
 import {
@@ -30,6 +31,8 @@ import { columnLineage, dbtBuildCommand } from "@/lib/lineage/column-model";
 import { getLens, cardLayer, cardAccent, type LensId } from "@/lib/lineage/lens";
 import type { ModelCard } from "@/lib/lineage/column-model";
 import { useHistory } from "@/lib/lineage/history";
+import { mergeGraph } from "@/lib/lineage/graph-merge";
+import { isMemberGroup } from "@/lib/lineage/graph-utils";
 import {
   loadViews,
   saveView as persistSaveView,
@@ -123,17 +126,60 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
   }, [undo, redo]);
 
   // ---- data loading -------------------------------------------------------
+  /** A column / measure / field center: the user cares about ONE element, so
+   *  loads auto-pin its trace and collapse cards to just the connected rows. */
+  const isMemberCenter = (id: string) => isMemberGroup(id.split("::")[0]);
+
   const loadEgo = useCallback(
     async (id: string, d: number, dir: Direction, full = false) => {
       dispatch({ type: "LOAD_START", text: "Loading lineage…" });
       try {
         const data = await api.network.ego({ node_id: id, depth: d, direction: dir, mode: "unified", full });
+        // Focusing a single column/measure pins its trace once the model is
+        // rebuilt (effect below), so its card renders as title + that column
+        // instead of the whole table.
+        if (isMemberCenter(id)) pendingFocusRef.current = id;
         // "Show full lineage" (full=true) prunes each card to the columns on the
         // lineage so one huge card can't dominate the canvas; a plain focus does not.
         dispatch({ type: "LOAD_SUCCESS", nodes: data.nodes || [], links: data.links || [], centerId: id, linkedOnly: full });
         resetHistory(); // a fresh graph starts a new undo timeline
       } catch (e) {
         dispatch({ type: "LOAD_ERROR", error: e instanceof Error ? e.message : "Failed to load lineage." });
+      }
+    },
+    [resetHistory],
+  );
+
+  // Level stepper: load exactly `up` levels upstream and `down` levels
+  // downstream around the center — one fetch per direction, merged client-side.
+  // Decreasing a side refetches the smaller radius, so levels really disappear.
+  const loadLevels = useCallback(
+    async (up: number, down: number) => {
+      const id = stateRef.current.centerId;
+      if (!id) return;
+      dispatch({ type: "LOAD_START", text: "Loading lineage levels…" });
+      try {
+        const [upRes, downRes] = await Promise.all([
+          up > 0 ? api.network.ego({ node_id: id, depth: up, direction: "upstream", mode: "unified" }) : null,
+          down > 0 ? api.network.ego({ node_id: id, depth: down, direction: "downstream", mode: "unified" }) : null,
+        ]);
+        let nodes = upRes?.nodes ?? downRes?.nodes ?? [];
+        let links = upRes?.links ?? downRes?.links ?? [];
+        if (upRes && downRes) {
+          const merged = mergeGraph(upRes.nodes || [], upRes.links || [], downRes.nodes || [], downRes.links || []);
+          nodes = merged.nodes;
+          links = merged.links;
+        }
+        if (!upRes && !downRes) {
+          const base = await api.network.ego({ node_id: id, depth: 0, direction: "both", mode: "unified" });
+          nodes = base.nodes || [];
+          links = base.links || [];
+        }
+        if (isMemberCenter(id)) pendingFocusRef.current = id;
+        dispatch({ type: "LOAD_SUCCESS", nodes, links, centerId: id, upDepth: up, downDepth: down });
+        resetHistory();
+      } catch (e) {
+        dispatch({ type: "LOAD_ERROR", error: e instanceof Error ? e.message : "Failed to load lineage levels." });
       }
     },
     [resetHistory],
@@ -171,7 +217,7 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
     if (nid) dispatch({ type: "SET_CENTER", centerId: nid });
   }, [search]);
 
-  // Latest built flow (for freezing positions before a lazy merge).
+  // Latest built flow (handlers read the current model/cards without re-binding).
   const builtRef = useRef<ReturnType<typeof buildColibriFlow> | null>(null);
 
   const expand = useCallback(
@@ -179,10 +225,7 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
       dispatch({ type: "LOAD_START", text: "Expanding…" });
       try {
         const data = await api.network.ego({ node_id: nodeId, depth: 1, direction: dir, mode: "unified" });
-        const freeze = builtRef.current
-          ? Object.fromEntries(builtRef.current.nodes.map((n) => [n.id, n.position]))
-          : undefined;
-        commit({ type: "MERGE_GRAPH", nodes: data.nodes || [], links: data.links || [], freeze });
+        commit({ type: "MERGE_GRAPH", nodes: data.nodes || [], links: data.links || [] });
       } catch {
         dispatch({ type: "LOAD_ERROR", error: "Failed to expand." });
       }
@@ -575,9 +618,15 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
               />
             </CanvasProvider>
 
-            {/* focus → expand: load the full lineage around the selected element */}
+            {/* focus → expand: step levels in/out, or load the full lineage */}
             {hasGraph && (
-              <div className="absolute left-3 top-3 z-10">
+              <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
+                <LevelStepper
+                  upDepth={state.upDepth}
+                  downDepth={state.downDepth}
+                  disabled={state.loading}
+                  onChange={loadLevels}
+                />
                 <button
                   type="button"
                   onClick={showFullLineage}

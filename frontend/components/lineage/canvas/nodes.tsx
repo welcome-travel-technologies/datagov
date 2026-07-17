@@ -119,7 +119,9 @@ export const CardNode = memo(function CardNode({ data }: NodeProps) {
                 ? (GROUP_LABELS[card.group] ?? card.group)
                 : card.cardKind === "measures"
                   ? "measure"
-                  : `${card.columns.length} ${card.columns.length === 1 ? "column" : "columns"}`}
+                  : focusedCollapse
+                    ? `${renderedColumns.length} of ${card.columns.length} columns`
+                    : `${card.columns.length} ${card.columns.length === 1 ? "column" : "columns"}`}
             </span>
           </span>
           {showModelTypeBadge(card.group, card.modelType) && <ModelTypeBadge type={card.modelType} />}
@@ -227,6 +229,19 @@ export const CardNode = memo(function CardNode({ data }: NodeProps) {
               )}
             >
               <ExpandButton title="Load upstream models" onClick={() => onExpandUpstream(card.id)} />
+              {focusedCollapse && renderedColumns.length < card.columns.length && (
+                <button
+                  type="button"
+                  title="Show all columns"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleCollapse(card.id);
+                  }}
+                  className="rounded px-1.5 text-[10px] text-faint hover:bg-panel2 hover:text-foreground"
+                >
+                  +{card.columns.length - renderedColumns.length} more
+                </button>
+              )}
               <ExpandButton title="Load downstream models" onClick={() => onExpandDownstream(card.id)} />
             </div>
           )}
