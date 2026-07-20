@@ -51,6 +51,7 @@ def build_context(org, *, client=None, scope_ids=None) -> str:
 
 def _build(scope_ids) -> str:
     from ...models import Item
+    from ...report_filters import exclude_draft_reports
 
     m_qs = Item.objects.filter(
         deleted=False, item_type='PB_MEASURE', service='powerbi',
@@ -82,9 +83,9 @@ def _build(scope_ids) -> str:
             'status': m['status'],
         })
 
-    r_qs = Item.objects.filter(
+    r_qs = exclude_draft_reports(Item.objects.filter(
         deleted=False, item_type='PB_REPORT', service='powerbi',
-    )
+    ))
     if scope_ids:
         r_qs = r_qs.filter(workspace_id__in=list(scope_ids))
     reports = list(

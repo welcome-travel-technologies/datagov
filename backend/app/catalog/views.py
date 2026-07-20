@@ -41,6 +41,9 @@ from .models import (
     PowerBIReportUsage, GovernanceTask, MetricsMap,
 )
 from .services.workspaces import get_workspaces_for_source
+from .report_filters import (
+    exclude_draft_reports, draft_report_q, strip_draft_reports_from_graph,
+)
 from .serializers import (
     SummarySerializer, ItemSerializer, ItemGroupSerializer,
     DepartmentSerializer, DataPersonSerializer, CategorySerializer,
@@ -1041,6 +1044,10 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
             qs = self.queryset.filter(**_deleted_filter(org))
         if org:
             qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
+        # Draft/test/sandbox reports are noise, not governed assets — hide them
+        # from every list (only PB_REPORT rows are name-tested). Unconditional:
+        # they stay hidden even under ?include_deleted / show_deleted_items.
+        qs = qs.exclude(draft_report_q())
         return qs
 
     @action(detail=True, methods=['post'])
@@ -1295,8 +1302,9 @@ def get_dashboard(request):
     def ws_stat(ws):
         return ws_stats.setdefault(ws, {'r': 0, 'p': 0, 'v30': 0, 'vt': 0})
 
-    rep_qs = (Item.objects.filter(item_type='PB_REPORT', **del_kw)
-              .exclude(workspace_name__isnull=True).exclude(workspace_name=''))
+    rep_qs = exclude_draft_reports(
+        Item.objects.filter(item_type='PB_REPORT', **del_kw)
+        .exclude(workspace_name__isnull=True).exclude(workspace_name=''))
     pg_qs = (Item.objects.filter(item_type='PB_PAGE', **del_kw)
              .exclude(workspace_name__isnull=True).exclude(workspace_name=''))
     if org_q:
@@ -1307,7 +1315,8 @@ def get_dashboard(request):
     for p in pg_qs.values('workspace_name').annotate(c=Count('item_id')):
         ws_stat(p['workspace_name'])['p'] = p['c']
 
-    usage_qs = PowerBIReportUsage.objects.all()
+    usage_qs = exclude_draft_reports(
+        PowerBIReportUsage.objects.all(), name_field='report_name')
     if org_q:
         usage_qs = usage_qs.filter(org_q)
     recent_month = usage_qs.aggregate(m=Max('month'))['m']
@@ -1427,6 +1436,7 @@ def pb_cleanup_counts(request):
     pb_qs = Item.objects.filter(service='powerbi', **_deleted_filter(org))
     if org:
         pb_qs = pb_qs.filter(Q(organization=org) | Q(organization__isnull=True))
+    pb_qs = pb_qs.exclude(draft_report_q())  # match the draft-excluded table
     counts = compute_pb_cleanup_counts(
         pb_qs,
         workspace_name=request.query_params.get('workspace_name') or None,
@@ -1613,7 +1623,8 @@ def powerbi_usage(request):
     from django.db.models import Sum
 
     org = _get_user_organization(request.user)
-    qs = PowerBIReportUsage.objects.all()
+    qs = exclude_draft_reports(
+        PowerBIReportUsage.objects.all(), name_field='report_name')
     if org:
         qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
 
@@ -1900,6 +1911,7 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
         links.append(link)
     # Downstream report-hierarchy usage edges (unified mode only).
     links += [{"source": s, "target": t, "kind": "model"} for s, t in usage_edges]
+    nodes_data, links = strip_draft_reports_from_graph(nodes_data, links)
     return Response({"nodes": nodes_data, "links": links, "mode": "unified" if unified else "column"})
 
 
@@ -2053,6 +2065,7 @@ def get_network(request):
             edges_data = [{"source": e.source, "target": e.target,
                            "kind": _edge_kind(e.source, e.target)}
                           for e in NetworkEdge.objects.all()]
+            nodes_data, edges_data = strip_draft_reports_from_graph(nodes_data, edges_data)
             return Response({"nodes": nodes_data, "links": edges_data})
 
         # Lazy search: return only nodes matching `q` (for the Select2 ajax dropdown).
@@ -2071,6 +2084,7 @@ def get_network(request):
             for n in qs
         ]
         _enrich_with_item_metadata(nodes_data)
+        nodes_data, _ = strip_draft_reports_from_graph(nodes_data)
         return Response({"nodes": nodes_data, "links": []})
 
     if mode == 'column':
@@ -2167,6 +2181,7 @@ def get_network(request):
     _enrich_with_item_metadata(nodes_data)
     edges_data = [{"source": s, "target": t, "kind": _edge_kind(s, t)} for s, t in edges_set]
 
+    nodes_data, edges_data = strip_draft_reports_from_graph(nodes_data, edges_data)
     return Response({
         "nodes": nodes_data,
         "links": edges_data,
@@ -2218,12 +2233,14 @@ def find_network_path(request):
 
     nodes_payload = [{"id": n.id, "label": n.label, "group": n.group} for n in result.nodes]
     _enrich_with_item_metadata(nodes_payload)
+    path_links = [{"source": s, "target": t} for s, t in result.edges]
+    nodes_payload, path_links = strip_draft_reports_from_graph(nodes_payload, path_links)
     return Response({
         "found": result.found,
         "distance": result.distance,
         # Union of all shortest paths — render this as a DAG.
         "nodes": nodes_payload,
-        "links": [{"source": s, "target": t} for s, t in result.edges],
+        "links": path_links,
         # Each individual shortest path as an ordered list of node_ids
         # (for the per-path summary list in the UI).
         "paths": result.paths,
@@ -2263,6 +2280,7 @@ def get_network_reachable(request):
         for n in result.nodes
     ]
     _enrich_with_item_metadata(nodes_payload)
+    nodes_payload, _ = strip_draft_reports_from_graph(nodes_payload)
     return Response({
         "nodes": nodes_payload,
         "truncated": result.truncated,

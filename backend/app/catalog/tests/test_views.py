@@ -255,3 +255,141 @@ class TestPowerBIUsageAPI:
         assert resp.status_code == 200
         gb = resp.json()['group_by']
         assert 'month' in gb and 'workspace_id' in gb and 'report_id' in gb
+
+
+@pytest.mark.django_db
+class TestDraftReportFiltering:
+    """Draft / test / sandbox reports are excluded from every report stat and
+    list, but the heuristic must not catch production reports or non-report
+    items that merely contain a stem as a substring (e.g. 'test_staging')."""
+
+    # (name, is_draft) pairs — the boundary cases that keep the regex honest.
+    DRAFT_NAMES = ['Test Dashboard', 'QA Report', 'My Draft', 'Sandbox v2',
+                   'WIP Finance', 'Demo - Sales', 'POC pricing', "John's Playground"]
+    KEEP_NAMES = ['Finance VAT Chain', 'Commercial Overview', 'Contest Winners',
+                  'Qatar Market', 'Testament of Sales', 'Draftsman Tools']
+
+    @pytest.fixture
+    def reports(self, org):
+        objs = []
+        for i, n in enumerate(self.DRAFT_NAMES + self.KEEP_NAMES):
+            objs.append(Item.objects.create(
+                item_id=f'rep_{i}', item_name=n, item_type='PB_REPORT',
+                service='powerbi', workspace_name='WS One', organization=org))
+        # A non-report whose name contains 'test' — must survive draft_report_q.
+        Item.objects.create(
+            item_id='tbl_test', item_name='test_staging', item_type='PB_TABLE',
+            service='powerbi', workspace_name='WS One', organization=org)
+        return objs
+
+    def test_is_draft_report_name_boundaries(self):
+        from catalog.report_filters import is_draft_report_name
+        for n in self.DRAFT_NAMES:
+            assert is_draft_report_name(n), f'{n!r} should be a draft'
+        for n in self.KEEP_NAMES:
+            assert not is_draft_report_name(n), f'{n!r} should NOT be a draft'
+        assert not is_draft_report_name('')
+        assert not is_draft_report_name(None)
+
+    def test_items_list_hides_draft_reports_but_keeps_tables(self, client, rw_user, reports):
+        client.login(username='writer@example.com', password='testpass')
+        resp = client.get('/api/items/?item_type=PB_REPORT')
+        assert resp.status_code == 200
+        names = {r['item_name'] for r in resp.json()['results']}
+        assert names == set(self.KEEP_NAMES)
+        # The PB_TABLE named 'test_staging' is not name-tested by draft_report_q.
+        resp2 = client.get('/api/items/?item_name=test_staging')
+        assert any(r['item_name'] == 'test_staging' for r in resp2.json()['results'])
+
+    def test_dashboard_report_count_excludes_drafts(self, client, rw_user, reports):
+        client.login(username='writer@example.com', password='testpass')
+        resp = client.get('/api/dashboard/')
+        assert resp.status_code == 200
+        ws = resp.json()['ws_stats']['WS One']
+        assert ws['r'] == len(self.KEEP_NAMES)
+
+    def test_powerbi_usage_excludes_draft_report_names(self, client, rw_user, org):
+        for i, n in enumerate(self.DRAFT_NAMES + self.KEEP_NAMES):
+            PowerBIReportUsage.objects.create(
+                month=date(2026, 5, 1), workspace_name='WS One',
+                report_id=f'u_{i}', report_name=n, user_email='a@x',
+                view_count=1, organization=org)
+        client.login(username='writer@example.com', password='testpass')
+        resp = client.get('/api/powerbi-usage/')
+        names = {r['report_name'] for r in resp.json()['results']}
+        assert names == set(self.KEEP_NAMES)
+
+
+def test_strip_draft_reports_from_graph_prunes_subtree():
+    """A draft report and its exclusive page/visual subtree are removed from a
+    lineage payload; a shared upstream measure and a sibling real report stay."""
+    from catalog.report_filters import strip_draft_reports_from_graph
+    nodes = [
+        {'id': 'PB_MEASURE::m', 'label': 'GMV', 'group': 'PB_MEASURE'},
+        {'id': 'PB_VISUAL::v1', 'label': 'Trend', 'group': 'PB_VISUAL'},
+        {'id': 'PB_PAGE::p1', 'label': 'Exec', 'group': 'PB_PAGE'},
+        {'id': 'PB_REPORT::r1', 'label': 'QA Sandbox', 'group': 'PB_REPORT'},
+        {'id': 'PB_VISUAL::v2', 'label': 'Card', 'group': 'PB_VISUAL'},
+        {'id': 'PB_PAGE::p2', 'label': 'Main', 'group': 'PB_PAGE'},
+        {'id': 'PB_REPORT::r2', 'label': 'Finance VAT Chain', 'group': 'PB_REPORT'},
+    ]
+    links = [
+        {'source': 'PB_MEASURE::m', 'target': 'PB_VISUAL::v1'},
+        {'source': 'PB_VISUAL::v1', 'target': 'PB_PAGE::p1'},
+        {'source': 'PB_PAGE::p1', 'target': 'PB_REPORT::r1'},
+        {'source': 'PB_MEASURE::m', 'target': 'PB_VISUAL::v2'},
+        {'source': 'PB_VISUAL::v2', 'target': 'PB_PAGE::p2'},
+        {'source': 'PB_PAGE::p2', 'target': 'PB_REPORT::r2'},
+    ]
+    out_nodes, out_links = strip_draft_reports_from_graph(nodes, links)
+    kept = {n['id'] for n in out_nodes}
+    assert kept == {'PB_MEASURE::m', 'PB_VISUAL::v2', 'PB_PAGE::p2', 'PB_REPORT::r2'}
+    # No surviving link touches a removed node.
+    removed = {'PB_REPORT::r1', 'PB_PAGE::p1', 'PB_VISUAL::v1'}
+    assert all(l['source'] not in removed and l['target'] not in removed for l in out_links)
+
+
+def test_strip_draft_reports_from_graph_noop_without_drafts():
+    from catalog.report_filters import strip_draft_reports_from_graph
+    nodes = [{'id': 'PB_REPORT::r', 'label': 'Finance VAT Chain', 'group': 'PB_REPORT'}]
+    out_nodes, out_links = strip_draft_reports_from_graph(nodes, [])
+    assert out_nodes == nodes and out_links == []
+
+
+@pytest.mark.django_db
+class TestNetworkGraphDraftFiltering:
+    """End-to-end: the /api/network/ endpoint drops draft report nodes (and
+    their page/visual subtree) from the whole-graph payload."""
+
+    @pytest.fixture
+    def graph(self, org):
+        from catalog.models import NetworkNode, NetworkEdge
+        nodes = [
+            ('PB_MEASURE::m', 'GMV', 'PB_MEASURE'),
+            ('PB_VISUAL::v1', 'Trend', 'PB_VISUAL'),
+            ('PB_PAGE::p1', 'Exec', 'PB_PAGE'),
+            ('PB_REPORT::r1', 'QA Sandbox', 'PB_REPORT'),   # draft
+            ('PB_VISUAL::v2', 'Card', 'PB_VISUAL'),
+            ('PB_PAGE::p2', 'Main', 'PB_PAGE'),
+            ('PB_REPORT::r2', 'Finance VAT Chain', 'PB_REPORT'),  # real
+        ]
+        for nid, name, grp in nodes:
+            NetworkNode.objects.create(node_id=nid, name=name, group=grp, organization=org)
+        edges = [
+            ('PB_MEASURE::m', 'PB_VISUAL::v1'), ('PB_VISUAL::v1', 'PB_PAGE::p1'),
+            ('PB_PAGE::p1', 'PB_REPORT::r1'),
+            ('PB_MEASURE::m', 'PB_VISUAL::v2'), ('PB_VISUAL::v2', 'PB_PAGE::p2'),
+            ('PB_PAGE::p2', 'PB_REPORT::r2'),
+        ]
+        for s, t in edges:
+            NetworkEdge.objects.create(source=s, target=t, organization=org)
+
+    def test_network_all_hides_draft_report_and_subtree(self, client, rw_user, graph):
+        client.login(username='writer@example.com', password='testpass')
+        resp = client.get('/api/network/?node_id=ALL')
+        assert resp.status_code == 200
+        ids = {n['id'] for n in resp.json()['nodes']}
+        assert 'PB_REPORT::r1' not in ids
+        assert 'PB_PAGE::p1' not in ids and 'PB_VISUAL::v1' not in ids
+        # Real report + shared measure survive.
+        assert {'PB_REPORT::r2', 'PB_MEASURE::m', 'PB_VISUAL::v2'} <= ids
