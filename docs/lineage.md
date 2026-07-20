@@ -103,6 +103,14 @@ from node-id prefixes:
 `level_case_sql` (used by the COPY-based loaders) must stay in lockstep — they
 both derive from the same module constants.
 
+**Structural (`join`/`filter`) edges are context, not expansion.** In the
+column/unified ego (`_column_ego` step 3b) a FK→PK `join` or `filter` edge is
+emitted only when *both* endpoints are already on the canvas from the
+data-lineage walk. It never pulls a new column/table in. Otherwise a shared
+dimension every fact table joins (a Date dimension is the classic hub) dragged
+its entire fan-in onto the canvas as stray one-column cards — clutter that is
+never the derivation path being traced.
+
 ### Graph traversal services
 
 - [`services/network_path.py`](../backend/app/catalog/services/network_path.py) —
@@ -170,7 +178,10 @@ downstream DFS to light up the active columns/edges/cards.
 
 - **`layoutColumnCards`** (the default column/unified view) — not dagre; a
   longest-path layering (Kahn topological sort) where level = x-coordinate and
-  cards stack vertically within a level.
+  cards stack vertically within a level. It is fed a *visible-only* model
+  (`buildColibriFlow` filters hidden/filtered/layer-toggled cards and their
+  edges before laying out), so a hidden card never reserves a ghost slot that
+  shifts its neighbours.
 - **`layoutAssetDagre`** — the asset-level (model-to-model) ego graph uses dagre
   with `rankdir: "LR"`.
 - **`layoutPathLR`** — Track-Back paths, BFS hop-distance layering.

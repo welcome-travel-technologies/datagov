@@ -1803,44 +1803,37 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
                 contains_edges.add((e.source, e.target))
                 nodes_set.add(e.source)
 
-    # 3b. Structural relationship edges (FK→PK 'join' / 'filter') incident to any
-    # collected column. We pull the joined column in (one hop, no transitive
-    # expansion → bounded) and attach its container so the relationship is
-    # visible from the current view without ballooning the graph. Skipped on a
-    # depth-0 focus load, which must show only the focused element + its card.
+    # 3b. Structural relationship edges (FK→PK 'join' / 'filter') between columns
+    # that are ALREADY on the canvas from the data-lineage walk. These edges are
+    # context between present nodes only — they must NOT pull new columns/tables
+    # in. A shared dimension (e.g. a Date dimension every fact table joins) is a
+    # hub: expanding through it dragged in every joined table as a stray
+    # one-column card — pure clutter, never the derivation path the user asked
+    # for. Skipped on a depth-0 focus load (just the focused element + its card).
     structural_edges = []
     expanded = ((max(0, int(depth_up or 0)) > 0 or max(0, int(depth_down or 0)) > 0)
                 if asymmetric else (depth > 0 or full))
     if expanded:
         struct_seen = set()
-        member_set = set(member_ids)
-        _STRUCT_Q = Q(kind='join') | Q(kind='filter')
-        for i in range(0, len(member_ids), chunk_size):
-            chunk = member_ids[i:i + chunk_size]
+        present_members = [n for n in member_ids]  # columns already collected
+        for i in range(0, len(present_members), chunk_size):
+            chunk = present_members[i:i + chunk_size]
+            # Both endpoints must already be present, so query one side and keep
+            # only edges whose partner is also in nodes_set (no expansion).
             incident = (
-                NetworkEdge.objects.filter(_STRUCT_Q, source__in=chunk)
-                | NetworkEdge.objects.filter(_STRUCT_Q, target__in=chunk)
+                NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), source__in=chunk)
+                | NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), target__in=chunk)
             )
             for e in incident:
                 if e.kind not in ('join', 'filter'):
                     continue
+                if e.source not in nodes_set or e.target not in nodes_set:
+                    continue  # would pull a new node in → clutter, drop it
                 key = (e.source, e.target, e.kind)
                 if key in struct_seen:
                     continue
                 struct_seen.add(key)
                 structural_edges.append((e.source, e.target, e.kind, bool(e.bridge_reason)))
-                nodes_set.add(e.source)
-                nodes_set.add(e.target)
-
-        # Attach containers for any join-partner columns we just pulled in.
-        extra_members = [n for n in nodes_set
-                         if _node_type(n) in _MEMBER_TYPES and n not in member_set]
-        for i in range(0, len(extra_members), chunk_size):
-            chunk = extra_members[i:i + chunk_size]
-            for e in NetworkEdge.objects.filter(_CONTAINS_Q, target__in=chunk):
-                if _edge_is(e, 'contains'):
-                    contains_edges.add((e.source, e.target))
-                    nodes_set.add(e.source)
 
     # 3d. Downstream report consumers (unified mode only). Each member's usage
     # chain (member -> visual -> page -> report) is resolved to its terminal

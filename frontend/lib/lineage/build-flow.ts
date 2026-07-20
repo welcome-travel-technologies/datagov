@@ -275,7 +275,20 @@ export function buildColibriFlow(
     }
   }
 
-  const pos = layoutColumnCards(model, collapsed, heights);
+  // Lay out ONLY the visible cards. Feeding the full model here made hidden /
+  // filtered / layer-toggled cards reserve layout slots, so the survivors were
+  // positioned around invisible ghosts (gaps, drift). Restrict the model's
+  // cards + edges to what's actually on the canvas so the layering reflects the
+  // current scene.
+  const layoutModel: ColumnModel = {
+    ...model,
+    cards: visibleCards,
+    edges: model.edges.filter((e) => visibleCardIds.has(e.source) && visibleCardIds.has(e.target)),
+    usageEdges: (model.usageEdges ?? []).filter(
+      (u) => visibleCardIds.has(u.source) && visibleCardIds.has(u.target),
+    ),
+  };
+  const pos = layoutColumnCards(layoutModel, collapsed, heights);
 
   const nodes: Node[] = visibleCards.map((card) => {
     const focused = focusedColsByCard.get(card.id);

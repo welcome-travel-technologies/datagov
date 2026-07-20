@@ -294,12 +294,65 @@ def test_column_ego_serializes_lineage_type_bridge_and_join(org):
     assert by_pair[('DBT_COLUMN::a', 'DBT_COLUMN::b')]['lineage_type'] == 'transformation'
     bridge = by_pair[('DBT_COLUMN::b', 'PB_COLUMN::p')]
     assert bridge.get('bridge') is True and bridge['lineage_type'] == 'pass-through'
-    join = by_pair.get(('PB_COLUMN::p', 'PB_COLUMN::q'))
-    assert join is not None and join['kind'] == 'join'
-    # join pulled the partner column + its container into the view
+    # The join partner PB_COLUMN::q is reachable ONLY via the FK→PK join, not via
+    # data lineage, so it must NOT be pulled in — a structural edge is context
+    # between present nodes, never a way to expand the graph.
     node_ids = {n['id'] for n in resp.data['nodes']}
-    assert {'PB_COLUMN::q', 'PB_TABLE::u'} <= node_ids
+    assert 'PB_COLUMN::q' not in node_ids
+    assert 'PB_TABLE::u' not in node_ids
+    assert ('PB_COLUMN::p', 'PB_COLUMN::q') not in by_pair
 
     nodes_by_id = {n['id']: n for n in resp.data['nodes']}
     assert nodes_by_id['DBT_COLUMN::b'].get('lineageType') == 'transformation'
     assert nodes_by_id['DBT_COLUMN::b'].get('hasLineage') is True
+
+
+@pytest.mark.django_db
+def test_column_ego_structural_edge_shown_between_present_nodes(org):
+    """A join edge IS rendered when BOTH endpoints are already on the canvas from
+    data lineage — it's useful context, it just can't expand the graph."""
+    # a → b (data lineage) puts both columns on the canvas; a join relates them
+    # too. (source,target) is unique per row, so the join uses the reverse pair.
+    for nid, grp in [('DBT_COLUMN::a', 'DBT_COLUMN'), ('DBT_COLUMN::b', 'DBT_COLUMN'),
+                     ('DBT_MODEL::ma', 'DBT_MODEL'), ('DBT_MODEL::mb', 'DBT_MODEL')]:
+        NetworkNode.objects.create(node_id=nid, name=nid, group=grp, organization=org)
+    mk = lambda **kw: NetworkEdge.objects.create(organization=org, **kw)
+    mk(source='DBT_MODEL::ma', target='DBT_COLUMN::a', kind='contains')
+    mk(source='DBT_MODEL::mb', target='DBT_COLUMN::b', kind='contains')
+    mk(source='DBT_COLUMN::a', target='DBT_COLUMN::b', kind='column', lineage_type='pass-through')
+    mk(source='DBT_COLUMN::b', target='DBT_COLUMN::a', kind='join')
+
+    resp = _column_ego('DBT_COLUMN::a', depth=4, direction='both')
+    by_pair = {(l['source'], l['target'], l['kind']): l for l in resp.data['links']}
+    assert ('DBT_COLUMN::b', 'DBT_COLUMN::a', 'join') in by_pair       # context kept
+    assert ('DBT_COLUMN::a', 'DBT_COLUMN::b', 'column') in by_pair
+
+
+@pytest.mark.django_db
+def test_column_ego_hub_dimension_does_not_flood(org):
+    """The core clutter fix: a shared dimension column that many facts join must
+    not drag every joined fact table into a measure's lineage."""
+    # measure m derives from fact column f; f joins a shared date dimension d,
+    # which 8 unrelated fact columns also join. None of those facts feed m.
+    NetworkNode.objects.create(node_id='PB_TABLE::sales', name='Sales', group='PB_TABLE', organization=org)
+    NetworkNode.objects.create(node_id='PB_COLUMN::f', name='amount', group='PB_COLUMN', organization=org)
+    NetworkNode.objects.create(node_id='PB_MEASURE::m', name='Revenue', group='PB_MEASURE', organization=org)
+    NetworkNode.objects.create(node_id='PB_TABLE::dim', name='Date', group='PB_TABLE', organization=org)
+    NetworkNode.objects.create(node_id='PB_COLUMN::d', name='date', group='PB_COLUMN', organization=org)
+    mk = lambda **kw: NetworkEdge.objects.create(organization=org, **kw)
+    mk(source='PB_TABLE::sales', target='PB_COLUMN::f', kind='contains')
+    mk(source='PB_TABLE::sales', target='PB_MEASURE::m', kind='contains')
+    mk(source='PB_COLUMN::f', target='PB_MEASURE::m', kind='column', lineage_type='transformation')
+    mk(source='PB_TABLE::dim', target='PB_COLUMN::d', kind='contains')
+    mk(source='PB_COLUMN::f', target='PB_COLUMN::d', kind='join')  # sales joins date
+    for i in range(8):
+        NetworkNode.objects.create(node_id=f'PB_TABLE::fact{i}', name=f'Fact{i}', group='PB_TABLE', organization=org)
+        NetworkNode.objects.create(node_id=f'PB_COLUMN::fc{i}', name='date', group='PB_COLUMN', organization=org)
+        mk(source=f'PB_TABLE::fact{i}', target=f'PB_COLUMN::fc{i}', kind='contains')
+        mk(source=f'PB_COLUMN::fc{i}', target='PB_COLUMN::d', kind='join')  # each joins the same date
+
+    resp = _column_ego('PB_MEASURE::m', depth=3, direction='upstream', unified=True)
+    node_ids = {n['id'] for n in resp.data['nodes']}
+    # none of the 8 unrelated fact tables (or their columns) leak in
+    assert not any(f'PB_TABLE::fact{i}' in node_ids for i in range(8))
+    assert not any(f'PB_COLUMN::fc{i}' in node_ids for i in range(8))
