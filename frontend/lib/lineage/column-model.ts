@@ -45,6 +45,10 @@ export interface ModelCard {
   /** dbt tags / PowerBI labels on the container (for the Tags filter). */
   tags: string[];
   columns: ColumnRow[];
+  /** Some member of this card still has unloaded column lineage in that
+   *  direction (API frontier flags) — the card can grow by one more level. */
+  hasMoreUp?: boolean;
+  hasMoreDown?: boolean;
 }
 
 function nodeTags(n: { tags?: unknown }): string[] {
@@ -201,6 +205,8 @@ export function buildColumnModel(
       datasetId: (cn.dataset as string) ?? null,
       tags: nodeTags(cn),
       columns,
+      hasMoreUp: childIds[cardId].some((cid) => !!byId[cid]?.hasMoreUp),
+      hasMoreDown: childIds[cardId].some((cid) => !!byId[cid]?.hasMoreDown),
     });
   }
 

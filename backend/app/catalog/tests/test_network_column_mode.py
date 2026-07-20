@@ -145,6 +145,48 @@ def test_column_ego_full_traverses_entire_chain(org):
     assert {f'DBT_MODEL::m{i}' for i in range(5)} <= node_ids  # containers attached
 
 
+@pytest.mark.django_db
+def test_column_ego_frontier_flags_on_bounded_chain(org):
+    """A depth-bounded response flags the boundary members that still have
+    unloaded column lineage (per direction), and only those — this powers the
+    per-card "load one more level" buttons."""
+    _seed_chain(org, 5)
+    resp = _column_ego('DBT_COLUMN::c2', depth=1, direction='both')
+    flags = {n['id']: (n.get('hasMoreUp', False), n.get('hasMoreDown', False))
+             for n in resp.data['nodes']}
+    # Loaded: c1, c2, c3. c0 is hidden upstream of c1; c4 hidden downstream of c3.
+    assert flags['DBT_COLUMN::c1'] == (True, False)
+    assert flags['DBT_COLUMN::c3'] == (False, True)
+    assert flags['DBT_COLUMN::c2'] == (False, False)   # interior: nothing hidden
+
+
+@pytest.mark.django_db
+def test_column_ego_asymmetric_radii(org):
+    """depth_up/depth_down walk each direction independently in ONE response,
+    so the frontier flags are exact — the center must not be flagged for a
+    direction that is already loaded."""
+    _seed_chain(org, 5)
+    resp = _column_ego('DBT_COLUMN::c2', depth=1, direction='both',
+                       depth_up=1, depth_down=2)
+    node_ids = {n['id'] for n in resp.data['nodes']}
+    assert {'DBT_COLUMN::c1', 'DBT_COLUMN::c2', 'DBT_COLUMN::c3', 'DBT_COLUMN::c4'} <= node_ids
+    assert 'DBT_COLUMN::c0' not in node_ids          # upstream bounded to 1 hop
+    flags = {n['id']: (n.get('hasMoreUp', False), n.get('hasMoreDown', False))
+             for n in resp.data['nodes']}
+    assert flags['DBT_COLUMN::c2'] == (False, False)  # both sides loaded — no dead buttons
+    assert flags['DBT_COLUMN::c1'] == (True, False)   # c0 still hidden upstream
+    assert flags['DBT_COLUMN::c4'] == (False, False)  # true chain end
+
+
+@pytest.mark.django_db
+def test_column_ego_no_frontier_flags_when_fully_loaded(org):
+    """With the entire chain loaded (full=True) nothing is flagged."""
+    _seed_chain(org, 5)
+    resp = _column_ego('DBT_COLUMN::c0', depth=1, direction='downstream', full=True)
+    assert all(not n.get('hasMoreUp') and not n.get('hasMoreDown')
+               for n in resp.data['nodes'])
+
+
 def _seed_report_graph(org):
     """A measure that is consumed downstream by a report:
     PB_TABLE -> (contains) PB_MEASURE -> PB_VISUAL -> PB_PAGE -> PB_REPORT."""
@@ -165,21 +207,26 @@ def _seed_report_graph(org):
 
 
 @pytest.mark.django_db
-def test_unified_ego_pulls_downstream_report_hierarchy(org):
+def test_unified_ego_collapses_report_hierarchy_to_direct_consumers(org):
+    """An expanded unified load resolves member -> visual -> page -> report to a
+    DIRECT member -> report edge; the unnamed visual/page intermediates never
+    enter the payload (a hub measure used to flood the canvas with them)."""
     _seed_report_graph(org)
     resp = _column_ego('PB_MEASURE::m', depth=2, direction='both', unified=True)
     node_ids = {n['id'] for n in resp.data['nodes']}
     model_edges = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'model'}
 
-    # the whole report hierarchy is reachable as downstream consumer cards
-    assert {'PB_VISUAL::v', 'PB_PAGE::pg', 'PB_REPORT::r'} <= node_ids
-    assert ('PB_MEASURE::m', 'PB_VISUAL::v') in model_edges
-    assert ('PB_VISUAL::v', 'PB_PAGE::pg') in model_edges
-    assert ('PB_PAGE::pg', 'PB_REPORT::r') in model_edges
+    assert 'PB_REPORT::r' in node_ids
+    assert 'PB_VISUAL::v' not in node_ids
+    assert 'PB_PAGE::pg' not in node_ids
+    assert model_edges == {('PB_MEASURE::m', 'PB_REPORT::r')}
     # the measure's own container is still attached
     assert ('PB_TABLE::t', 'PB_MEASURE::m') in {
         (l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'contains'
     }
+    # everything the measure consumes downstream is loaded — no dangling flag
+    flags = {n['id']: n.get('hasMoreDown', False) for n in resp.data['nodes']}
+    assert flags['PB_MEASURE::m'] is False
     assert resp.data['mode'] == 'unified'
 
 
@@ -205,14 +252,15 @@ def test_unified_ego_upstream_only_skips_reports(org):
 @pytest.mark.django_db
 def test_unified_ego_depth_zero_skips_report_hierarchy(org):
     """Opening a measure (depth-0 focus) must show only the measure + its
-    container — NOT the downstream report hierarchy. Pulling that hierarchy was
-    the slow path that also shoved the focused card far downstream."""
+    container — NOT the downstream report consumers. But the measure IS flagged
+    hasMoreDown, so its card renders the "+" whose one level is those reports."""
     _seed_report_graph(org)
     resp = _column_ego('PB_MEASURE::m', depth=0, direction='both', unified=True)
     node_ids = {n['id'] for n in resp.data['nodes']}
     assert node_ids == {'PB_MEASURE::m', 'PB_TABLE::t'}
-    assert 'PB_VISUAL::v' not in node_ids
     assert all(l['kind'] != 'model' for l in resp.data['links'])
+    measure = next(n for n in resp.data['nodes'] if n['id'] == 'PB_MEASURE::m')
+    assert measure.get('hasMoreDown') is True   # unloaded report consumers
 
 
 @pytest.mark.django_db

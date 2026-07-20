@@ -140,15 +140,23 @@ they can't drift from the raw graph.
 2. **Build** — `buildColibriFlow(rawNodes, rawEdges, centerId, opts)`
    ([`build-flow.ts`](../frontend/lib/lineage/build-flow.ts)) produces the React
    Flow `{nodes, edges, model}`.
-3. **Step levels** — the canvas level stepper
-   ([`panels/level-stepper.tsx`](../frontend/components/lineage/panels/level-stepper.tsx))
-   loads exactly N levels upstream and M downstream (`loadLevels`: one ego fetch
-   per direction, merged client-side), so the graph grows/shrinks one
-   predictable level at a time.
-4. **Expand** a card's +/- buttons → `ego(depth: 1)` → `mergeGraph` dedupes nodes
-   by id and edges by `(kind, source, target)`. Every merge clears manual
-   positions and re-lays-out the whole graph — freezing old positions while new
-   cards took fresh-layout coordinates used to stack new cards on top of old ones.
+3. **Expand one level** — the graph grows only via a card's ± buttons; there is
+   one control and it always means "one more level in this direction." The
+   buttons render only on the *frontier*: the API flags each member whose
+   lineage continues beyond the response (`hasMoreUp`/`hasMoreDown`, aggregated
+   per card), so interior cards carry no dead controls. Clicking one →
+   `ego(depth: 1)` around that card → `mergeGraph` dedupes nodes by id and edges
+   by `(kind, source, target)`; the newest payload's frontier flags win (absence
+   clears a stale flag). Every merge clears manual positions and re-lays-out the
+   whole graph — freezing old positions while new cards took fresh-layout
+   coordinates used to stack new cards on top of old ones.
+
+Downstream, PowerBI **report consumers are collapsed server-side**: the
+`member → visual → page → report` usage chain is resolved to its terminal
+`PB_REPORT`(s) and surfaced as a direct `member → report` edge, so a measure's
+downstream shows the handful of named reports it feeds — never the wall of
+unnamed visual/page cards. A depth-0 focus omits them but still flags the
+member `hasMoreDown`, so its `+` means exactly "load the consuming reports."
 
 `buildColumnModel` ([`column-model.ts`](../frontend/lib/lineage/column-model.ts))
 turns the payload into cards. Power BI **measures are re-parented** into one

@@ -19,10 +19,12 @@ export interface CardNodeData {
   shownColIds?: string[];
 }
 
-/** A synthetic card (measures bucket / by-type group) has no real graph node, so
- *  it can't be expanded upstream/downstream. */
-function isSynthetic(id: string): boolean {
-  return id.startsWith("__");
+/** The graph node an expansion around this card should be fetched for. A
+ *  synthetic single-measure card expands via its measure node; a synthetic
+ *  by-type group card has no real node at all, so it can't expand. */
+function expandTargetId(card: ModelCard): string | null {
+  if (card.cardKind === "measures") return card.columns[0]?.id ?? null;
+  return card.id.startsWith("__") ? null : card.id;
 }
 
 function KindIcon({ card }: { card: ModelCard }) {
@@ -66,7 +68,12 @@ export const CardNode = memo(function CardNode({ data }: NodeProps) {
   const accent = cardAccent(card);
   const cardDim = highlight.active && !highlight.cards.has(card.id);
   const isReport = card.cardKind === "report";
-  const expandable = !isSynthetic(card.id) && !isReport;
+  // Same operation as the level stepper, scoped to this card: the ± buttons
+  // only render on the frontier — where the API says more lineage exists in
+  // that direction — so an interior card carries no dead controls.
+  const expandId = !isReport ? expandTargetId(card) : null;
+  const showUp = !!expandId && !!card.hasMoreUp;
+  const showDown = !!expandId && !!card.hasMoreDown;
 
   // Focused collapse: a collapsed card that keeps just its connected columns
   // visible (driven by a pinned column trace) instead of folding to a header.
@@ -216,35 +223,54 @@ export const CardNode = memo(function CardNode({ data }: NodeProps) {
             </div>
           )}
 
-          {/* footer: load upstream (left) / downstream (right). Always shown for
-              expandable cards — including collapsed ones — so the graph can be
-              grown straight from a collapsed card without first expanding its
-              columns. The top divider is dropped in header-only collapse, where
-              the header's own bottom border already separates the footer. */}
-          {expandable && (
-            <div
-              className={cn(
-                "flex items-center justify-between px-2 py-1",
-                showColumns && "border-t border-line",
-              )}
-            >
-              <ExpandButton title="Load upstream models" onClick={() => onExpandUpstream(card.id)} />
-              {focusedCollapse && renderedColumns.length < card.columns.length && (
-                <button
-                  type="button"
-                  title="Show all columns"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleCollapse(card.id);
-                  }}
-                  className="rounded px-1.5 text-[10px] text-faint hover:bg-panel2 hover:text-foreground"
-                >
-                  +{card.columns.length - renderedColumns.length} more
-                </button>
-              )}
-              <ExpandButton title="Load downstream models" onClick={() => onExpandDownstream(card.id)} />
-            </div>
-          )}
+          {/* footer: the card-scoped level stepper — "load one more level" for
+              just this card, upstream (left) / downstream (right). Buttons only
+              render on the frontier (hasMoreUp/hasMoreDown); the whole footer
+              disappears when there is nothing to load and no hidden columns.
+              The top divider is dropped in header-only collapse, where the
+              header's own bottom border already separates the footer. */}
+          {(() => {
+            const showMoreHint = focusedCollapse && renderedColumns.length < card.columns.length;
+            if (!showUp && !showDown && !showMoreHint) return null;
+            return (
+              <div
+                className={cn(
+                  "flex items-center justify-between px-2 py-1",
+                  showColumns && "border-t border-line",
+                )}
+              >
+                {showUp ? (
+                  <ExpandButton
+                    title="Load one more upstream level (this card only)"
+                    onClick={() => onExpandUpstream(expandId!)}
+                  />
+                ) : (
+                  <span className="h-6 w-6" />
+                )}
+                {showMoreHint && (
+                  <button
+                    type="button"
+                    title="Show all columns"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleCollapse(card.id);
+                    }}
+                    className="rounded px-1.5 text-[10px] text-faint hover:bg-panel2 hover:text-foreground"
+                  >
+                    +{card.columns.length - renderedColumns.length} more
+                  </button>
+                )}
+                {showDown ? (
+                  <ExpandButton
+                    title="Load one more downstream level (this card only)"
+                    onClick={() => onExpandDownstream(expandId!)}
+                  />
+                ) : (
+                  <span className="h-6 w-6" />
+                )}
+              </div>
+            );
+          })()}
         </>
       )}
     </div>

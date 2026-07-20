@@ -21,11 +21,6 @@ export interface LineageState {
   centerId: string | null;
   depth: number;
   direction: Direction;
-  // Level-stepper radii: how many lineage levels are loaded around the center
-  // in each direction (0 = just the focused card). Driven by the canvas
-  // stepper; the orchestrator refetches when they change.
-  upDepth: number;
-  downDepth: number;
 
   collapsed: Set<string>;
   hidden: Set<string>;
@@ -54,8 +49,6 @@ export const initialLineageState: LineageState = {
   centerId: null,
   depth: 3,
   direction: "both",
-  upDepth: 0,
-  downDepth: 0,
   collapsed: new Set(),
   hidden: new Set(),
   positions: {},
@@ -65,7 +58,9 @@ export const initialLineageState: LineageState = {
   lens: "lineage-type",
   layersFilter: new Set(),
   tagsFilter: new Set(),
-  showReports: false,
+  // Report consumers arrive as one compact card per report (the hierarchy is
+  // collapsed server-side), so they're worth showing by default.
+  showReports: true,
   linkedOnly: false,
   selectedModelId: null,
   loading: false,
@@ -75,16 +70,7 @@ export const initialLineageState: LineageState = {
 
 export type LineageAction =
   | { type: "LOAD_START"; text?: string }
-  | {
-      type: "LOAD_SUCCESS";
-      nodes: NetworkNode[];
-      links: NetworkLink[];
-      centerId: string;
-      linkedOnly?: boolean;
-      /** Stepper radii this load represents (default 0/0 for a plain focus). */
-      upDepth?: number;
-      downDepth?: number;
-    }
+  | { type: "LOAD_SUCCESS"; nodes: NetworkNode[]; links: NetworkLink[]; centerId: string; linkedOnly?: boolean }
   | { type: "LOAD_ERROR"; error: string }
   | { type: "MERGE_GRAPH"; nodes: NetworkNode[]; links: NetworkLink[] }
   | { type: "SET_CENTER"; centerId: string | null }
@@ -124,8 +110,6 @@ export function lineageReducer(state: LineageState, action: LineageAction): Line
         rawNodes: action.nodes,
         rawEdges: action.links,
         centerId: action.centerId,
-        upDepth: action.upDepth ?? 0,
-        downDepth: action.downDepth ?? 0,
         // a fresh load resets view-local state
         collapsed: new Set(),
         hidden: new Set(),
@@ -245,8 +229,6 @@ export interface SerializedLineageState {
   centerId: string | null;
   depth: number;
   direction: Direction;
-  upDepth?: number;
-  downDepth?: number;
   collapsed: string[];
   hidden: string[];
   positions: Record<string, XY>;
@@ -269,8 +251,6 @@ export function serializeState(s: LineageState): SerializedLineageState {
     centerId: s.centerId,
     depth: s.depth,
     direction: s.direction,
-    upDepth: s.upDepth,
-    downDepth: s.downDepth,
     collapsed: [...s.collapsed],
     hidden: [...s.hidden],
     positions: s.positions,
@@ -289,8 +269,6 @@ export function deserializeState(s: SerializedLineageState): LineageState {
   return {
     ...initialLineageState,
     ...s,
-    upDepth: s.upDepth ?? 0,
-    downDepth: s.downDepth ?? 0,
     collapsed: new Set(s.collapsed),
     hidden: new Set(s.hidden),
     layersFilter: new Set(s.layersFilter),

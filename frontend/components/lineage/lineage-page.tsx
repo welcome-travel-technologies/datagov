@@ -14,7 +14,6 @@ import {
 import { CanvasProvider, EMPTY_HIGHLIGHT, type Highlight } from "@/components/lineage/canvas/context";
 import { LeftSidebar, type Grouping } from "@/components/lineage/panels/left-sidebar";
 import { BottomToolbar } from "@/components/lineage/panels/bottom-toolbar";
-import { LevelStepper } from "@/components/lineage/panels/level-stepper";
 import { LensLegend } from "@/components/lineage/panels/legend";
 import { ModelDetailSidebar } from "@/components/lineage/model-detail-sidebar";
 import {
@@ -31,7 +30,6 @@ import { columnLineage, dbtBuildCommand } from "@/lib/lineage/column-model";
 import { getLens, cardLayer, cardAccent, type LensId } from "@/lib/lineage/lens";
 import type { ModelCard } from "@/lib/lineage/column-model";
 import { useHistory } from "@/lib/lineage/history";
-import { mergeGraph } from "@/lib/lineage/graph-merge";
 import { isMemberGroup } from "@/lib/lineage/graph-utils";
 import {
   loadViews,
@@ -145,41 +143,6 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
         resetHistory(); // a fresh graph starts a new undo timeline
       } catch (e) {
         dispatch({ type: "LOAD_ERROR", error: e instanceof Error ? e.message : "Failed to load lineage." });
-      }
-    },
-    [resetHistory],
-  );
-
-  // Level stepper: load exactly `up` levels upstream and `down` levels
-  // downstream around the center — one fetch per direction, merged client-side.
-  // Decreasing a side refetches the smaller radius, so levels really disappear.
-  const loadLevels = useCallback(
-    async (up: number, down: number) => {
-      const id = stateRef.current.centerId;
-      if (!id) return;
-      dispatch({ type: "LOAD_START", text: "Loading lineage levels…" });
-      try {
-        const [upRes, downRes] = await Promise.all([
-          up > 0 ? api.network.ego({ node_id: id, depth: up, direction: "upstream", mode: "unified" }) : null,
-          down > 0 ? api.network.ego({ node_id: id, depth: down, direction: "downstream", mode: "unified" }) : null,
-        ]);
-        let nodes = upRes?.nodes ?? downRes?.nodes ?? [];
-        let links = upRes?.links ?? downRes?.links ?? [];
-        if (upRes && downRes) {
-          const merged = mergeGraph(upRes.nodes || [], upRes.links || [], downRes.nodes || [], downRes.links || []);
-          nodes = merged.nodes;
-          links = merged.links;
-        }
-        if (!upRes && !downRes) {
-          const base = await api.network.ego({ node_id: id, depth: 0, direction: "both", mode: "unified" });
-          nodes = base.nodes || [];
-          links = base.links || [];
-        }
-        if (isMemberCenter(id)) pendingFocusRef.current = id;
-        dispatch({ type: "LOAD_SUCCESS", nodes, links, centerId: id, upDepth: up, downDepth: down });
-        resetHistory();
-      } catch (e) {
-        dispatch({ type: "LOAD_ERROR", error: e instanceof Error ? e.message : "Failed to load lineage levels." });
       }
     },
     [resetHistory],
@@ -618,15 +581,9 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
               />
             </CanvasProvider>
 
-            {/* focus → expand: step levels in/out, or load the full lineage */}
+            {/* focus → expand: load the full lineage around the selected element */}
             {hasGraph && (
               <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
-                <LevelStepper
-                  upDepth={state.upDepth}
-                  downDepth={state.downDepth}
-                  disabled={state.loading}
-                  onChange={loadLevels}
-                />
                 <button
                   type="button"
                   onClick={showFullLineage}

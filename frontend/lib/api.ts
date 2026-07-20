@@ -120,6 +120,10 @@ export interface NetworkNode {
   lineageType?: string | null;
   /** True when the column participates in any column→column lineage edge. */
   hasLineage?: boolean;
+  /** Member nodes: column lineage continues beyond this response in that
+   *  direction (drives the per-card "load one more level" buttons). */
+  hasMoreUp?: boolean;
+  hasMoreDown?: boolean;
   [k: string]: unknown;
 }
 
