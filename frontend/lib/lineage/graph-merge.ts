@@ -39,7 +39,13 @@ export function mergeGraph(
     } else {
       // Enrich an existing node with any fields the new payload filled in
       // (e.g. a column first seen as an edge endpoint, now with metadata).
-      nodeById.set(n.id, { ...nodeById.get(n.id)!, ...n });
+      const merged = { ...nodeById.get(n.id)!, ...n };
+      // Frontier flags are relative to the response that carried them: the API
+      // omits them when a member's lineage is fully inside that response, so a
+      // stale true from an older payload must not survive the merge.
+      if (!("hasMoreUp" in n)) delete merged.hasMoreUp;
+      if (!("hasMoreDown" in n)) delete merged.hasMoreDown;
+      nodeById.set(n.id, merged);
     }
   }
 

@@ -40,4 +40,16 @@ describe("mergeGraph", () => {
     expect(a.datatype).toBe("int");
     expect(a.parent).toBe("tbl");
   });
+
+  it("lets the newest payload clear frontier flags (absence means fully loaded)", () => {
+    // The API only sets hasMoreUp/hasMoreDown when true, relative to its own
+    // response — after expanding, the re-served node omits them and the stale
+    // true must not survive, or the card would show a dead ± button forever.
+    const prev = [N("a", { hasMoreUp: true, hasMoreDown: true })];
+    const inc = [N("a", { hasMoreDown: true })]; // upstream now fully loaded
+    const r = mergeGraph(prev, [], inc, []);
+    const a = r.nodes.find((n) => n.id === "a")!;
+    expect(a.hasMoreUp).toBeUndefined();
+    expect(a.hasMoreDown).toBe(true);
+  });
 });
