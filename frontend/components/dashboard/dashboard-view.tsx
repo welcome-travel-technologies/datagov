@@ -483,3 +483,4 @@ function PctCell({ ok, value, title }: { ok: boolean; value: number | null; titl
     </TD>
   );
 }
+
