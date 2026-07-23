@@ -17,6 +17,7 @@ and asked follow-up questions against. Pure read-only catalog ops.
 from collections import Counter
 
 from ..models import Item
+from ..report_filters import exclude_draft_reports, is_draft_report_name
 
 # Shared scope filters.
 _PB_MEASURE = dict(deleted=False, item_type='PB_MEASURE', service='powerbi')
@@ -43,7 +44,7 @@ def _report_names(crj) -> list[str]:
     for e in (crj or []):
         if isinstance(e, dict):
             name = _norm(e.get('name'))
-            if name and name.lower() not in seen:
+            if name and name.lower() not in seen and not is_draft_report_name(name):
                 seen.add(name.lower())
                 out.append(name)
     return out
@@ -95,7 +96,8 @@ def get_pb_usage_analytics(report_name: str = '', measure_name: str = '',
 
 
 def _report_mode(report_name, ws, measures_qs) -> str:
-    rqs = Item.objects.filter(**_PB_REPORT, item_name__icontains=report_name)
+    rqs = exclude_draft_reports(
+        Item.objects.filter(**_PB_REPORT, item_name__icontains=report_name))
     if ws:
         rqs = rqs.filter(workspace_name__icontains=ws)
     reports = list(rqs.values(
@@ -263,7 +265,7 @@ def _overview_mode(ws, measures_qs, top) -> str:
         for rn in g['reports']:
             report_measures[rn] += 1
 
-    rqs = Item.objects.filter(**_PB_REPORT)
+    rqs = exclude_draft_reports(Item.objects.filter(**_PB_REPORT))
     if ws:
         rqs = rqs.filter(workspace_name__icontains=ws)
     n_reports = rqs.count()

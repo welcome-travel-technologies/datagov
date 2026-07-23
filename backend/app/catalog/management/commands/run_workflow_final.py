@@ -19,6 +19,7 @@ from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
 from catalog.models import Item, NetworkEdge, Summary
+from catalog.report_filters import exclude_draft_reports
 from catalog.services.bridge_builder import build_cross_tool_bridges
 
 
@@ -134,7 +135,8 @@ class Command(BaseCommand):
         unused_measures = Item.objects.filter(item_type='PB_MEASURE', is_unused=True, deleted=False).count()
         total_columns = Item.objects.filter(item_type='PB_COLUMN', deleted=False).count()
         unused_columns = Item.objects.filter(item_type='PB_COLUMN', is_unused=True, deleted=False).count()
-        total_reports = Item.objects.filter(item_type='PB_REPORT', deleted=False).count()
+        total_reports = exclude_draft_reports(
+            Item.objects.filter(item_type='PB_REPORT', deleted=False)).count()
 
         Summary.objects.all().delete()
         Summary.objects.create(
