@@ -437,6 +437,41 @@ class TestReviewedMergeCommand:
         assert 'Would merge: clusters=1, merged_rows=1' in output.getvalue()
         assert 'NOTHING WAS WRITTEN' in output.getvalue()
 
+    def test_reviewed_merge_restores_plain_name_from_automatic_id_suffix(
+            self, org, user, tmp_path):
+        loser = DataPerson.objects.create(
+            name='Aris Apostolopoulos', organization=org, is_owner=True,
+        )
+        survivor = DataPerson.objects.create(
+            name='Temporary linked name', organization=org, user=user,
+            is_owner=True,
+        )
+        suffixed = f'Aris Apostolopoulos (data person {survivor.id})'
+        DataPerson.objects.filter(pk=survivor.pk).update(name=suffixed)
+
+        group = _group(org)
+        group.ownership_person = loser
+        group.save(update_fields=['ownership_person'])
+
+        output = StringIO()
+        call_command(
+            'dedupe_data_persons',
+            org=org.id,
+            merge_csv=str(self._csv(
+                tmp_path, [(survivor.id, loser.id)],
+            )),
+            apply=True,
+            stdout=output,
+        )
+
+        survivor.refresh_from_db()
+        group.refresh_from_db()
+        assert survivor.name == 'Aris Apostolopoulos'
+        assert group.ownership_person_id == survivor.id
+        assert not DataPerson.objects.filter(pk=loser.pk).exists()
+        assert 'renamed_rows=1' in output.getvalue()
+        assert 'restore plain name' in output.getvalue()
+
     def test_org_option_exactly_scopes_a_reviewed_plan(
             self, org, tmp_path):
         other_org = Organization.objects.create(name='Other tenant')

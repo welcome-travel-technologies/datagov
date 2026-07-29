@@ -384,6 +384,7 @@ def merge_reviewed_pairs(
     for survivor_id, reviewed_loser_ids in by_survivor.items():
         survivor = people[survivor_id]
         losers = [people[loser_id] for loser_id in reviewed_loser_ids]
+        canonical_name = _reviewed_canonical_name(survivor, losers)
         survivor_row = _person_row(survivor)
         loser_rows = [_person_row(loser) for loser in losers]
         log(
@@ -395,6 +396,21 @@ def merge_reviewed_pairs(
             summary, apply, log, Definition=Definition, using=using,
             connection_obj=connection_obj,
         )
+        if canonical_name and canonical_name != survivor.name:
+            summary['renamed_rows'] += 1
+            log(
+                f"    restore plain name #{survivor_id}: "
+                f"{survivor.name!r} -> {canonical_name!r}"
+            )
+            if apply:
+                # _merge has deleted the reviewed plain-name loser, so the
+                # organization-scoped case-insensitive uniqueness constraint is
+                # now free for the canonical name. The surrounding command
+                # transaction rolls the entire merge back if that assumption
+                # was invalidated by another row.
+                DataPerson.objects.using(using).filter(
+                    id=survivor_id,
+                ).update(name=canonical_name)
     return summary
 
 
@@ -409,6 +425,31 @@ def _person_row(person):
         'is_other': person.is_other,
         'slack_handle': person.slack_handle,
     }
+
+
+def _reviewed_canonical_name(survivor, losers):
+    """Recover the plain name after an operator confirms a disambiguated twin.
+
+    ``_clean_names`` appends ``(data person <id>)`` when two name-only rows
+    cannot be merged automatically.  A later reviewed merge deliberately keeps
+    the login-linked row as survivor, which is commonly the suffixed row.  Once
+    the plain-name loser is deleted the suffix no longer serves a purpose, so
+    restore that loser's exact trimmed spelling.  Do not strip email/Slack or
+    arbitrary parenthetical text: only our deterministic id suffix qualifies,
+    and only when a reviewed loser proves the corresponding plain name.
+    """
+    current = (survivor.name or '').strip()
+    suffix = f' (data person {survivor.id})'
+    if not current.lower().endswith(suffix.lower()):
+        return None
+    base = current[:-len(suffix)].strip()
+    if not base:
+        return None
+    for loser in losers:
+        loser_name = (loser.name or '').strip()
+        if _norm(loser_name) == _norm(base):
+            return loser_name[:255]
+    return None
 
 
 def _clean_names(
