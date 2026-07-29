@@ -16,7 +16,10 @@ and asked follow-up questions against. Pure read-only catalog ops.
 """
 from collections import Counter
 
+from django.db.models import Q
+
 from ..models import Item
+from .organization_scope import require_bound_organization_id
 
 # Shared scope filters.
 _PB_MEASURE = dict(deleted=False, item_type='PB_MEASURE', service='powerbi')
@@ -80,22 +83,44 @@ def get_pb_usage_analytics(report_name: str = '', measure_name: str = '',
     measure or report (DAX, columns, relationships, lineage) call
     ``get_pb_item_details`` instead; this tool is for the cross-cutting rollups.
     """
+    organization_id = require_bound_organization_id()
     top = max(1, min(int(top or 25), 100))
     ws = _norm(workspace)
 
     def measures_qs():
-        qs = Item.objects.filter(**_PB_MEASURE)
+        qs = Item.objects.filter(
+            organization_id=organization_id,
+            **_PB_MEASURE,
+        ).filter(
+            Q(item_group__organization_id=organization_id) |
+            Q(item_group__isnull=True)
+        ).filter(
+            Q(item_group__ownership_person__organization_id=organization_id) |
+            Q(item_group__ownership_person__isnull=True)
+        )
         return qs.filter(workspace_name__icontains=ws) if ws else qs
 
     if _norm(report_name):
-        return _report_mode(_norm(report_name), ws, measures_qs)
+        return _report_mode(
+            _norm(report_name), ws, measures_qs, organization_id,
+        )
     if _norm(measure_name):
         return _measure_mode(_norm(measure_name), ws, measures_qs)
-    return _overview_mode(ws, measures_qs, top)
+    return _overview_mode(ws, measures_qs, top, organization_id)
 
 
-def _report_mode(report_name, ws, measures_qs) -> str:
-    rqs = Item.objects.filter(**_PB_REPORT, item_name__icontains=report_name)
+def _report_mode(report_name, ws, measures_qs, organization_id) -> str:
+    rqs = Item.objects.filter(
+        organization_id=organization_id,
+        **_PB_REPORT,
+        item_name__icontains=report_name,
+    ).filter(
+        Q(item_group__organization_id=organization_id) |
+        Q(item_group__isnull=True)
+    ).filter(
+        Q(item_group__ownership_person__organization_id=organization_id) |
+        Q(item_group__ownership_person__isnull=True)
+    )
     if ws:
         rqs = rqs.filter(workspace_name__icontains=ws)
     reports = list(rqs.values(
@@ -229,7 +254,7 @@ def _measure_mode(measure_name, ws, measures_qs) -> str:
     return '\n'.join(lines)
 
 
-def _overview_mode(ws, measures_qs, top) -> str:
+def _overview_mode(ws, measures_qs, top, organization_id) -> str:
     measures = list(measures_qs().values(
         'item_name', 'dataset_name', 'connected_visuals',
         'connected_reports_json', 'item_group_id',
@@ -263,13 +288,21 @@ def _overview_mode(ws, measures_qs, top) -> str:
         for rn in g['reports']:
             report_measures[rn] += 1
 
-    rqs = Item.objects.filter(**_PB_REPORT)
+    rqs = Item.objects.filter(
+        organization_id=organization_id,
+        **_PB_REPORT,
+    )
     if ws:
         rqs = rqs.filter(workspace_name__icontains=ws)
     n_reports = rqs.count()
 
     def _pb_count(item_type):
-        qs = Item.objects.filter(deleted=False, item_type=item_type, service='powerbi')
+        qs = Item.objects.filter(
+            organization_id=organization_id,
+            deleted=False,
+            item_type=item_type,
+            service='powerbi',
+        )
         return (qs.filter(workspace_name__icontains=ws) if ws else qs).count()
 
     scope = f" — workspace ~**{ws}**" if ws else ''

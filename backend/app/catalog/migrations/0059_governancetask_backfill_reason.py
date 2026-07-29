@@ -13,10 +13,23 @@ from django.db import migrations
 
 def backfill(apps, schema_editor):
     GovernanceTask = apps.get_model('catalog', 'GovernanceTask')
+    using = schema_editor.connection.alias
+    tasks = GovernanceTask.objects.using(using)
 
     # Every pre-existing task came from a status flip, so its status IS its reason.
     for status in ('ATTENTION', 'DELETED'):
-        GovernanceTask.objects.filter(trigger_status=status).update(reason=status)
+        tasks.filter(trigger_status=status).update(reason=status)
+
+    # Before 0058, the only way a task became done was the human-facing Done
+    # endpoint. Preserve that durable dismissal explicitly. Without this,
+    # 0064 cannot recognize an active manual episode and the first sweep would
+    # recreate work that a person had already dismissed.
+    manual = tasks.filter(
+        state='done',
+        closed_reason__isnull=True,
+    ).update(closed_reason='manual')
+    if manual:
+        print(f'[0059] marked {manual} legacy done task(s) as manual')
 
     # The old rule was one open task per GROUP, so duplicates on (group, reason)
     # shouldn't exist — but legacy rows with a blank/unknown status all land on
@@ -24,8 +37,7 @@ def backfill(apps, schema_editor):
     # and retire the rest, so 0060's constraint can be added.
     seen = set()
     stale = []
-    rows = (GovernanceTask.objects
-            .filter(state='open')
+    rows = (tasks.filter(state='open')
             .order_by('-created_at', '-id')
             .values_list('id', 'item_group_id', 'reason'))
     for task_id, group_id, reason in rows.iterator():
@@ -38,7 +50,7 @@ def backfill(apps, schema_editor):
             seen.add(key)
     if stale:
         for i in range(0, len(stale), 2000):
-            GovernanceTask.objects.filter(id__in=stale[i:i + 2000]).update(
+            tasks.filter(id__in=stale[i:i + 2000]).update(
                 state='done', closed_reason='resolved',
             )
         print(f'[0059] collapsed {len(stale)} duplicate open task(s)')

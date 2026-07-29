@@ -57,7 +57,10 @@ def _seed_graph(org):
 @pytest.mark.django_db
 def test_column_ego_traces_columns_and_attaches_parents(org):
     _seed_graph(org)
-    resp = _column_ego('DBT_COLUMN::sc', depth=3, direction='both')
+    resp = _column_ego(
+        'DBT_COLUMN::sc', depth=3, direction='both',
+        organization_id=org.id,
+    )
     links = resp.data['links']
     col = {(l['source'], l['target']) for l in links if l['kind'] == 'column'}
     contains = {(l['source'], l['target']) for l in links if l['kind'] == 'contains'}
@@ -79,7 +82,10 @@ def test_column_ego_traces_columns_and_attaches_parents(org):
 def test_column_ego_seeds_from_container_members(org):
     _seed_graph(org)
     # centering on a model expands to its member columns, then traces them.
-    resp = _column_ego('DBT_MODEL::m', depth=3, direction='both')
+    resp = _column_ego(
+        'DBT_MODEL::m', depth=3, direction='both',
+        organization_id=org.id,
+    )
     col = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'column'}
     assert ('DBT_COLUMN::sc', 'DBT_COLUMN::mc') in col
     assert ('DBT_COLUMN::mc', 'PB_COLUMN::pc') in col
@@ -89,7 +95,10 @@ def test_column_ego_seeds_from_container_members(org):
 def test_column_ego_upstream_only(org):
     _seed_graph(org)
     # from the PB column, upstream should walk back to the dbt source column.
-    resp = _column_ego('PB_COLUMN::pc', depth=3, direction='upstream')
+    resp = _column_ego(
+        'PB_COLUMN::pc', depth=3, direction='upstream',
+        organization_id=org.id,
+    )
     col = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'column'}
     assert ('DBT_COLUMN::mc', 'PB_COLUMN::pc') in col
     assert ('DBT_COLUMN::sc', 'DBT_COLUMN::mc') in col
@@ -114,7 +123,10 @@ def _seed_chain(org, n=5):
 def test_column_ego_depth_bounds_chain(org):
     """A depth-bounded trace stops after `depth` hops (the old behavior)."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c0', depth=1, direction='downstream')
+    resp = _column_ego(
+        'DBT_COLUMN::c0', depth=1, direction='downstream',
+        organization_id=org.id,
+    )
     col = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'column'}
     assert ('DBT_COLUMN::c0', 'DBT_COLUMN::c1') in col
     assert ('DBT_COLUMN::c1', 'DBT_COLUMN::c2') not in col   # cut off at depth 1
@@ -125,7 +137,10 @@ def test_column_ego_depth_zero_focus_only(org):
     """depth=0 is the canvas's initial "open this element" load: just the focused
     column and its container card, with no neighbour columns traversed."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c0', depth=0, direction='both')
+    resp = _column_ego(
+        'DBT_COLUMN::c0', depth=0, direction='both',
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     col = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'column'}
     assert node_ids == {'DBT_COLUMN::c0', 'DBT_MODEL::m0'}  # element + its container only
@@ -136,7 +151,10 @@ def test_column_ego_depth_zero_focus_only(org):
 def test_column_ego_full_traverses_entire_chain(org):
     """full=True ignores the depth clamp and follows the chain to its end."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c0', depth=1, direction='downstream', full=True)
+    resp = _column_ego(
+        'DBT_COLUMN::c0', depth=1, direction='downstream', full=True,
+        organization_id=org.id,
+    )
     col = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'column'}
     node_ids = {n['id'] for n in resp.data['nodes']}
     for i in range(4):                                       # every hop present
@@ -151,7 +169,10 @@ def test_column_ego_frontier_flags_on_bounded_chain(org):
     unloaded column lineage (per direction), and only those — this powers the
     per-card "load one more level" buttons."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c2', depth=1, direction='both')
+    resp = _column_ego(
+        'DBT_COLUMN::c2', depth=1, direction='both',
+        organization_id=org.id,
+    )
     flags = {n['id']: (n.get('hasMoreUp', False), n.get('hasMoreDown', False))
              for n in resp.data['nodes']}
     # Loaded: c1, c2, c3. c0 is hidden upstream of c1; c4 hidden downstream of c3.
@@ -166,8 +187,10 @@ def test_column_ego_asymmetric_radii(org):
     so the frontier flags are exact — the center must not be flagged for a
     direction that is already loaded."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c2', depth=1, direction='both',
-                       depth_up=1, depth_down=2)
+    resp = _column_ego(
+        'DBT_COLUMN::c2', depth=1, direction='both',
+        depth_up=1, depth_down=2, organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     assert {'DBT_COLUMN::c1', 'DBT_COLUMN::c2', 'DBT_COLUMN::c3', 'DBT_COLUMN::c4'} <= node_ids
     assert 'DBT_COLUMN::c0' not in node_ids          # upstream bounded to 1 hop
@@ -182,7 +205,10 @@ def test_column_ego_asymmetric_radii(org):
 def test_column_ego_no_frontier_flags_when_fully_loaded(org):
     """With the entire chain loaded (full=True) nothing is flagged."""
     _seed_chain(org, 5)
-    resp = _column_ego('DBT_COLUMN::c0', depth=1, direction='downstream', full=True)
+    resp = _column_ego(
+        'DBT_COLUMN::c0', depth=1, direction='downstream', full=True,
+        organization_id=org.id,
+    )
     assert all(not n.get('hasMoreUp') and not n.get('hasMoreDown')
                for n in resp.data['nodes'])
 
@@ -212,7 +238,10 @@ def test_unified_ego_collapses_report_hierarchy_to_direct_consumers(org):
     DIRECT member -> report edge; the unnamed visual/page intermediates never
     enter the payload (a hub measure used to flood the canvas with them)."""
     _seed_report_graph(org)
-    resp = _column_ego('PB_MEASURE::m', depth=2, direction='both', unified=True)
+    resp = _column_ego(
+        'PB_MEASURE::m', depth=2, direction='both', unified=True,
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     model_edges = {(l['source'], l['target']) for l in resp.data['links'] if l['kind'] == 'model'}
 
@@ -234,7 +263,10 @@ def test_unified_ego_collapses_report_hierarchy_to_direct_consumers(org):
 def test_column_mode_excludes_report_hierarchy(org):
     """Without unified=True the report hierarchy must NOT leak into the view."""
     _seed_report_graph(org)
-    resp = _column_ego('PB_MEASURE::m', depth=2, direction='both')
+    resp = _column_ego(
+        'PB_MEASURE::m', depth=2, direction='both',
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     assert 'PB_VISUAL::v' not in node_ids
     assert all(l['kind'] != 'model' for l in resp.data['links'])
@@ -244,7 +276,10 @@ def test_column_mode_excludes_report_hierarchy(org):
 def test_unified_ego_upstream_only_skips_reports(org):
     """Reports are downstream consumers, so an upstream-only trace omits them."""
     _seed_report_graph(org)
-    resp = _column_ego('PB_MEASURE::m', depth=2, direction='upstream', unified=True)
+    resp = _column_ego(
+        'PB_MEASURE::m', depth=2, direction='upstream', unified=True,
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     assert 'PB_VISUAL::v' not in node_ids
 
@@ -255,7 +290,10 @@ def test_unified_ego_depth_zero_skips_report_hierarchy(org):
     container — NOT the downstream report consumers. But the measure IS flagged
     hasMoreDown, so its card renders the "+" whose one level is those reports."""
     _seed_report_graph(org)
-    resp = _column_ego('PB_MEASURE::m', depth=0, direction='both', unified=True)
+    resp = _column_ego(
+        'PB_MEASURE::m', depth=0, direction='both', unified=True,
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     assert node_ids == {'PB_MEASURE::m', 'PB_TABLE::t'}
     assert all(l['kind'] != 'model' for l in resp.data['links'])
@@ -288,7 +326,10 @@ def test_column_ego_serializes_lineage_type_bridge_and_join(org):
     mk(source='PB_COLUMN::p', target='PB_COLUMN::q', kind='join')   # FK→PK relationship
     mk(source='PB_TABLE::u', target='PB_COLUMN::q', kind='contains')
 
-    resp = _column_ego('DBT_COLUMN::a', depth=4, direction='both')
+    resp = _column_ego(
+        'DBT_COLUMN::a', depth=4, direction='both',
+        organization_id=org.id,
+    )
     by_pair = {(l['source'], l['target']): l for l in resp.data['links']}
 
     assert by_pair[('DBT_COLUMN::a', 'DBT_COLUMN::b')]['lineage_type'] == 'transformation'
@@ -322,7 +363,10 @@ def test_column_ego_structural_edge_shown_between_present_nodes(org):
     mk(source='DBT_COLUMN::a', target='DBT_COLUMN::b', kind='column', lineage_type='pass-through')
     mk(source='DBT_COLUMN::b', target='DBT_COLUMN::a', kind='join')
 
-    resp = _column_ego('DBT_COLUMN::a', depth=4, direction='both')
+    resp = _column_ego(
+        'DBT_COLUMN::a', depth=4, direction='both',
+        organization_id=org.id,
+    )
     by_pair = {(l['source'], l['target'], l['kind']): l for l in resp.data['links']}
     assert ('DBT_COLUMN::b', 'DBT_COLUMN::a', 'join') in by_pair       # context kept
     assert ('DBT_COLUMN::a', 'DBT_COLUMN::b', 'column') in by_pair
@@ -351,7 +395,10 @@ def test_column_ego_hub_dimension_does_not_flood(org):
         mk(source=f'PB_TABLE::fact{i}', target=f'PB_COLUMN::fc{i}', kind='contains')
         mk(source=f'PB_COLUMN::fc{i}', target='PB_COLUMN::d', kind='join')  # each joins the same date
 
-    resp = _column_ego('PB_MEASURE::m', depth=3, direction='upstream', unified=True)
+    resp = _column_ego(
+        'PB_MEASURE::m', depth=3, direction='upstream', unified=True,
+        organization_id=org.id,
+    )
     node_ids = {n['id'] for n in resp.data['nodes']}
     # none of the 8 unrelated fact tables (or their columns) leak in
     assert not any(f'PB_TABLE::fact{i}' in node_ids for i in range(8))

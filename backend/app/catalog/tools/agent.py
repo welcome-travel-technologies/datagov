@@ -30,6 +30,7 @@ from pydantic_ai import Agent
 
 from .assistant import PROVIDERS
 from .lineage import get_lineage
+from .organization_scope import bind_organization_read_tool
 from .prompts import (
     SYSTEM_PROMPT_BASE,
     SYSTEM_PROMPT_BIGQUERY_ADDENDUM,
@@ -222,7 +223,7 @@ def get_agent(
     # (PowerBI -> get_pb_item_details + get_pb_usage_analytics,
     # dbt -> get_dbt_item_details), which already returns an item's full "Uses" /
     # "Used by" lineage and usage rollups.
-    tools = [get_lineage]
+    tools = [bind_organization_read_tool(get_lineage, org)]
 
     for key, context_client, tools_client, scope_ids in active:
         provider = PROVIDERS[key]

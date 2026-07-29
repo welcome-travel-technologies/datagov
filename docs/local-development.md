@@ -146,9 +146,9 @@ Run from `backend/app` with `python manage.py <cmd>`:
 |---|---|
 | `run_source <id>` | Run one integration source synchronously |
 | `test_sources [--source-id N]` | Connectivity-test active sources |
-| `run_workflow_final [--organization-id N]` | The cross-tool bridge + stats step |
-| `rebridge [--organization-id N]` | Rebuild only the dbt↔Power BI bridge edges |
-| `load_data` / `load_dbt_data` | Load transform CSVs into the catalog |
+| `run_workflow_final --organization-id N` | The organization-scoped cross-tool bridge + stats step |
+| `rebridge --organization-id N` | Rebuild only that organization's dbt↔Power BI bridge edges |
+| `load_data --organization-id N --source-id N` / `load_dbt_data --organization-id N --source-id N` | Load transform CSVs into one exact tenant/source scope |
 | `chat_repl [--org-id N]` | Interactive AI-assistant REPL |
 | `clean_database` | Reset catalog data |
 

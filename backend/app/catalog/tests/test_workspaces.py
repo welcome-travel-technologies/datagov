@@ -160,9 +160,9 @@ class TestChatbotPromptInjection:
         # to inspect the prompt string the function would build. Re-implement
         # the build logic by calling get_agent and capturing the system_prompt
         # via Agent constructor monkey-patch.
-        from catalog import tools as tools_mod
+        from catalog.tools import agent as agent_mod
         captured = {}
-        original = tools_mod.Agent
+        original = agent_mod.Agent
 
         class FakeAgent:
             def __init__(self, *args, system_prompt=None, **kwargs):
@@ -170,11 +170,11 @@ class TestChatbotPromptInjection:
             def tool_plain(self, *_a, **_k):
                 pass
 
-        tools_mod.Agent = FakeAgent
+        agent_mod.Agent = FakeAgent
         try:
-            tools_mod.get_agent(workspace_scope=scope)
+            agent_mod.get_agent(workspace_scope=scope)
         finally:
-            tools_mod.Agent = original
+            agent_mod.Agent = original
         return captured['system_prompt']
 
     def test_no_scope_omits_workspace_block(self):
@@ -328,10 +328,15 @@ class TestPathWorkspaceConstraint:
         self._edge(a, b, org)
         self._edge(b, c, org)
         # Without the constraint, there's a 2-hop path a → b → c.
-        result = find_shortest_path(a, c, max_depth=4)
+        result = find_shortest_path(
+            a, c, max_depth=4, organization_id=org.id,
+        )
         assert result.found is True
         # With workspace=ws-1, b is blocked → no path exists at all.
-        result = find_shortest_path(a, c, max_depth=4, workspace_id='ws-1')
+        result = find_shortest_path(
+            a, c, max_depth=4, workspace_id='ws-1',
+            organization_id=org.id,
+        )
         assert result.found is False
 
     def test_path_allows_dbt_bridge_between_workspaces(self, org):
@@ -344,7 +349,10 @@ class TestPathWorkspaceConstraint:
         c = self._make_pb_node('c', 'ws-1', org=org)
         self._edge(a, d, org)
         self._edge(d, c, org)
-        result = find_shortest_path(a, c, max_depth=4, workspace_id='ws-1')
+        result = find_shortest_path(
+            a, c, max_depth=4, workspace_id='ws-1',
+            organization_id=org.id,
+        )
         assert result.found is True
         # The dbt node MUST appear in the rendered path.
         assert any(n.id == d for n in result.nodes)
@@ -358,7 +366,10 @@ class TestPathWorkspaceConstraint:
         c = self._make_pb_node('c', 'ws-2', org=org)  # target in different ws
         self._edge(a, b, org)
         self._edge(b, c, org)
-        result = find_shortest_path(a, c, max_depth=4, workspace_id='ws-1')
+        result = find_shortest_path(
+            a, c, max_depth=4, workspace_id='ws-1',
+            organization_id=org.id,
+        )
         assert result.found is True
 
     def test_no_workspace_filter_means_no_block(self, org):
@@ -366,7 +377,9 @@ class TestPathWorkspaceConstraint:
         a = self._make_pb_node('a', 'ws-1', org=org)
         b = self._make_pb_node('b', 'ws-2', org=org)
         self._edge(a, b, org)
-        result = find_shortest_path(a, b, max_depth=2)
+        result = find_shortest_path(
+            a, b, max_depth=2, organization_id=org.id,
+        )
         assert result.found is True
 
 

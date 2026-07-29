@@ -1,32 +1,33 @@
 Django==6.0.3
 djangorestframework==3.17.0
-django-oauth-toolkit>=3.3  # OAuth 2.1 AS+RS for the MCP server (claude.ai web connector); see docs/mcp-server-plan.md M5
+django-oauth-toolkit==3.4.0  # OAuth 2.1 AS+RS for the MCP server; see docs/mcp-server-plan.md M5
 django-cors-headers==4.9.0
 django-filter==25.2
 gunicorn==21.2.0
-google-genai>=1.68.0
-python-dotenv>=1.1.0
-pydantic-ai-slim[google,anthropic]
-uvicorn[standard]
+google-genai==2.14.0
+python-dotenv==1.2.2
+pydantic-ai-slim[google,anthropic]==2.20.0
+uvicorn[standard]==0.52.0
 aiohttp==3.11.11
 mistune==3.2.0
-slack_sdk
-slack-blocks-markdown
-django-q2
-croniter  # required by django-q2 for CRON schedule_type (ETL cron jobs); not auto-installed
-psycopg[binary]
-psycopg2-binary
-Pillow
-google-cloud-bigquery
-google-cloud-storage
-pandas-gbq
-db-dtypes
-dbt-artifacts-parser
-sqlglot>=25  # column-level lineage extraction from compiled dbt SQL
-pyyaml
-responses
-pytest
-pytest-django
-pytest-mock
-whitenoise
-django-tailwind
+slack_sdk==3.43.0
+slack-blocks-markdown==0.2.1
+django-q2==1.10.0
+croniter==6.2.4  # required by django-q2 for CRON schedule_type
+psycopg[binary]==3.3.4
+psycopg2-binary==2.9.12
+Pillow==12.3.0
+google-cloud-bigquery==3.42.2
+google-cloud-storage==3.13.0
+pandas-gbq==0.35.0
+db-dtypes==1.7.1
+dbt-artifacts-parser==0.14.0
+sqlglot==30.14.0  # column-level lineage extraction from compiled dbt SQL
+pyyaml==6.0.3
+responses==0.26.2
+pytest==9.1.1
+pytest-django==4.12.0
+pytest-mock==3.15.1
+whitenoise==6.12.0
+django-tailwind==4.5.0
+charset-normalizer==3.4.9  # CSV import: cp1252/cp1253 encoding detection

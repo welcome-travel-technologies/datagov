@@ -131,8 +131,8 @@ class Command(BaseCommand):
                     user=user, organization=org,
                 )
 
-                # Adopts a login-less namesake rather than creating a second row
-                # with the same name (see access.upsert_data_person).
+                # Never guesses identity from a display name. A login-less
+                # namesake is an explicit conflict to review/link first.
                 upsert_data_person(user, org, name, **flags)
 
             if existing:

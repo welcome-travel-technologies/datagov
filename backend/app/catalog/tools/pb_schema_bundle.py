@@ -10,7 +10,26 @@ deterministic.
 """
 import re
 
-from ..models import Item
+from django.db.models import Q
+
+from ..models import Item, ItemGroup
+from .organization_scope import require_bound_organization_id
+
+
+def _item_objects():
+    """Fail-closed Item queryset for the authenticated organization."""
+    organization_id = require_bound_organization_id()
+    return Item.objects.filter(organization_id=organization_id).filter(
+        Q(item_group__organization_id=organization_id) |
+        Q(item_group__isnull=True)
+    )
+
+
+def _item_group_objects():
+    organization_id = require_bound_organization_id()
+    return ItemGroup.objects.filter(
+        organization_id=organization_id,
+    )
 
 # A thin "DirectQuery" wrapper measure is one whose DAX is *only* an
 # EXTERNALMEASURE() call (optionally a second one for the format string) with no
@@ -51,7 +70,7 @@ def _resolve_wrapper_source(measure, em_matches, limit=5):
         r'^\s*(?:DirectQuery|Import)\s+to\s+(?:AS\s*-\s*)?',
         '', src_conn, flags=re.IGNORECASE,
     ).strip()
-    target_qs = Item.objects.filter(
+    target_qs = _item_objects().filter(
         deleted=False, item_type='PB_MEASURE', service='powerbi',
         item_name=src_measure_name,
     )
@@ -80,10 +99,14 @@ def _pick_group_primary(members):
     ``ItemGroup.primary_item`` when that item is in range (the catalog's
     declared "1st priority" measure), else the highest priority matched member."""
     by_id = {m.item_id: m for m in members}
-    primary_id = next(
-        (m.item_group.primary_item_id for m in members
-         if m.item_group_id and m.item_group and m.item_group.primary_item_id),
-        None,
+    group_id = next((m.item_group_id for m in members if m.item_group_id), None)
+    primary_id = (
+        _item_group_objects()
+        .filter(pk=group_id)
+        .values_list('primary_item_id', flat=True)
+        .first()
+        if group_id is not None
+        else None
     )
     if primary_id in by_id:
         return by_id[primary_id]
@@ -161,9 +184,8 @@ def get_pb_measure_schema(
     if not query:
         return 'Please provide a measure name or item_id.'
 
-    m_qs = (Item.objects
+    m_qs = (_item_objects()
             .filter(deleted=False, item_type='PB_MEASURE', service='powerbi')
-            .select_related('item_group')
             .order_by('-connected_reports', '-connected_visuals', 'item_name'))
     if workspace_id:
         m_qs = m_qs.filter(workspace_id=workspace_id)
@@ -209,10 +231,9 @@ def get_pb_measure_schema(
     # catalog, collapsing each name's copies onto its group primary: if the name
     # still resolves to more than one *group*, list them and require an item_id.
     if not by_id and (workspace_id or dataset_id):
-        global_qs = (Item.objects
+        global_qs = (_item_objects()
                      .filter(deleted=False, item_type='PB_MEASURE',
                              service='powerbi')
-                     .select_related('item_group')
                      .order_by('-connected_reports', '-connected_visuals',
                                'item_name'))
         global_matches = list(
@@ -358,7 +379,7 @@ def get_pb_measure_schema(
     # Verify each candidate against Item so we never invent a table.
     candidate_names = ([home_table] if home_table else []) + referenced
     if candidate_names and ds_id:
-        verified_tables = list(Item.objects.filter(
+        verified_tables = list(_item_objects().filter(
             deleted=False, item_type='PB_TABLE', service='powerbi',
             dataset_id=ds_id, item_name__in=candidate_names,
         ).only('item_name', 'relationships_json'))
@@ -387,7 +408,7 @@ def get_pb_measure_schema(
 
     involved_tables = list(roots) + related_tables
 
-    columns_qs = Item.objects.filter(
+    columns_qs = _item_objects().filter(
         deleted=False, item_type='PB_COLUMN', service='powerbi',
         dataset_id=ds_id, table_name__in=involved_tables,
     ).only('item_name', 'table_name', 'datatype', 'column_type', 'description')
@@ -403,7 +424,7 @@ def get_pb_measure_schema(
         if rels:
             rel_sources.append((root, rels))
     if related_tables and ds_id:
-        related_items = Item.objects.filter(
+        related_items = _item_objects().filter(
             deleted=False, item_type='PB_TABLE', service='powerbi',
             dataset_id=ds_id, item_name__in=related_tables,
         ).only('item_name', 'relationships_json')
@@ -489,7 +510,7 @@ def get_pb_measure_schema(
     sibling_measures: list = []
     if home_table and ds_id:
         sibling_measures = list(
-            Item.objects.filter(
+            _item_objects().filter(
                 deleted=False, item_type='PB_MEASURE', service='powerbi',
                 dataset_id=ds_id, table_name=home_table,
             )
@@ -806,7 +827,9 @@ def verify_pb_measure_dimension_link(
     if not m_query or not d_query:
         return 'Please provide both a measure and a dimension column.'
 
-    m_qs = Item.objects.filter(deleted=False, item_type='PB_MEASURE', service='powerbi')
+    m_qs = _item_objects().filter(
+        deleted=False, item_type='PB_MEASURE', service='powerbi',
+    )
     if dataset_id:
         m_qs = m_qs.filter(dataset_id=dataset_id)
     measures = (
@@ -825,7 +848,7 @@ def verify_pb_measure_dimension_link(
         return f"Measure '{m_query}' is ambiguous. Re-run with item_id:\n{rows}"
     measure = measures[0]
 
-    c_qs = Item.objects.filter(
+    c_qs = _item_objects().filter(
         deleted=False, item_type='PB_COLUMN', service='powerbi',
         dataset_id=measure.dataset_id,
     )

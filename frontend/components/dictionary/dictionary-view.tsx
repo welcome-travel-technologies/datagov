@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
@@ -19,6 +19,7 @@ import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { SimpleSelect } from "@/components/ui/simple-select";
 import {
   api,
+  getApiErrorMessage,
   unwrapResults,
   STATUS_LABELS,
   type Category,
@@ -26,6 +27,7 @@ import {
   type Definition,
   type Department,
   type Item,
+  type ItemGroupPatch,
   type ItemStatus,
 } from "@/lib/api";
 import { GROUP_LABELS, colorFor } from "@/lib/lineage/graph-utils";
@@ -144,7 +146,17 @@ function downloadGovernanceCsv(rows: GroupedItem[]) {
   URL.revokeObjectURL(url);
 }
 
+/** Apply a group-level governance patch to every cached item instance. */
+export function updateGroupRows(
+  rows: Item[],
+  groupPk: number,
+  patch: Partial<Item>,
+): Item[] {
+  return rows.map((row) => (row.group === groupPk ? { ...row, ...patch } : row));
+}
+
 export function DictionaryView() {
+  const qc = useQueryClient();
   // ---- filter state -------------------------------------------------------
   const [itemType, setItemType] = useState("PB_MEASURE");
   const [ws, setWs] = useState("");
@@ -177,8 +189,7 @@ export function DictionaryView() {
       if (itemType === "ALL_PB") params.service = "powerbi";
       else if (itemType === "ALL_DBT") params.service = "dbt";
       else params.item_type = itemType;
-      const res = await api.items.list(params);
-      return res.results;
+      return api.items.listAll(params);
     },
     staleTime: 60_000,
   });
@@ -198,7 +209,7 @@ export function DictionaryView() {
         api.dataPersons.list({ is_owner: true }),
         api.dataPersons.list({ is_steward: true }),
         api.categories.list(),
-        api.definitions.list({ limit: 1000 }),
+        api.definitions.listAll({ limit: 1000 }),
       ]);
       return {
         departments: unwrapResults<Department>(d),
@@ -313,29 +324,39 @@ export function DictionaryView() {
   // ---- mutations ----------------------------------------------------------
   function applyToGroup(groupPk: number | null | undefined, patch: Partial<Item>) {
     if (groupPk == null) return;
-    setRawRows((prev) => prev.map((r) => (r.group === groupPk ? { ...r, ...patch } : r)));
+    setRawRows((prev) => updateGroupRows(prev, groupPk, patch));
+    qc.setQueryData<Item[]>(["dict-items", itemType], (prev) =>
+      prev ? updateGroupRows(prev, groupPk, patch) : prev,
+    );
   }
 
-  async function patchGroup(groupPk: number | null | undefined, body: Record<string, unknown>, local: Partial<Item>) {
+  async function patchGroup(
+    groupPk: number | null | undefined,
+    body: ItemGroupPatch,
+    local: Partial<Item>,
+  ) {
     if (groupPk == null) {
       alert("No group found for this row.");
       return;
     }
     // Empty strings clear the FK to null.
-    const clean: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(body)) clean[k] = v === "" ? null : v;
     applyToGroup(groupPk, local);
     try {
-      await api.itemGroups.patch(groupPk, clean);
-    } catch {
-      alert("Error updating field. You may not have permission.");
-      itemsQ.refetch();
+      await api.itemGroups.patch(groupPk, body);
+      qc.invalidateQueries({ queryKey: ["definitions"] });
+      qc.invalidateQueries({ queryKey: ["definition-groups"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["tasks-summary"] });
+    } catch (error) {
+      alert(getApiErrorMessage(error, "Error updating field. You may not have permission."));
+      await itemsQ.refetch();
     }
   }
 
   function editCategory(row: GroupedItem, value: string) {
     const cat = categories.find((c) => String(c.id) === value);
-    patchGroup(row.group, { category: value }, {
+    patchGroup(row.group, { category: value ? Number(value) : null }, {
       category: value ? Number(value) : null,
       category_name: cat?.name ?? null,
     });
@@ -348,14 +369,14 @@ export function DictionaryView() {
    *  its own; that's the explicit action on the Definitions page. */
   function editDefinition(row: GroupedItem, value: string) {
     const def = definitions.find((d) => String(d.id) === value);
-    patchGroup(row.group, { definition: value }, {
+    patchGroup(row.group, { definition: value ? Number(value) : null }, {
       definition: value ? Number(value) : null,
       definition_name: def?.name ?? null,
     });
   }
   function editOwner(row: GroupedItem, value: string) {
     const p = owners.find((o) => String(o.id) === value);
-    patchGroup(row.group, { ownership_person: value }, {
+    patchGroup(row.group, { ownership_person: value ? Number(value) : null }, {
       ownership_person: value ? Number(value) : null,
       ownership_person_name: p?.name ?? null,
       ownership_person_slack: p?.slack_handle ?? null,
@@ -363,7 +384,7 @@ export function DictionaryView() {
   }
   function editSteward(row: GroupedItem, value: string) {
     const p = stewards.find((s) => String(s.id) === value);
-    patchGroup(row.group, { steward: value }, {
+    patchGroup(row.group, { steward: value ? Number(value) : null }, {
       steward: value ? Number(value) : null,
       steward_name: p?.name ?? null,
       steward_slack: p?.slack_handle ?? null,
@@ -374,7 +395,11 @@ export function DictionaryView() {
     // Changing dept clears owner + steward (the new pool is unrelated).
     patchGroup(
       row.group,
-      { ownership_department: value, ownership_person: null, steward: null },
+      {
+        ownership_department: value ? Number(value) : null,
+        ownership_person: null,
+        steward: null,
+      },
       {
         ownership_department: value ? Number(value) : null,
         ownership_department_name: d?.name ?? null,
@@ -475,6 +500,17 @@ export function DictionaryView() {
           />
         </div>
       </div>
+
+      {metaQ.isError && (
+        <div className="rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err" role="alert">
+          {getApiErrorMessage(metaQ.error, "Could not load governance dropdown values.")}
+        </div>
+      )}
+      {filtersQ.isError && (
+        <div className="rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err" role="alert">
+          {getApiErrorMessage(filtersQ.error, "Could not load workspace filters.")}
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         {/* filter toolbar */}
@@ -660,7 +696,10 @@ export function DictionaryView() {
 
         {loading && <LoadingState label="Loading dictionary…" />}
         {!loading && itemsQ.isError && (
-          <EmptyState title="Failed to load" hint="The dictionary API returned an error." />
+          <EmptyState
+            title="Failed to load"
+            hint={getApiErrorMessage(itemsQ.error, "The dictionary API returned an error.")}
+          />
         )}
         {!loading && !itemsQ.isError && filtered.length === 0 && (
           <EmptyState title="No items found" hint="Try a different type or relax the filters." />

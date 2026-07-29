@@ -15,11 +15,12 @@ sources to be present in the database:
 """
 from collections import defaultdict
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 
-from catalog.models import Item, NetworkEdge, Summary
+from catalog.models import Item, NetworkEdge, Organization, Summary
 from catalog.services.bridge_builder import build_cross_tool_bridges
+from catalog.services.load_scope import acquire_catalog_load_lock
 
 
 # Item types that count as "real" downstream consumers of a dbt asset. A
@@ -36,19 +37,31 @@ class Command(BaseCommand):
     help = 'Run the workflow final step: cross-tool bridges + summary calculation'
 
     def add_arguments(self, parser):
-        parser.add_argument('--organization-id', type=int, default=None,
+        parser.add_argument('--organization-id', type=int, required=True,
                             help='Organization PK to scope the final step')
 
+    @transaction.atomic
     def handle(self, *args, **kwargs):
         self.organization_id = kwargs.get('organization_id')
-        org_id_literal = 'NULL'
-        if self.organization_id is not None:
-            org_id_literal = str(int(self.organization_id))
+        if (
+            isinstance(self.organization_id, bool)
+            or not isinstance(self.organization_id, int)
+            or self.organization_id <= 0
+        ):
+            raise CommandError('--organization-id must be a positive integer.')
+        if not Organization.objects.filter(pk=self.organization_id).exists():
+            raise CommandError(
+                f'Organization {self.organization_id} does not exist.'
+            )
 
-        with transaction.atomic(), connection.cursor() as cursor:
+        # Hold the same global catalog-write lock as both loaders through the
+        # bridge rebuild, dbt usage backfill, and Summary replacement. Otherwise
+        # a loader could change Items/edges between these three dependent steps.
+        acquire_catalog_load_lock()
+        with connection.cursor() as cursor:
             build_cross_tool_bridges(
                 cursor,
-                org_id_literal,
+                self.organization_id,
                 write=self.stdout.write,
             )
 
@@ -67,9 +80,9 @@ class Command(BaseCommand):
         """
         self.stdout.write('Backfilling dbt usage stats from graph...')
 
-        edge_qs = NetworkEdge.objects.all()
-        if self.organization_id is not None:
-            edge_qs = edge_qs.filter(organization_id=self.organization_id)
+        edge_qs = NetworkEdge.objects.filter(
+            organization_id=self.organization_id,
+        )
 
         # Build adjacency list. node_id strings are the canonical keys.
         adjacency = defaultdict(set)
@@ -97,9 +110,11 @@ class Command(BaseCommand):
             reports_cache[node_id] = collected
             return collected
 
-        item_qs = Item.objects.filter(item_type__in=DBT_PRODUCER_TYPES, deleted=False)
-        if self.organization_id is not None:
-            item_qs = item_qs.filter(organization_id=self.organization_id)
+        item_qs = Item.objects.filter(
+            organization_id=self.organization_id,
+            item_type__in=DBT_PRODUCER_TYPES,
+            deleted=False,
+        )
 
         updates = []
         for item in item_qs.only('item_id', 'item_type', 'is_unused', 'connected_reports'):
@@ -128,21 +143,32 @@ class Command(BaseCommand):
         )
 
     def _calculate_summary(self):
-        """Recalculate summary statistics across all sources."""
+        """Recalculate this organization's summary across all its sources."""
         self.stdout.write('Calculating summary statistics...')
-        total_measures = Item.objects.filter(item_type='PB_MEASURE', deleted=False).count()
-        unused_measures = Item.objects.filter(item_type='PB_MEASURE', is_unused=True, deleted=False).count()
-        total_columns = Item.objects.filter(item_type='PB_COLUMN', deleted=False).count()
-        unused_columns = Item.objects.filter(item_type='PB_COLUMN', is_unused=True, deleted=False).count()
-        total_reports = Item.objects.filter(item_type='PB_REPORT', deleted=False).count()
-
-        Summary.objects.all().delete()
-        Summary.objects.create(
-            total_measures=total_measures,
-            unused_measures=unused_measures,
-            total_columns=total_columns,
-            unused_columns=unused_columns,
-            total_reports=total_reports,
+        items = Item.objects.filter(
             organization_id=self.organization_id,
+            deleted=False,
         )
+        total_measures = items.filter(item_type='PB_MEASURE').count()
+        unused_measures = items.filter(
+            item_type='PB_MEASURE', is_unused=True,
+        ).count()
+        total_columns = items.filter(item_type='PB_COLUMN').count()
+        unused_columns = items.filter(
+            item_type='PB_COLUMN', is_unused=True,
+        ).count()
+        total_reports = items.filter(item_type='PB_REPORT').count()
+
+        with transaction.atomic():
+            Summary.objects.filter(
+                organization_id=self.organization_id,
+            ).delete()
+            Summary.objects.create(
+                total_measures=total_measures,
+                unused_measures=unused_measures,
+                total_columns=total_columns,
+                unused_columns=unused_columns,
+                total_reports=total_reports,
+                organization_id=self.organization_id,
+            )
         self.stdout.write(f'  → Summary: {total_measures} measures, {total_columns} columns, {total_reports} reports')

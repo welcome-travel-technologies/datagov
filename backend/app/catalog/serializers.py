@@ -13,6 +13,20 @@ class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
         fields = '__all__'
+        read_only_fields = ('organization',)
+
+    def validate(self, attrs):
+        from .access import resolve_org
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        if org is None:
+            raise serializers.ValidationError(
+                {'organization': 'Organization membership is required.'})
+        if self.instance is not None and self.instance.organization_id != org.id:
+            raise serializers.ValidationError(
+                {'organization': 'This department does not belong to your organization.'})
+        return attrs
 
 class DataPersonSerializer(serializers.ModelSerializer):
     # M2M: surface the list of department IDs as `departments`, plus a
@@ -23,14 +37,122 @@ class DataPersonSerializer(serializers.ModelSerializer):
     class Meta:
         model = DataPerson
         fields = '__all__'
+        read_only_fields = ('organization',)
 
     def get_department_names(self, obj):
-        return list(obj.departments.values_list('name', flat=True))
+        return [
+            department.name
+            for department in obj.departments.all()
+            if department.organization_id == obj.organization_id
+        ]
+
+    def to_representation(self, instance):
+        """Never serialize a corrupt cross-tenant M2M department link."""
+        data = super().to_representation(instance)
+        departments = [
+            department
+            for department in instance.departments.all()
+            if department.organization_id == instance.organization_id
+        ]
+        data['departments'] = [department.pk for department in departments]
+        data['department_names'] = [
+            department.name for department in departments
+        ]
+        return data
+
+    def validate_name(self, value):
+        """Mirror the normalized database constraint as a readable API 400."""
+        from django.db.models.functions import Lower, Trim
+        from .access import resolve_org
+
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('A name is required.')
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        clash = (
+            DataPerson.objects
+            .filter(organization=org)
+            .annotate(_normalized_name=Lower(Trim('name')))
+            .filter(_normalized_name=name.lower())
+        )
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                f'A person named "{name}" already exists in this organization.'
+            )
+        return name
+
+    def validate(self, attrs):
+        from .access import resolve_org
+        from .models import OrganizationMembership
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        if org is None:
+            raise serializers.ValidationError(
+                {'organization': 'Organization membership is required.'})
+        if self.instance is not None and self.instance.organization_id != org.id:
+            raise serializers.ValidationError(
+                {'organization': 'This person does not belong to your organization.'})
+
+        departments = attrs.get('departments')
+        if departments is not None:
+            foreign = [d.pk for d in departments if d.organization_id != org.id]
+            if foreign:
+                raise serializers.ValidationError({
+                    'departments': 'Every department must belong to your organization.'
+                })
+
+        person_user = attrs.get('user')
+        if person_user is not None:
+            if not OrganizationMembership.objects.filter(
+                organization=org, user=person_user,
+            ).exists():
+                raise serializers.ValidationError({
+                    'user': 'The linked user must belong to your organization.'
+                })
+            linked = DataPerson.objects.filter(
+                user=person_user, organization=org,
+            )
+            if self.instance is not None:
+                linked = linked.exclude(pk=self.instance.pk)
+            if linked.exists():
+                raise serializers.ValidationError({
+                    'user': 'This login is already linked to a data person.'
+                })
+        return attrs
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
+        read_only_fields = ('organization',)
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('A name is required.')
+        if name.casefold() == 'to be deleted':
+            raise serializers.ValidationError(
+                '"To Be Deleted" is a reserved lifecycle status, not a category.'
+            )
+        return name
+
+    def validate(self, attrs):
+        from .access import resolve_org
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        if org is None:
+            raise serializers.ValidationError(
+                {'organization': 'Organization membership is required.'})
+        if self.instance is not None and self.instance.organization_id != org.id:
+            raise serializers.ValidationError(
+                {'organization': 'This category does not belong to your organization.'})
+        return attrs
 
 
 class MetricsMapSerializer(serializers.ModelSerializer):
@@ -98,7 +220,43 @@ class ItemGroupSerializer(serializers.ModelSerializer):
         # through the API. primary_item is changed via the set_primary action.
         # deleted_at is driven by the status coupling (DELETED <-> stamped),
         # never set directly through the API.
-        read_only_fields = ('group_key', 'kind', 'organization', 'created_at', 'updated_at', 'deleted_at')
+        read_only_fields = (
+            'group_key', 'kind', 'organization', 'primary_item',
+            'created_at', 'updated_at', 'deleted_at',
+        )
+
+    def validate(self, attrs):
+        """Every governance relation must stay inside the caller's tenant."""
+        from .access import resolve_org
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        if org is None:
+            raise serializers.ValidationError(
+                {'organization': 'Organization membership is required.'})
+        if self.instance is not None and self.instance.organization_id != org.id:
+            raise serializers.ValidationError(
+                {'organization': 'This group does not belong to your organization.'})
+        if (
+            'definition' in attrs
+            and attrs.get('definition') is not None
+            and self.instance is not None
+            and self.instance.kind != ItemGroup.KIND_MEASURE_NAME
+        ):
+            raise serializers.ValidationError({
+                'definition': 'Definitions may contain measure groups only.'
+            })
+
+        for field in (
+            'definition', 'ownership_department', 'ownership_person',
+            'steward', 'category',
+        ):
+            related = attrs.get(field)
+            if related is not None and related.organization_id != org.id:
+                raise serializers.ValidationError({
+                    field: 'The selected value must belong to your organization.'
+                })
+        return attrs
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -143,6 +301,14 @@ class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Item
         fields = '__all__'
+        # Item rows are ingestion-owned. ``status`` is the sole legacy write
+        # surface and the view routes it through ItemGroup, which remains the
+        # source of truth. In particular, item-level ``deleted`` is never
+        # accepted because deletion is a group lifecycle operation.
+        read_only_fields = tuple(
+            field.name for field in Item._meta.fields
+            if field.name != 'status'
+        )
 
 
 class DefinitionSerializer(serializers.ModelSerializer):
@@ -167,7 +333,14 @@ class DefinitionSerializer(serializers.ModelSerializer):
     def get_group_count(self, obj):
         # Annotated by the viewset; fall back to a query for single-object reads.
         cached = getattr(obj, 'group_count_annotated', None)
-        return cached if cached is not None else obj.item_groups.count()
+        return (
+            cached
+            if cached is not None
+            else obj.item_groups.filter(
+                kind=ItemGroup.KIND_MEASURE_NAME,
+                organization=obj.organization,
+            ).count()
+        )
 
     def validate_name(self, value):
         """Reject a duplicate name with a readable 400.
@@ -177,6 +350,7 @@ class DefinitionSerializer(serializers.ModelSerializer):
         covers ``unique_together`` — so without this the clash surfaces as an
         IntegrityError, i.e. a 500.
         """
+        from django.db.models.functions import Lower, Trim
         from .models import Definition
         from .access import resolve_org
 
@@ -186,13 +360,37 @@ class DefinitionSerializer(serializers.ModelSerializer):
 
         request = self.context.get('request')
         org = resolve_org(request.user) if request else None
-        clash = Definition.objects.filter(organization=org, name__iexact=name)
+        clash = (
+            Definition.objects
+            .filter(organization=org)
+            .annotate(_normalized_name=Lower(Trim('name')))
+            .filter(_normalized_name=name.lower())
+        )
         if self.instance is not None:
             clash = clash.exclude(pk=self.instance.pk)
         if clash.exists():
             raise serializers.ValidationError(
                 f'A definition named "{name}" already exists in this organization.')
         return name
+
+    def validate(self, attrs):
+        from .access import resolve_org
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        if org is None:
+            raise serializers.ValidationError(
+                {'organization': 'Organization membership is required.'})
+        if self.instance is not None and self.instance.organization_id != org.id:
+            raise serializers.ValidationError(
+                {'organization': 'This definition does not belong to your organization.'})
+        for field in ('ownership_person', 'ownership_department'):
+            related = attrs.get(field)
+            if related is not None and related.organization_id != org.id:
+                raise serializers.ValidationError({
+                    field: 'The selected value must belong to your organization.'
+                })
+        return attrs
 
 
 class GovernanceTaskSerializer(serializers.ModelSerializer):
@@ -211,10 +409,11 @@ class GovernanceTaskSerializer(serializers.ModelSerializer):
         model = GovernanceTask
         fields = (
             'id', 'title', 'state', 'reason', 'reason_label', 'trigger_status',
-            'created_at', 'completed_at', 'closed_reason',
+            'created_at', 'completed_at', 'condition_cleared_at', 'closed_reason',
             'item_group', 'assignee', 'assignee_name', 'assignee_slack', 'assignee_role',
             'item_name', 'asset_context', 'web_url', 'age_days',
         )
+        read_only_fields = fields
 
     def get_reason_label(self, obj):
         from .governance_tasks import reason_label

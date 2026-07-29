@@ -74,10 +74,11 @@ export function SourceCard({
           size="sm"
           variant="brand"
           onClick={() => runMut.mutate()}
-          disabled={runMut.isPending || running}
+          disabled={!source.is_active || runMut.isPending || running}
+          title={!source.is_active ? "Activate this source before running it." : undefined}
         >
           {runMut.isPending || running ? <Spinner className="text-white" /> : <Play />}
-          {running ? "Running…" : "Run now"}
+          {!source.is_active ? "Activate to run" : running ? "Running…" : "Run now"}
         </Button>
         <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
           {testMut.isPending ? <Spinner /> : <FlaskConical />} Test

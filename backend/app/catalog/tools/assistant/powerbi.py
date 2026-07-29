@@ -44,16 +44,29 @@ def scope_options(org) -> list[dict]:
 def build_context(org, *, client=None, scope_ids=None) -> str:
     """Front-loaded PowerBI catalog: every measure (name + description) and
     report for the selected workspaces. Cached per org + scope."""
-    org_id = getattr(org, 'id', 'x')
-    key = f'asst_ctx_pb_{org_id}_{scope_key(scope_ids)}'
-    return cached_context(key, lambda: _build(scope_ids))
+    org_id = getattr(org, 'pk', None)
+    if org_id is None:
+        return ''
+    key = f'asst_ctx_pb_v2_{org_id}_{scope_key(scope_ids)}'
+    return cached_context(key, lambda: _build(org_id, scope_ids))
 
 
-def _build(scope_ids) -> str:
+def _build(organization_id, scope_ids) -> str:
+    from django.db.models import Q
+
     from ...models import Item
 
     m_qs = Item.objects.filter(
-        deleted=False, item_type='PB_MEASURE', service='powerbi',
+        organization_id=organization_id,
+        deleted=False,
+        item_type='PB_MEASURE',
+        service='powerbi',
+    ).filter(
+        Q(item_group__organization_id=organization_id) |
+        Q(item_group__isnull=True)
+    ).filter(
+        Q(item_group__ownership_person__organization_id=organization_id) |
+        Q(item_group__ownership_person__isnull=True)
     )
     if scope_ids:
         m_qs = m_qs.filter(workspace_id__in=list(scope_ids))
@@ -83,7 +96,10 @@ def _build(scope_ids) -> str:
         })
 
     r_qs = Item.objects.filter(
-        deleted=False, item_type='PB_REPORT', service='powerbi',
+        organization_id=organization_id,
+        deleted=False,
+        item_type='PB_REPORT',
+        service='powerbi',
     )
     if scope_ids:
         r_qs = r_qs.filter(workspace_id__in=list(scope_ids))
@@ -95,7 +111,10 @@ def _build(scope_ids) -> str:
     # measures + reports, so for table-level questions it had to hunt for the
     # table name — listing them here lets it resolve in one call.
     t_qs = Item.objects.filter(
-        deleted=False, item_type='PB_TABLE', service='powerbi',
+        organization_id=organization_id,
+        deleted=False,
+        item_type='PB_TABLE',
+        service='powerbi',
     )
     if scope_ids:
         t_qs = t_qs.filter(workspace_id__in=list(scope_ids))
@@ -168,7 +187,12 @@ def build_tools(org, *, client=None) -> list:
     """
     from ..analytics import get_pb_usage_analytics
     from ..lineage import get_pb_item_details
-    tools = [get_pb_item_details, get_pb_usage_analytics]
+    from ..organization_scope import bind_organization_read_tool
+
+    tools = [
+        bind_organization_read_tool(get_pb_item_details, org),
+        bind_organization_read_tool(get_pb_usage_analytics, org),
+    ]
     if client is not None:
         from ...powerbi_tools import make_powerbi_tools
         for tool in make_powerbi_tools(client):

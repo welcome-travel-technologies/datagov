@@ -131,7 +131,7 @@ def resolve_org(user):
     return None
 
 
-def resolve_data_person(user):
+def resolve_data_person(user, org=None):
     """The ``DataPerson`` this login *is*, or None.
 
     The catalog deliberately keeps governance identity (DataPerson — can be a
@@ -144,10 +144,9 @@ def resolve_data_person(user):
 
     Read-only on purpose — no name-guessing, no writing a link as a side effect
     of a page load. Most accounts are not linked yet, so the Task Manager does
-    NOT depend on this: it falls back to letting a person pick their own name
-    (``?assignee=<id>``), and this function just supplies the default when the
-    link does happen to exist. Linking properly is a separate, deliberate step
-    (Org Settings member save, or ``link_data_persons``).
+    relies on this explicit link rather than allowing a login to impersonate a
+    person by selecting a name. Linking properly is a separate, deliberate step
+    (for example ``link_data_persons``).
 
     Returns None for a login with no DataPerson profile — a common, valid state,
     so callers must treat it as "no default identity" rather than an error.
@@ -156,7 +155,10 @@ def resolve_data_person(user):
         return None
     from .models import DataPerson
 
-    return DataPerson.objects.filter(user=user).first()
+    org = org or resolve_org(user)
+    if org is None:
+        return None
+    return DataPerson.objects.filter(user=user, organization=org).first()
 
 
 def unlinked_people_report(org):
@@ -170,8 +172,7 @@ def unlinked_people_report(org):
     * ``members_without_person`` — org logins with no DataPerson. They sign in
       fine and simply own nothing.
 
-    Both are fixable by editing the member in Org Settings, which adopts a
-    login-less namesake instead of creating a twin.
+    Both are fixable by explicitly linking the intended person and login.
     """
     from .models import DataPerson, OrganizationMembership
 
@@ -204,28 +205,23 @@ class DuplicateDataPersonName(Exception):
     """
 
 
+class CrossOrganizationDataPerson(Exception):
+    """Backward-compatible exception retained for older callers/imports."""
+
+
 def upsert_data_person(user, org, name, **fields):
-    """Create or update the ``DataPerson`` for ``user`` — without minting a twin.
+    """Create or update the ``DataPerson`` explicitly linked to ``user``.
 
-    The obvious ``update_or_create(user=user, ...)`` is what produced the
-    duplicate Owner / Steward dropdown entries: it matches on ``user`` alone, so
-    a login-less row for the same human (added via the Django admin or a bulk
-    import before that person had an account) was never found and a SECOND row
-    with the identical name appeared. Both were `is_owner`, both in the same org
-    — hence the same name twice in every dropdown, while Org Settings looked
-    clean because it indexes members by user id.
-
-    So: match on ``user`` first, then *adopt* a login-less namesake in the same
-    org, and only create when neither exists.
+    A display name is not an identity key. Two different people can legitimately
+    share it, so this helper never adopts a login-less row merely because its
+    name matches. Existing ``DataPerson.user`` is the deterministic join; when
+    no such row exists, a namesake is reported as a conflict and must be linked
+    explicitly by an administrator instead of being silently claimed.
     """
     from .models import DataPerson
 
     clean_name = (name or "").strip()
-    dp = DataPerson.objects.filter(user=user).first()
-    if dp is None and clean_name:
-        dp = DataPerson.objects.filter(
-            user__isnull=True, organization=org, name__iexact=clean_name,
-        ).first()
+    dp = DataPerson.objects.filter(user=user, organization=org).first()
     if dp is None:
         dp = DataPerson()
 

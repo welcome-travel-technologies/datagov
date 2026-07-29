@@ -81,10 +81,13 @@ then by name, and each bridge edge records *why* it matched in `bridge_reason`:
 Ambiguous (≥2 candidates) or zero matches → no bridge. For a matched table pair,
 columns are matched case-insensitively by name to produce column-level bridge
 edges (`DBT_COLUMN → PB_COLUMN`, hardcoded `lineage_type='pass-through'`). The
-builder first deletes stale bridge edges, then upserts the new nodes/edges.
+builder first plans and tenant-validates every global graph key, then replaces
+only the requested organization's stale bridge edges and upserts the new rows.
 
 `build_cross_tool_bridges` returns `{table_bridges, column_bridges, by_reason}`.
-Run it in isolation with `python manage.py rebridge [--organization-id N]`.
+Run it in isolation with
+`python manage.py rebridge --organization-id N`. The organization is required;
+there is no global or NULL-scoped rebuild mode.
 
 ### Edge classification
 

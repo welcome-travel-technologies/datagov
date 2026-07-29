@@ -1,11 +1,13 @@
 """
 Tests for integration_tasks.py — run_source_task and run_destination_task.
 """
+from contextlib import contextmanager
+
 import pytest
 from unittest.mock import patch, MagicMock
 from catalog.models import (
     IntegrationSource, IntegrationDestination, SourceRunLog, DestinationRunLog,
-    Organization,
+    Organization, WorkflowRun,
 )
 
 
@@ -49,6 +51,159 @@ class TestRunSourceTask:
         result = run_source_task(99999, triggered_by='test')
         assert result == 'failed'
 
+    def test_inactive_source_is_rejected_before_extraction(
+            self, source, monkeypatch):
+        from catalog import integration_tasks
+
+        source.is_active = False
+        source.save(update_fields=['is_active'])
+        events = []
+
+        monkeypatch.setattr(
+            'etl.sources.registry.get_source',
+            lambda _source: events.append('get-source'),
+        )
+        monkeypatch.setattr(
+            integration_tasks,
+            '_cleanup_local_files',
+            lambda log: events.append('cleanup'),
+        )
+        monkeypatch.setattr(
+            integration_tasks, '_cleanup_old_run_logs',
+            lambda *args: None,
+        )
+        monkeypatch.setattr(
+            'etl.hooks.slack.slack_alerts.send_slack_alert',
+            lambda *args: None,
+        )
+
+        assert integration_tasks.run_source_task(
+            source.id, triggered_by='test',
+        ) == 'failed'
+        assert events == []
+        assert 'inactive' in SourceRunLog.objects.get(
+            source=source,
+        ).log_output
+
+    def test_pipeline_lock_wraps_extract_load_and_cleanup(
+            self, source, monkeypatch):
+        from catalog import integration_tasks
+
+        events = []
+
+        @contextmanager
+        def fake_lock():
+            events.append('lock-enter')
+            try:
+                yield
+            finally:
+                events.append('lock-exit')
+
+        class FakeSource:
+            load_command = 'load_data'
+
+            @classmethod
+            def get_etl_dir(cls):
+                return 'shared-etl-dir'
+
+            def extract(self, *, etl_dir, log):
+                assert etl_dir == 'shared-etl-dir'
+                events.append('extract')
+
+        monkeypatch.setattr(
+            'etl.sources.registry.get_source',
+            lambda _source: FakeSource(),
+        )
+        monkeypatch.setattr(
+            'catalog.services.load_scope.require_exact_load_scope',
+            lambda *args, **kwargs: events.append('scope'),
+        )
+        monkeypatch.setattr(
+            integration_tasks, 'static_etl_files_lock', fake_lock,
+        )
+        monkeypatch.setattr(
+            integration_tasks,
+            'call_command',
+            lambda *args, **kwargs: events.append('load'),
+        )
+        monkeypatch.setattr(
+            integration_tasks,
+            '_cleanup_local_files',
+            lambda log: events.append('cleanup'),
+        )
+        monkeypatch.setattr(
+            integration_tasks, '_cleanup_old_run_logs',
+            lambda *args: None,
+        )
+        monkeypatch.setattr(
+            'etl.hooks.slack.slack_alerts.send_slack_alert',
+            lambda *args: None,
+        )
+
+        assert integration_tasks.run_source_task(
+            source.id, triggered_by='test',
+        ) == 'success'
+        assert events == [
+            'scope', 'lock-enter', 'cleanup', 'extract', 'load', 'cleanup',
+            'lock-exit',
+        ]
+
+    def test_pipeline_contention_does_not_extract_or_cleanup(
+            self, source, monkeypatch):
+        from catalog import integration_tasks
+        from catalog.services.pipeline_lock import PipelineLockUnavailable
+
+        events = []
+
+        @contextmanager
+        def contended_lock():
+            raise PipelineLockUnavailable('pipeline busy')
+            yield
+
+        class FakeSource:
+            load_command = 'load_data'
+
+            @classmethod
+            def get_etl_dir(cls):
+                return 'shared-etl-dir'
+
+            def extract(self, *, etl_dir, log):
+                events.append('extract')
+
+        monkeypatch.setattr(
+            'etl.sources.registry.get_source',
+            lambda _source: FakeSource(),
+        )
+        monkeypatch.setattr(
+            integration_tasks, 'static_etl_files_lock', contended_lock,
+        )
+        monkeypatch.setattr(
+            integration_tasks,
+            'call_command',
+            lambda *args, **kwargs: events.append('load'),
+        )
+        monkeypatch.setattr(
+            integration_tasks,
+            '_cleanup_local_files',
+            lambda log: events.append('cleanup'),
+        )
+        monkeypatch.setattr(
+            integration_tasks, '_cleanup_old_run_logs',
+            lambda *args: None,
+        )
+        monkeypatch.setattr(
+            'etl.hooks.slack.slack_alerts.send_slack_alert',
+            lambda *args: None,
+        )
+
+        assert integration_tasks.run_source_task(
+            source.id, triggered_by='test',
+        ) == 'failed'
+        assert events == []
+        assert 'pipeline busy' in SourceRunLog.objects.get(
+            source=source,
+        ).log_output
+
 
 @pytest.mark.django_db
 class TestRunDestinationTask:
@@ -89,3 +244,78 @@ class TestRunDestinationTask:
         from catalog.integration_tasks import run_destination_task
         result = run_destination_task(99999, triggered_by='test')
         assert result == 'failed'
+
+
+@pytest.mark.django_db
+def test_workflow_pipeline_lock_wraps_each_source_files(
+        source, monkeypatch):
+    from catalog import integration_tasks
+
+    events = []
+
+    @contextmanager
+    def fake_lock():
+        events.append('lock-enter')
+        try:
+            yield
+        finally:
+            events.append('lock-exit')
+
+    class FakeSource:
+        load_command = 'load_data'
+
+        @classmethod
+        def get_etl_dir(cls):
+            return 'shared-etl-dir'
+
+        def extract(self, *, etl_dir, log):
+            assert etl_dir == 'shared-etl-dir'
+            events.append('extract')
+
+    def fake_call_command(command, *args, **kwargs):
+        events.append('final' if command == 'run_workflow_final' else 'load')
+
+    monkeypatch.setattr(
+        'etl.sources.registry.get_source',
+        lambda _source: FakeSource(),
+    )
+    monkeypatch.setattr(
+        'catalog.services.load_scope.require_exact_load_scope',
+        lambda *args, **kwargs: events.append('scope'),
+    )
+    monkeypatch.setattr(
+        integration_tasks, 'static_etl_files_lock', fake_lock,
+    )
+    monkeypatch.setattr(
+        integration_tasks, 'call_command', fake_call_command,
+    )
+    monkeypatch.setattr(
+        integration_tasks,
+        '_cleanup_local_files',
+        lambda log: events.append('cleanup'),
+    )
+    monkeypatch.setattr(
+        'catalog.health.check_disk',
+        lambda: {'status': 'ok', 'detail': 'enough space'},
+    )
+    monkeypatch.setattr(
+        'etl.hooks.slack.slack_alerts.send_slack_alert',
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        'etl.hooks.slack.slack_alerts.send_slack_dest_alert',
+        lambda *args: None,
+    )
+
+    workflow = WorkflowRun.objects.create(
+        organization=source.organization,
+        triggered_by='test',
+    )
+
+    assert integration_tasks.run_workflow_task(
+        workflow.id, triggered_by='test',
+    ) == 'success'
+    assert events == [
+        'scope', 'lock-enter', 'cleanup', 'extract', 'load', 'cleanup',
+        'lock-exit', 'final',
+    ]

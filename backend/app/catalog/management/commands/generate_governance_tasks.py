@@ -4,8 +4,9 @@ Same reconcile as the Task Manager's "Generate tasks" button
 (``catalog.governance_tasks.generate_tasks``), for cron and one-off runs:
 
     python manage.py generate_governance_tasks --dry-run
-    python manage.py generate_governance_tasks --org 1 --reasons UNVERIFIED,NO_CATEGORY
-    python manage.py generate_governance_tasks --notify
+    python manage.py generate_governance_tasks --org 1 \
+        --reasons UNVERIFIED,NO_CATEGORY --confirm-broad
+    python manage.py generate_governance_tasks --confirm-broad --notify
 
 Slack stays quiet unless --notify is passed. The sweep is idempotent and meant
 to be re-run freely, so an unasked-for digest on every run would train people to
@@ -49,8 +50,8 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--require-assignee', action='store_true',
-            help='Skip groups with no owner and no steward instead of creating '
-                 'an unassigned task for them.',
+            help='Skip groups missing the role required by their reason instead '
+                 'of creating an unassigned task for them.',
         )
         parser.add_argument(
             '--notify', action='store_true',
@@ -59,9 +60,15 @@ class Command(BaseCommand):
         parser.add_argument(
             '--kind-scope', type=str, default=DEFAULT_KIND_SCOPE,
             choices=sorted(KIND_SCOPES),
-            help='Which asset kinds to sweep. Default "measure_name" (PowerBI '
-                 'measures). Anything wider is very high volume — preview it '
-                 'with --dry-run first.',
+            help='Which asset kinds to sweep. Default "all" so Category, '
+                 'Attention, and To Be Deleted cover every asset kind; '
+                 'Unverified remains measure-only. The default can be very '
+                 'high volume — preview it with --dry-run first.',
+        )
+        parser.add_argument(
+            '--confirm-broad', action='store_true',
+            help='Required to apply a singleton/all sweep after reviewing its '
+                 '--dry-run output. Has no effect on measure-only runs.',
         )
 
     def handle(self, *args, **options):
@@ -80,6 +87,13 @@ class Command(BaseCommand):
                 raise CommandError('No Organization rows exist — nothing to sweep.')
 
         kind_scope = options['kind_scope']
+        broad_scope = kind_scope in ('singleton', 'all')
+        if broad_scope and not dry_run and not options['confirm_broad']:
+            raise CommandError(
+                'Refusing to apply a broad governance sweep without '
+                '--confirm-broad. Run the same command with --dry-run, review '
+                'the counts, then repeat with --confirm-broad.'
+            )
         self.stdout.write(
             f"Reasons: {', '.join(reasons or REASON_ORDER)} | "
             f"scope: {KIND_SCOPES[kind_scope]['label']} | "
@@ -96,12 +110,10 @@ class Command(BaseCommand):
             ))
 
         grand = {c: 0 for c in COUNT_COLUMNS}
-        # One sweep per organization rather than a single org-wide pass: tasks
-        # land on the right organization and --notify sends one digest each.
-        # Groups with no organization are in scope for every org's sweep, so
-        # across several orgs their counts can show up more than once — the
-        # partial unique constraint still allows only one open task per
-        # (item_group, reason), so nothing is duplicated in the database.
+        # One exact-tenant sweep per organization: tasks land on the right
+        # organization and --notify sends one digest each. Legacy groups with no
+        # organization are deliberately excluded because no tenant can safely
+        # claim them.
         for org in orgs:
             result = generate_tasks(
                 org,
@@ -123,8 +135,9 @@ class Command(BaseCommand):
 
         if grand['unassigned'] and not options['require_assignee']:
             self.stdout.write(self.style.WARNING(
-                f"{grand['unassigned']} group(s) have neither owner nor steward — "
-                'their tasks are unassigned. Fill in ownership and re-run to route them.'
+                f"{grand['unassigned']} target(s) are missing the role required "
+                'by their reason (Owner or Steward), so their tasks are '
+                'unassigned. Fill in that role and re-run to route them.'
             ))
 
         if dry_run:
@@ -136,7 +149,8 @@ class Command(BaseCommand):
                 'or closed.'
             ))
             self.stdout.write(self.style.WARNING(
-                'Re-run without --dry-run to apply the numbers above.'
+                'Re-run without --dry-run to apply the numbers above'
+                + (' and add --confirm-broad.' if broad_scope else '.')
             ))
             self.stdout.write(self.style.WARNING(banner))
         else:

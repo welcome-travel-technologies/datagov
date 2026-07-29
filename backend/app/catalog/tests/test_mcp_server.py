@@ -8,10 +8,18 @@ local DB, and the front-loaded overview tool degrades gracefully to an
 import json
 
 import pytest
+from django.core.cache import cache
 from django.urls import reverse
 
 from catalog.mcp import auth
-from catalog.models import Item, McpApiKey, OrganizationMembership
+from catalog.models import (
+    Item,
+    McpApiKey,
+    NetworkEdge,
+    NetworkNode,
+    Organization,
+    OrganizationMembership,
+)
 
 
 @pytest.fixture
@@ -170,6 +178,12 @@ def test_input_schema_is_introspected(client, mcp_key):
     schema = tools['get_lineage']['inputSchema']
     assert schema['properties']['node_name']['type'] == 'string'
     assert 'node_name' in schema['required']
+    for name in (
+        'get_lineage',
+        'get_pb_item_details',
+        'get_pb_usage_analytics',
+    ):
+        assert 'organization_id' not in tools[name]['inputSchema']['properties']
 
 
 # --- tools/call ----------------------------------------------------------
@@ -222,6 +236,113 @@ def test_call_lineage_unknown_node_is_graceful(client, mcp_key):
                  'arguments': {'node_name': 'no-such-node'}}).json()
     assert 'result' in body
     assert body['result']['content'][0]['type'] == 'text'
+
+
+@pytest.mark.django_db
+def test_catalog_read_calls_never_cross_the_mcp_key_organization(
+        client, mcp_key, org):
+    """A colliding display name in another tenant must never be resolved."""
+    foreign = Organization.objects.create(name='Foreign MCP tenant')
+
+    own_measure = Item.objects.create(
+        item_id='mcp-own-measure',
+        item_name='Own MCP Metric',
+        item_type='PB_MEASURE',
+        service='powerbi',
+        organization=org,
+        connected_reports=1,
+        connected_reports_json=[
+            {'id': 'mcp-own-report', 'name': 'Own MCP Report', 'url': ''},
+        ],
+    )
+    assert own_measure.organization_id == org.pk
+    Item.objects.create(
+        item_id='mcp-own-report',
+        item_name='Own MCP Report',
+        item_type='PB_REPORT',
+        service='powerbi',
+        organization=org,
+    )
+    Item.objects.create(
+        item_id='mcp-foreign-measure',
+        item_name='Foreign MCP Secret Metric',
+        item_type='PB_MEASURE',
+        service='powerbi',
+        organization=foreign,
+    )
+    Item.objects.create(
+        item_id='mcp-foreign-report',
+        item_name='Foreign MCP Secret Report',
+        item_type='PB_REPORT',
+        service='powerbi',
+        organization=foreign,
+    )
+
+    NetworkNode.objects.create(
+        node_id='DBT_MODEL::mcp-own-shared',
+        name='MCP Shared Node',
+        group='DBT_MODEL',
+        organization=org,
+    )
+    NetworkNode.objects.create(
+        node_id='PB_REPORT::mcp-own-consumer',
+        name='Own MCP Consumer',
+        group='PB_REPORT',
+        organization=org,
+    )
+    NetworkEdge.objects.create(
+        source='DBT_MODEL::mcp-own-shared',
+        target='PB_REPORT::mcp-own-consumer',
+        organization=org,
+    )
+    NetworkNode.objects.create(
+        node_id='DBT_MODEL::mcp-foreign-shared',
+        name='MCP Shared Node',
+        group='DBT_MODEL',
+        organization=foreign,
+    )
+    NetworkNode.objects.create(
+        node_id='PB_REPORT::mcp-foreign-consumer',
+        name='Foreign MCP Secret Consumer',
+        group='PB_REPORT',
+        organization=foreign,
+    )
+    NetworkEdge.objects.create(
+        source='DBT_MODEL::mcp-foreign-shared',
+        target='PB_REPORT::mcp-foreign-consumer',
+        organization=foreign,
+    )
+
+    _, raw = mcp_key
+    cache.clear()
+
+    def call_text(name, arguments):
+        body = _rpc(
+            client,
+            raw,
+            'tools/call',
+            {'name': name, 'arguments': arguments},
+        ).json()
+        assert body['result']['isError'] is False
+        return body['result']['content'][0]['text']
+
+    overview = call_text('get_catalog_overview', {})
+    assert 'Own MCP Metric' in overview
+    assert 'Foreign MCP Secret' not in overview
+
+    lineage = call_text('get_lineage', {'node_name': 'MCP Shared Node'})
+    assert 'Own MCP Consumer' in lineage
+    assert 'Foreign MCP Secret Consumer' not in lineage
+
+    analytics = call_text('get_pb_usage_analytics', {})
+    assert 'Own MCP Metric' in analytics
+    assert 'Foreign MCP Secret Metric' not in analytics
+
+    foreign_profile = call_text(
+        'get_pb_item_details',
+        {'name': 'Foreign MCP Secret Metric'},
+    )
+    assert 'No catalog item' in foreign_profile
 
 
 # --- key minting ---------------------------------------------------------

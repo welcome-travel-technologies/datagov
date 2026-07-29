@@ -154,16 +154,30 @@ The `load_data` (Power BI) and `load_dbt_data` (dbt) management commands
 `COPY` into temp tables, then `INSERT … ON CONFLICT (item_id) DO UPDATE` —
 idempotent upserts keyed on `item_id`.
 
+- **Exact tenant/source scope is mandatory.** Direct calls require both
+  `--organization-id` and `--source-id`. The loader verifies that the active
+  source belongs to that organization and is the expected source type before
+  reading or changing catalog rows. Missing required CSV files fail closed.
+- **Global-key collisions fail before mutation.** `Item.item_id`,
+  `NetworkNode.node_id`, and network edge pairs are still globally unique, so
+  an incoming key already owned by another organization/source aborts the load
+  instead of adopting or overwriting it. Until graph rows carry source
+  ownership, an organization may have only one active source of each source
+  type.
 - **User/governance fields are never overwritten.** Owner / steward / status /
   category / custom description live on `ItemGroup` and are untouched by ETL.
   `load_dbt_data` additionally `COALESCE`s name/description/expression so a sparse
   re-run doesn't blank existing values.
 - **Soft delete** — items present in the DB but absent from the new run are set
-  `deleted=True` (scoped so dbt and Power BI don't clobber each other). Nothing is
-  ever hard-deleted; downstream queries filter `deleted=False`.
-- **Domain isolation** — `load_dbt_data` only touches `service='dbt'` rows;
-  `load_data` rebuilds the non-dbt network data. Both delete cross-tool bridge
-  edges, which the [final step](#the-full-pipeline-workflow) rebuilds.
+  `deleted=True` within the exact `(organization, integration_source)` pair;
+  items that reappear are restored. Nothing is ever hard-deleted.
+- **Graph replacement is tenant-scoped.** `load_dbt_data` replaces only that
+  organization's dbt graph rows; `load_data` replaces only that organization's
+  Power BI graph rows. Cross-tool bridge edges are removed and rebuilt only for
+  the same organization by the [final step](#the-full-pipeline-workflow).
+- **Loads are serialized.** A PostgreSQL session advisory lock spans each
+  loader, including the commit boundary before ItemGroup reconciliation. This
+  prevents two direct loader commands from racing on the legacy global keys.
 - Edge `kind`/`level` are computed in SQL by
   [`network_classify.py`](../backend/app/catalog/services/network_classify.py),
   the single source of truth shared with the bridge builder.
@@ -180,6 +194,12 @@ Django-Q2 task:
 2. `get_source(source).extract(...)` (extract + transform).
 3. `call_command(src.load_command, ...)` (load).
 4. Mark the run `success` (or `failed` on exception/cancel).
+
+Extractors currently share static on-disk work directories. Standalone and
+workflow source runs therefore take a fail-closed, cross-worker PostgreSQL
+session advisory lock before stale-file cleanup and retain it through
+extraction, transformation, loading, and final cleanup. A contending run exits
+without extracting or deleting the active run's files.
 
 A throttled "live-flush" logger persists `log_output` to the DB at most every 2s
 so the Integrations UI shows progress during long runs. The `finally` block
@@ -236,7 +256,7 @@ older than 30 days pruned. Final status is `failed` if any source failed, else
 
 You can re-run **only** the bridging step (e.g. after fixing a dbt manifest or a
 Power BI source binding) without a full ETL re-run:
-`python manage.py rebridge [--organization-id N]`.
+`python manage.py rebridge --organization-id N`.
 
 ---
 

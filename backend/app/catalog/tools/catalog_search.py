@@ -10,6 +10,7 @@ remains as a catalog-read utility exercised by the tests.
 from django.db.models import Q
 
 from ..models import Item
+from .organization_scope import require_bound_organization_id
 
 
 def _person_label(p):
@@ -25,13 +26,36 @@ def _governance_lines(item) -> list[str]:
     select_related('item_group__ownership_department',
     'item_group__ownership_person', 'item_group__steward') to keep this
     read-cheap."""
+    organization_id = require_bound_organization_id()
+    group = item.item_group if item.item_group_id else None
+    if group is None or group.organization_id != organization_id:
+        return []
+    department = group.ownership_department
+    if (
+        department is not None
+        and department.organization_id != organization_id
+    ):
+        department = None
+    owner_person = group.ownership_person
+    if (
+        owner_person is not None
+        and owner_person.organization_id != organization_id
+    ):
+        owner_person = None
+    steward_person = group.steward
+    if (
+        steward_person is not None
+        and steward_person.organization_id != organization_id
+    ):
+        steward_person = None
+
     lines: list[str] = []
-    if item.ownership_department:
-        lines.append(f'Department: {item.ownership_department.name}')
-    owner = _person_label(item.ownership_person)
+    if department:
+        lines.append(f'Department: {department.name}')
+    owner = _person_label(owner_person)
     if owner:
         lines.append(f'Owner: {owner}')
-    steward = _person_label(item.steward)
+    steward = _person_label(steward_person)
     if steward:
         lines.append(f'Steward: {steward}')
     return lines
@@ -66,8 +90,26 @@ def search_pb_columns(
     Does NOT return column values or row-level data — use
     ``powerbi_run_dax_query`` for that.
     """
+    organization_id = require_bound_organization_id()
     qs = (Item.objects
-          .filter(deleted=False, item_type='PB_COLUMN', service='powerbi')
+          .filter(
+              organization_id=organization_id,
+              deleted=False,
+              item_type='PB_COLUMN',
+              service='powerbi',
+          )
+          .filter(
+              Q(item_group__organization_id=organization_id) |
+              Q(item_group__isnull=True)
+          )
+          .filter(
+              Q(item_group__ownership_person__organization_id=organization_id) |
+              Q(item_group__ownership_person__isnull=True),
+              Q(item_group__steward__organization_id=organization_id) |
+              Q(item_group__steward__isnull=True),
+              Q(item_group__ownership_department__organization_id=organization_id) |
+              Q(item_group__ownership_department__isnull=True),
+          )
           .select_related('item_group', 'item_group__ownership_department',
                           'item_group__ownership_person', 'item_group__steward'))
     if dataset_id:

@@ -5,7 +5,15 @@ relationships. Pure read-only catalog operations.
 """
 from django.db.models import Q
 
-from ..models import Item, NetworkNode, NetworkEdge
+from ..models import (
+    DataPerson,
+    Department,
+    Item,
+    ItemGroup,
+    NetworkEdge,
+    NetworkNode,
+)
+from .organization_scope import require_bound_organization_id
 
 
 # Resolution preference: a real measure / table / report / workspace should win
@@ -41,11 +49,13 @@ def get_lineage(node_name: str) -> str:
     pass the *name* (verbatim) or the *node_id*. To list the measures a REPORT
     uses, call ``get_pb_item_details(report_name)`` (its "Uses" section), not this.
     """
+    organization_id = require_bound_organization_id()
     if not node_name:
         return 'Please provide a node name to look up.'
 
     # 1. Try exact composite id match (fastest, unambiguous)
-    matches = list(NetworkNode.objects.filter(node_id=node_name))
+    nodes = NetworkNode.objects.filter(organization_id=organization_id)
+    matches = list(nodes.filter(node_id=node_name))
 
     # 2. Otherwise match by EXACT display name only. No `icontains` fallback:
     #    a partial/contains match turned this one-hop tool into a de-facto
@@ -54,7 +64,7 @@ def get_lineage(node_name: str) -> str:
     #    design deliberately omits. The agent must pass a name straight from the
     #    front-loaded catalog.
     if not matches:
-        matches = list(NetworkNode.objects.filter(name__iexact=node_name)[:25])
+        matches = list(nodes.filter(name__iexact=node_name)[:25])
 
     if not matches:
         return (
@@ -77,7 +87,9 @@ def get_lineage(node_name: str) -> str:
         )
 
     node = matches[0]
-    edges = NetworkEdge.objects.filter(Q(source=node.node_id) | Q(target=node.node_id))
+    edges = NetworkEdge.objects.filter(
+        organization_id=organization_id,
+    ).filter(Q(source=node.node_id) | Q(target=node.node_id))
     if not edges.exists():
         return f"Node '{node.name or node.node_id}' ({node.group}) has no connections."
 
@@ -85,7 +97,7 @@ def get_lineage(node_name: str) -> str:
     downstream = []
     for edge in edges:
         other = edge.source if edge.target == node.node_id else edge.target
-        other_node = NetworkNode.objects.filter(node_id=other).only('name', 'group').first()
+        other_node = nodes.filter(node_id=other).only('name', 'group').first()
         label = (other_node.name if other_node and other_node.name else other)
         grp = other_node.group if other_node else 'UNKNOWN'
         entry = f'{label} ({grp})'
@@ -128,12 +140,15 @@ def where_is_used(node_name: str, direction: str = 'downstream', workspace_id: s
     """
     from ..services.network_path import find_reachable_nodes, resolve_node_id_by_name
 
+    organization_id = require_bound_organization_id()
     if not node_name:
         return 'Please provide an asset name to look up.'
     if direction not in ('downstream', 'upstream', 'both'):
         direction = 'downstream'
 
-    candidates = resolve_node_id_by_name(node_name)
+    candidates = resolve_node_id_by_name(
+        node_name, organization_id=organization_id,
+    )
     if not candidates:
         return f"Node '{node_name}' not found in the lineage graph."
     if len(candidates) > 1 and not any(c.node_id == node_name for c in candidates):
@@ -154,7 +169,12 @@ def where_is_used(node_name: str, direction: str = 'downstream', workspace_id: s
     by_group: dict = {}          # group -> {node_id: (label, distance)}
     truncated = False
     for d in dirs:
-        res = find_reachable_nodes(node.node_id, direction=d, workspace_id=workspace_id)
+        res = find_reachable_nodes(
+            node.node_id,
+            direction=d,
+            workspace_id=workspace_id,
+            organization_id=organization_id,
+        )
         truncated = truncated or res.truncated
         for rn in res.nodes:
             g = (rn.group or 'UNKNOWN').upper()
@@ -217,8 +237,9 @@ def _person_name(p):
     return getattr(p, 'name', None) or getattr(p, 'full_name', None) or str(p)
 
 
-def _governance_and_usage_block(item, node_id=None, include_used_by=True,
-                                include_uses=True):
+def _governance_and_usage_block(
+        item, organization_id, node_id=None, include_used_by=True,
+        include_uses=True):
     """Ownership + description + precomputed usage stats + the upstream ``Uses``
     graph and the downstream ``Used by`` graph for any Item. Reused across every
     element type so every profile carries the same governance/usage footer.
@@ -227,13 +248,49 @@ def _governance_and_usage_block(item, node_id=None, include_used_by=True,
     upstream lineage and downstream consumers), to avoid duplicating a block."""
     lines = ['\n## Ownership, description & usage\n']
 
-    owner = _person_name(getattr(item, 'ownership_person', None))
-    steward = _person_name(getattr(item, 'steward', None))
-    dept = getattr(getattr(item, 'ownership_department', None), 'name', None)
+    # Governance is reached through ItemGroup. Treat a corrupt cross-org FK as
+    # absent rather than hydrating another tenant's people/department metadata.
+    group = None
+    if item.item_group_id:
+        group = (
+            ItemGroup.objects.filter(
+                pk=item.item_group_id,
+                organization_id=organization_id,
+            )
+            .only(
+                'ownership_person_id',
+                'steward_id',
+                'ownership_department_id',
+                'custom_description',
+            )
+            .first()
+        )
+    owner_person = None
+    steward_person = None
+    department = None
+    if group is not None:
+        if group.ownership_person_id:
+            owner_person = DataPerson.objects.filter(
+                pk=group.ownership_person_id,
+                organization_id=organization_id,
+            ).first()
+        if group.steward_id:
+            steward_person = DataPerson.objects.filter(
+                pk=group.steward_id,
+                organization_id=organization_id,
+            ).first()
+        if group.ownership_department_id:
+            department = Department.objects.filter(
+                pk=group.ownership_department_id,
+                organization_id=organization_id,
+            ).first()
+    owner = _person_name(owner_person)
+    steward = _person_name(steward_person)
+    dept = getattr(department, 'name', None)
     lines.append(f"- **Owner:** {owner or '—'} &nbsp; **Steward:** {steward or '—'} "
                  f"&nbsp; **Department:** {dept or '—'}")
 
-    desc = (getattr(item, 'custom_description', None) or item.description or '').strip()
+    desc = (getattr(group, 'custom_description', None) or item.description or '').strip()
     if desc:
         lines.append(f"- **Description:** {desc[:600]}")
 
@@ -277,14 +334,18 @@ def _governance_and_usage_block(item, node_id=None, include_used_by=True,
     return '\n'.join(lines)
 
 
-def _table_columns_block(item):
+def _table_columns_block(item, organization_id):
     """List a table/model's columns from the catalog."""
     cols = (
-        list(Item.objects.filter(deleted=False, item_type='PB_COLUMN',
-                                 dataset_id=item.dataset_id, table_name=item.item_name)
+        list(Item.objects.filter(
+            organization_id=organization_id,
+            deleted=False, item_type='PB_COLUMN',
+            dataset_id=item.dataset_id, table_name=item.item_name)
              .order_by('item_name').values_list('item_name', 'datatype')[:200])
-        or list(Item.objects.filter(deleted=False, item_type='PB_COLUMN',
-                                    table_name=item.item_name)
+        or list(Item.objects.filter(
+            organization_id=organization_id,
+            deleted=False, item_type='PB_COLUMN',
+            table_name=item.item_name)
                 .order_by('item_name').values_list('item_name', 'datatype')[:200])
     )
     if not cols:
@@ -293,11 +354,19 @@ def _table_columns_block(item):
     return f"\n## Columns ({len(cols)})\n{rows}\n"
 
 
-def _workspace_profile(name):
+def _workspace_profile(name, organization_id):
     """Summary of a whole PowerBI workspace: contents, datasets, owners."""
-    items = Item.objects.filter(deleted=False, workspace_name__iexact=name)
+    items = Item.objects.filter(
+        organization_id=organization_id,
+        deleted=False,
+        workspace_name__iexact=name,
+    )
     if not items.exists():
-        items = Item.objects.filter(deleted=False, workspace_name__icontains=name)
+        items = Item.objects.filter(
+            organization_id=organization_id,
+            deleted=False,
+            workspace_name__icontains=name,
+        )
     if not items.exists():
         return None
 
@@ -312,8 +381,32 @@ def _workspace_profile(name):
         lines.append(f"\n**Datasets ({len(datasets)}):** " + ', '.join(datasets[:50]))
 
     owners = Counter()
-    for it in (items.select_related('item_group', 'item_group__ownership_person')[:1500]):
-        o = _person_name(getattr(it, 'ownership_person', None))
+    group_ids = list(
+        items.exclude(item_group_id=None)
+        .values_list('item_group_id', flat=True)[:1500]
+    )
+    group_owner_ids = dict(
+        ItemGroup.objects.filter(
+            organization_id=organization_id,
+            pk__in=group_ids,
+        ).values_list('pk', 'ownership_person_id')
+    )
+    people = {
+        person.pk: person
+        for person in DataPerson.objects.filter(
+            organization_id=organization_id,
+            pk__in=[
+                person_id
+                for person_id in group_owner_ids.values()
+                if person_id is not None
+            ],
+        )
+    }
+    for group_id in group_ids:
+        person = people.get(group_owner_ids.get(group_id))
+        if person is None:
+            continue
+        o = _person_name(person)
         if o:
             owners[o] += 1
     if owners:
@@ -352,12 +445,20 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
     ``workspace_id`` / ``dataset_id`` — optional; pass after the user picks one
     when a name spans multiple workspaces/datasets.
     """
+    organization_id = require_bound_organization_id()
     q = (name or '').strip()
     if not q:
         return 'Please provide an item, table, measure, report, or workspace name.'
 
     # PowerBI items only — this is the PowerBI profiler (dbt has its own).
-    qs = Item.objects.filter(deleted=False, service='powerbi')
+    qs = Item.objects.filter(
+        organization_id=organization_id,
+        deleted=False,
+        service='powerbi',
+    ).filter(
+        Q(item_group__organization_id=organization_id) |
+        Q(item_group__isnull=True)
+    )
     # Accept a composite lineage id (e.g. "PB_MEASURE::<hash>"); Item.item_id is
     # the bare hash, so strip the "TYPE::" prefix before the id lookup.
     lookup_id = q.split('::', 1)[1] if '::' in q else q
@@ -377,7 +478,7 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
         matches = cands[:10]
 
     if not matches:
-        ws = _workspace_profile(q)
+        ws = _workspace_profile(q, organization_id)
         if ws:
             return ws
         return (f"No catalog item, table, measure, report, or workspace matches "
@@ -417,7 +518,11 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
     group_note = ''
     if item.item_group_id:
         members = list(
-            Item.objects.filter(deleted=False, item_group_id=item.item_group_id)
+            Item.objects.filter(
+                organization_id=organization_id,
+                deleted=False,
+                item_group_id=item.item_group_id,
+            )
             .order_by('-connected_reports', '-connected_visuals', 'dataset_name')
         )
         if len(members) > 1:
@@ -438,7 +543,9 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
 
     # Workspaces are items too — route them to the workspace summary.
     if itype == 'PB_WORKSPACE':
-        ws = _workspace_profile(item.workspace_name or item.item_name)
+        ws = _workspace_profile(
+            item.workspace_name or item.item_name, organization_id,
+        )
         if ws:
             return ws
 
@@ -447,7 +554,11 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
     if itype == 'PB_MEASURE':
         from .pb_schema_bundle import get_pb_measure_schema
         definition = get_pb_measure_schema(item.item_id, workspace_id, dataset_id)
-        return definition + _governance_and_usage_block(item) + group_note
+        return (
+            definition
+            + _governance_and_usage_block(item, organization_id)
+            + group_note
+        )
 
     # All other item types: identity + definition + columns + relationships,
     # then the same governance/usage footer.
@@ -476,7 +587,11 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
     if item.properties_yaml:
         defn += f"\n## Properties (YAML)\n```yaml\n{item.properties_yaml}\n```\n"
 
-    cols = _table_columns_block(item) if itype in ('PB_TABLE', 'DBT_MODEL', 'DBT_SOURCE') else ''
+    cols = (
+        _table_columns_block(item, organization_id)
+        if itype in ('PB_TABLE', 'DBT_MODEL', 'DBT_SOURCE')
+        else ''
+    )
 
     rel = ''
     if getattr(item, 'relationships_json', None):
@@ -486,7 +601,14 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
         except Exception:
             rel = ''
 
-    return '\n'.join(header) + defn + cols + rel + _governance_and_usage_block(item) + group_note
+    return (
+        '\n'.join(header)
+        + defn
+        + cols
+        + rel
+        + _governance_and_usage_block(item, organization_id)
+        + group_note
+    )
 
 
 def get_dbt_item_details(name: str) -> str:
@@ -501,6 +623,7 @@ def get_dbt_item_details(name: str) -> str:
     """
     from .dbt import get_dbt_model_schema
 
+    organization_id = require_bound_organization_id()
     schema = get_dbt_model_schema(name)
     if 'matches multiple' in schema or 'No dbt model' in schema:
         return schema  # disambiguation / not-found message — return as-is
@@ -508,8 +631,14 @@ def get_dbt_item_details(name: str) -> str:
     q = (name or '').strip()
     lookup_id = q.split('::', 1)[1] if '::' in q else q
     item = (
-        Item.objects.filter(deleted=False, service='dbt', item_id=lookup_id).first()
+        Item.objects.filter(
+            organization_id=organization_id,
+            deleted=False,
+            service='dbt',
+            item_id=lookup_id,
+        ).first()
         or Item.objects.filter(
+            organization_id=organization_id,
             deleted=False, service='dbt',
             item_type__in=['DBT_MODEL', 'DBT_SEED', 'DBT_SNAPSHOT'],
             item_name__iexact=q,
@@ -520,7 +649,11 @@ def get_dbt_item_details(name: str) -> str:
     # dbt schema already lists BOTH upstream lineage and downstream consumers,
     # so skip both graph blocks here to avoid duplicating them.
     return schema + _governance_and_usage_block(
-        item, include_used_by=False, include_uses=False)
+        item,
+        organization_id,
+        include_used_by=False,
+        include_uses=False,
+    )
 
 
 def get_pb_measure_dependencies(measure_name_or_id: str) -> str:
@@ -538,11 +671,17 @@ def get_pb_measure_dependencies(measure_name_or_id: str) -> str:
     Does NOT include column-level dependencies — the caller should read the
     Expression block to identify referenced columns and verify them.
     """
+    organization_id = require_bound_organization_id()
     query = (measure_name_or_id or '').strip()
     if not query:
         return 'Please provide a measure name or item_id.'
 
-    qs = Item.objects.filter(deleted=False, item_type='PB_MEASURE', service='powerbi')
+    qs = Item.objects.filter(
+        organization_id=organization_id,
+        deleted=False,
+        item_type='PB_MEASURE',
+        service='powerbi',
+    )
     matches = (
         list(qs.filter(item_id=query)[:2])
         or list(qs.filter(item_name__iexact=query)[:10])
@@ -562,24 +701,33 @@ def get_pb_measure_dependencies(measure_name_or_id: str) -> str:
     measure_node_id = f'PB_MEASURE::{measure.item_id}'
 
     home_edge = NetworkEdge.objects.filter(
+        organization_id=organization_id,
         target=measure_node_id, source__startswith='PB_TABLE::',
     ).first()
     home_label = '?'
     if home_edge:
-        home_node = NetworkNode.objects.filter(node_id=home_edge.source).only('name').first()
+        home_node = NetworkNode.objects.filter(
+            organization_id=organization_id,
+            node_id=home_edge.source,
+        ).only('name').first()
         home_label = (home_node.name if home_node and home_node.name else home_edge.source)
 
     upstream_ids = list(NetworkEdge.objects.filter(
+        organization_id=organization_id,
         target=measure_node_id, source__startswith='PB_MEASURE::',
     ).values_list('source', flat=True))
     downstream_ids = list(NetworkEdge.objects.filter(
+        organization_id=organization_id,
         source=measure_node_id, target__startswith='PB_MEASURE::',
     ).values_list('target', flat=True))
 
     def _label(node_ids):
         if not node_ids:
             return []
-        nodes = NetworkNode.objects.filter(node_id__in=node_ids).only('node_id', 'name')
+        nodes = NetworkNode.objects.filter(
+            organization_id=organization_id,
+            node_id__in=node_ids,
+        ).only('node_id', 'name')
         by_id = {n.node_id: (n.name or n.node_id) for n in nodes}
         return [by_id.get(nid, nid) for nid in node_ids]
 
@@ -609,18 +757,24 @@ def get_dbt_bigquery_lineage(asset_name_or_fqn: str, max_results: int = 20) -> s
     Accepts a dbt model/source name, item_id, graph node id, table name, or a
     BigQuery-style fully-qualified table name.
     """
+    organization_id = require_bound_organization_id()
     query = (asset_name_or_fqn or '').strip().strip('`')
     if not query:
         return 'Please provide a dbt asset name, BigQuery table FQN, or graph node id.'
     max_results = max(1, min(int(max_results or 20), 50))
 
-    node_matches = list(NetworkNode.objects.filter(node_id=query)[:2])
+    nodes = NetworkNode.objects.filter(organization_id=organization_id)
+    edges = NetworkEdge.objects.filter(organization_id=organization_id)
+    node_matches = list(nodes.filter(node_id=query)[:2])
     if not node_matches:
-        node_matches = list(NetworkNode.objects.filter(
+        node_matches = list(nodes.filter(
             Q(name__iexact=query) | Q(name__icontains=query) | Q(node_id__icontains=query)
         )[:25])
 
-    item_matches = list(Item.objects.filter(deleted=False).filter(
+    item_matches = list(Item.objects.filter(
+        organization_id=organization_id,
+        deleted=False,
+    ).filter(
         Q(service='dbt') | Q(service__icontains='powerbi') | Q(service__icontains='bigquery') | Q(service__isnull=True)
     ).filter(
         Q(item_id=query) |
@@ -645,7 +799,7 @@ def get_dbt_bigquery_lineage(asset_name_or_fqn: str, max_results: int = 20) -> s
             else:
                 candidate_ids.add(f'{node_type}::{item.item_id}')
 
-    existing_nodes = list(NetworkNode.objects.filter(node_id__in=list(candidate_ids)[:50]))
+    existing_nodes = list(nodes.filter(node_id__in=list(candidate_ids)[:50]))
     if not existing_nodes:
         return f"No dbt/BigQuery lineage nodes found for '{query}'."
     if len(existing_nodes) > 1:
@@ -656,16 +810,25 @@ def get_dbt_bigquery_lineage(asset_name_or_fqn: str, max_results: int = 20) -> s
         return f"'{query}' matches multiple lineage nodes. Re-run with a full id:\n{rows}"
 
     node = existing_nodes[0]
-    first_edges = list(NetworkEdge.objects.filter(Q(source=node.node_id) | Q(target=node.node_id))[:200])
+    first_edges = list(
+        edges.filter(Q(source=node.node_id) | Q(target=node.node_id))[:200]
+    )
     neighbor_ids = {e.source if e.target == node.node_id else e.target for e in first_edges}
-    second_edges = list(NetworkEdge.objects.filter(Q(source__in=neighbor_ids) | Q(target__in=neighbor_ids))[:300])
+    second_edges = list(
+        edges.filter(
+            Q(source__in=neighbor_ids) | Q(target__in=neighbor_ids)
+        )[:300]
+    )
     all_edges = first_edges + second_edges
     all_node_ids = {node.node_id}
     for edge in all_edges:
         all_node_ids.add(edge.source)
         all_node_ids.add(edge.target)
     nodes_by_id = {
-        n.node_id: n for n in NetworkNode.objects.filter(node_id__in=list(all_node_ids)[:500]).only('node_id', 'name', 'group')
+        n.node_id: n
+        for n in nodes.filter(
+            node_id__in=list(all_node_ids)[:500],
+        ).only('node_id', 'name', 'group')
     }
 
     upstream = []
@@ -714,12 +877,14 @@ def preview_pb_dbt_bridge(pbi_table_name_or_id: str, max_results: int = 10) -> s
         DbtModelKey, PbiTableKey, preview_matches,
     )
 
+    organization_id = require_bound_organization_id()
     query = (pbi_table_name_or_id or '').strip()
     if not query:
         return 'Please provide a PowerBI table name or item_id.'
     max_results = max(1, min(int(max_results or 10), 50))
 
     pbi_qs = Item.objects.filter(
+        organization_id=organization_id,
         item_type='PB_TABLE', deleted=False,
     ).filter(
         Q(item_id=query) | Q(item_name__iexact=query) | Q(item_name__icontains=query)
@@ -736,6 +901,7 @@ def preview_pb_dbt_bridge(pbi_table_name_or_id: str, max_results: int = 10) -> s
 
     pbi = pbi_items[0]
     dbt_qs = Item.objects.filter(
+        organization_id=organization_id,
         service='dbt', item_type='DBT_MODEL', deleted=False, table_name__isnull=False,
     ).only('item_id', 'item_name', 'database_name', 'schema_name', 'alias', 'table_name')
 

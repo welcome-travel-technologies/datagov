@@ -31,8 +31,9 @@ class BaseSource(ABC):
 
     # Override in subclasses to specify the management command used to load
     # extracted data into the Django database. The workflow orchestrator calls
-    # ``call_command(self.load_command, organization_id=..., stdout=...)``
-    # so new sources only need to provide a command name — no workflow edits.
+    # ``call_command(self.load_command, organization_id=..., source_id=...,
+    # stdout=...)``. Both IDs are mandatory because catalog rows must retain
+    # exact tenant and source ownership.
     load_command: str = 'load_data'
 
     # Pipeline layer this source belongs to. The workflow orchestrator runs

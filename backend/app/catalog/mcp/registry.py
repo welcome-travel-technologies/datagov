@@ -136,15 +136,22 @@ def build_tool_specs(key) -> list:
         from ..tools.lineage import (
             get_dbt_item_details, get_lineage, get_pb_item_details,
         )
+        from ..tools.organization_scope import bind_organization_read_tool
 
         specs.append(_spec_for(_build_overview_tool(org, user, bigquery_client),
                                name='get_catalog_overview'))
-        specs.append(_spec_for(get_lineage))
+        specs.append(_spec_for(bind_organization_read_tool(get_lineage, org)))
         if powerbi_enabled:
-            specs.append(_spec_for(get_pb_item_details))
-            specs.append(_spec_for(get_pb_usage_analytics))
+            specs.append(_spec_for(
+                bind_organization_read_tool(get_pb_item_details, org),
+            ))
+            specs.append(_spec_for(
+                bind_organization_read_tool(get_pb_usage_analytics, org),
+            ))
         if dbt_enabled:
-            specs.append(_spec_for(get_dbt_item_details))
+            specs.append(_spec_for(
+                bind_organization_read_tool(get_dbt_item_details, org),
+            ))
 
     if auth.SCOPE_POWERBI_QUERY in scopes:
         powerbi_client = _get_powerbi_client_for_org(org)  # None unless live tier on

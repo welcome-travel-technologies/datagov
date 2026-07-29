@@ -26,7 +26,21 @@ from typing import List, Optional, Tuple
 from ..models import Item, NetworkEdge, NetworkNode
 
 
-def _pb_nodes_outside_workspace(workspace_id: str) -> set:
+def _require_organization_id(organization_id) -> int:
+    """Normalize the mandatory tenant scope before any graph queryset runs."""
+    if isinstance(organization_id, bool):
+        raise ValueError('A positive organization_id is required.')
+    try:
+        organization_id = int(organization_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('A positive organization_id is required.') from exc
+    if organization_id <= 0:
+        raise ValueError('A positive organization_id is required.')
+    return organization_id
+
+
+def _pb_nodes_outside_workspace(
+        workspace_id: str, organization_id: int) -> set:
     """Return the set of node_ids that are PowerBI items whose workspace_id is
     different from ``workspace_id``. Used to block path traversal across two
     workspaces of the same PowerBI source while still allowing paths to cross
@@ -40,7 +54,10 @@ def _pb_nodes_outside_workspace(workspace_id: str) -> set:
         return set()
     rows = (
         Item.objects
-        .filter(item_type__startswith='PB_')
+        .filter(
+            organization_id=organization_id,
+            item_type__startswith='PB_',
+        )
         .exclude(workspace_id__isnull=True)
         .exclude(workspace_id='')
         .exclude(workspace_id=workspace_id)
@@ -86,7 +103,8 @@ _MAX_PATHS = 50
 _VALID_ALGORITHMS = ('shortest', 'all_shortest')
 
 
-def _serialize_ids(ids: List[str]) -> List[PathNode]:
+def _serialize_ids(
+        ids: List[str], organization_id: int) -> List[PathNode]:
     """Hydrate a list of node_ids into PathNode dataclasses (preserving order),
     synthesizing placeholders for any ids not in NetworkNode (data drift)."""
     out: List[PathNode] = []
@@ -96,7 +114,10 @@ def _serialize_ids(ids: List[str]) -> List[PathNode]:
     rows = {}
     for i in range(0, len(ids), chunk_size):
         chunk = ids[i:i + chunk_size]
-        for n in NetworkNode.objects.filter(node_id__in=chunk):
+        for n in NetworkNode.objects.filter(
+            organization_id=organization_id,
+            node_id__in=chunk,
+        ):
             rows[n.node_id] = n
     for nid in ids:
         if nid in seen:
@@ -118,6 +139,7 @@ def find_shortest_path(
     direction: str = 'both',
     algorithm: str = 'all_shortest',
     workspace_id: str = '',
+    organization_id=None,
 ) -> NetworkPathResult:
     """
     BFS the lineage graph between two nodes.
@@ -141,6 +163,8 @@ def find_shortest_path(
         the union of all returned paths (a DAG ready to render) and ``paths``
         lists each individual path as an ordered list of node_ids.
     """
+    organization_id = _require_organization_id(organization_id)
+
     if not source_id or not target_id:
         return NetworkPathResult(found=False, message="Both source and target node ids are required.")
 
@@ -152,11 +176,24 @@ def find_shortest_path(
 
     max_depth = max(1, min(int(max_depth or 6), 30))
 
+    expected_nodes = {source_id, target_id}
+    owned_nodes = set(
+        NetworkNode.objects.filter(
+            organization_id=organization_id,
+            node_id__in=expected_nodes,
+        ).values_list('node_id', flat=True)
+    )
+    if owned_nodes != expected_nodes:
+        return NetworkPathResult(
+            found=False,
+            message='One or both lineage nodes are unavailable.',
+        )
+
     if source_id == target_id:
         return NetworkPathResult(
             found=True,
             distance=0,
-            nodes=_serialize_ids([source_id]),
+            nodes=_serialize_ids([source_id], organization_id),
             edges=[],
             paths=[[source_id]],
             message="Source and target are the same node.",
@@ -165,7 +202,9 @@ def find_shortest_path(
     # Workspace constraint: block PowerBI nodes from a different workspace so
     # paths can never cross between two workspaces of the same source. The
     # source/target are always exempt — the user explicitly chose them.
-    blocked_pb_nodes = _pb_nodes_outside_workspace(workspace_id)
+    blocked_pb_nodes = _pb_nodes_outside_workspace(
+        workspace_id, organization_id,
+    )
     blocked_pb_nodes.discard(source_id)
     blocked_pb_nodes.discard(target_id)
 
@@ -197,12 +236,18 @@ def find_shortest_path(
             if direction in ('both', 'downstream'):
                 edges_iter.extend(
                     ('fwd', e.source, e.target)
-                    for e in NetworkEdge.objects.filter(source__in=chunk)
+                    for e in NetworkEdge.objects.filter(
+                        organization_id=organization_id,
+                        source__in=chunk,
+                    )
                 )
             if direction in ('both', 'upstream'):
                 edges_iter.extend(
                     ('rev', e.source, e.target)
-                    for e in NetworkEdge.objects.filter(target__in=chunk)
+                    for e in NetworkEdge.objects.filter(
+                        organization_id=organization_id,
+                        target__in=chunk,
+                    )
                 )
 
             for kind, e_src, e_tgt in edges_iter:
@@ -296,7 +341,7 @@ def find_shortest_path(
     return NetworkPathResult(
         found=True,
         distance=distance,
-        nodes=_serialize_ids(union_ids),
+        nodes=_serialize_ids(union_ids, organization_id),
         edges=list(edges_union),
         paths=all_paths,
         message=msg,
@@ -328,6 +373,7 @@ def find_reachable_nodes(
     start_id: str,
     direction: str = 'upstream',
     workspace_id: str = '',
+    organization_id=None,
 ) -> ReachableResult:
     """
     BFS from ``start_id`` and return every node reachable in the given direction.
@@ -347,13 +393,22 @@ def find_reachable_nodes(
     upstream sources surface at the top of the dropdown — matching the natural
     "track back as far as we can" reading.
     """
+    organization_id = _require_organization_id(organization_id)
+
     if not start_id:
         return ReachableResult(message="A start node id is required.")
+    if not NetworkNode.objects.filter(
+        organization_id=organization_id,
+        node_id=start_id,
+    ).exists():
+        return ReachableResult(message='The lineage node is unavailable.')
 
     if direction not in ('upstream', 'downstream'):
         direction = 'upstream'
 
-    blocked_pb_nodes = _pb_nodes_outside_workspace(workspace_id)
+    blocked_pb_nodes = _pb_nodes_outside_workspace(
+        workspace_id, organization_id,
+    )
     blocked_pb_nodes.discard(start_id)
 
     dist = {start_id: 0}
@@ -373,10 +428,16 @@ def find_reachable_nodes(
 
             if direction == 'upstream':
                 # Follow target→source: nodes that feed the current frontier.
-                edges = NetworkEdge.objects.filter(target__in=chunk).values_list('source', 'target')
+                edges = NetworkEdge.objects.filter(
+                    organization_id=organization_id,
+                    target__in=chunk,
+                ).values_list('source', 'target')
                 neighbours = ((tgt, src) for src, tgt in edges)  # (cur, nxt)
             else:
-                edges = NetworkEdge.objects.filter(source__in=chunk).values_list('source', 'target')
+                edges = NetworkEdge.objects.filter(
+                    organization_id=organization_id,
+                    source__in=chunk,
+                ).values_list('source', 'target')
                 neighbours = ((src, tgt) for src, tgt in edges)
 
             for cur, nxt in neighbours:
@@ -411,7 +472,10 @@ def find_reachable_nodes(
     chunk_size = 900
     for i in range(0, len(reachable_ids), chunk_size):
         chunk = reachable_ids[i:i + chunk_size]
-        for n in NetworkNode.objects.filter(node_id__in=chunk):
+        for n in NetworkNode.objects.filter(
+            organization_id=organization_id,
+            node_id__in=chunk,
+        ):
             rows[n.node_id] = n
 
     out: List[ReachableNode] = []
@@ -435,7 +499,9 @@ def find_reachable_nodes(
     return ReachableResult(nodes=out, truncated=truncated, message=msg)
 
 
-def resolve_node_id_by_name(name: str, group: Optional[str] = None) -> List[NetworkNode]:
+def resolve_node_id_by_name(
+        name: str, group: Optional[str] = None,
+        organization_id=None) -> List[NetworkNode]:
     """
     Resolve a free-form name to one or more NetworkNode rows.
 
@@ -446,11 +512,19 @@ def resolve_node_id_by_name(name: str, group: Optional[str] = None) -> List[Netw
     from django.db.models import Q
     if not name:
         return []
+    try:
+        organization_id = _require_organization_id(organization_id)
+    except ValueError:
+        # This helper is also used by legacy chatbot callers. Until they bind
+        # an organization explicitly, return no candidates rather than falling
+        # back to a cross-tenant search.
+        return []
+    nodes = NetworkNode.objects.filter(organization_id=organization_id)
     # Exact composite-id match first (cheapest, unambiguous)
-    exact = list(NetworkNode.objects.filter(node_id=name))
+    exact = list(nodes.filter(node_id=name))
     if exact:
         return exact
-    qs = NetworkNode.objects.filter(Q(name__iexact=name) | Q(name__icontains=name))
+    qs = nodes.filter(Q(name__iexact=name) | Q(name__icontains=name))
     if group:
         qs = qs.filter(group=group)
     return list(qs[:25])

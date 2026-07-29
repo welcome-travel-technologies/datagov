@@ -26,16 +26,24 @@ def scope_options(org) -> list[dict]:
 def build_context(org, *, client=None, scope_ids=None) -> str:
     """Front-loaded dbt catalog: every model with its materialization, FQN,
     description, and columns (name + datatype + description). Cached per org."""
-    org_id = getattr(org, 'id', 'x')
-    return cached_context(f'asst_ctx_dbt_{org_id}', _build)
+    org_id = getattr(org, 'pk', None)
+    if org_id is None:
+        return ''
+    return cached_context(
+        f'asst_ctx_dbt_v2_{org_id}',
+        lambda: _build(org_id),
+    )
 
 
-def _build() -> str:
+def _build(organization_id) -> str:
     from ...models import Item
 
     models = list(
         Item.objects.filter(
-            deleted=False, service='dbt', item_type__in=_MODEL_TYPES,
+            organization_id=organization_id,
+            deleted=False,
+            service='dbt',
+            item_type__in=_MODEL_TYPES,
         ).order_by('database_name', 'schema_name', 'item_name')
     )
     if not models:
@@ -46,7 +54,10 @@ def _build() -> str:
     # its column rows. Fetch once and group in Python.
     by_dataset: dict = {}
     for c in Item.objects.filter(
-        deleted=False, service='dbt', item_type='DBT_COLUMN',
+        organization_id=organization_id,
+        deleted=False,
+        service='dbt',
+        item_type='DBT_COLUMN',
     ).values('item_name', 'datatype', 'description', 'dataset_id'):
         by_dataset.setdefault(c['dataset_id'], []).append(c)
 
@@ -75,4 +86,6 @@ def build_tools(org, *, client=None) -> list:
     # The dbt item profiler: full model depth (FQN, columns, SQL, upstream
     # tree, downstream consumers) plus ownership / usage stats, in one call.
     from ..lineage import get_dbt_item_details
-    return [get_dbt_item_details]
+    from ..organization_scope import bind_organization_read_tool
+
+    return [bind_organization_read_tool(get_dbt_item_details, org)]

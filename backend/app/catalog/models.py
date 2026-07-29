@@ -1,8 +1,8 @@
 import uuid
 
 from django.conf import settings
-from django.db import models
-from django.db.models.functions import Lower
+from django.db import IntegrityError, models, transaction
+from django.db.models.functions import Lower, Trim
 from django.contrib.auth.models import AbstractUser, Group
 from django.utils.translation import gettext_lazy as _
 
@@ -67,24 +67,29 @@ class DataPerson(models.Model):
         ordering = ['name']
         # Uniqueness is what keeps the Owner / Steward dropdowns free of
         # duplicates. Two rules, both learned from real duplicate rows:
-        #   * one DataPerson per login — the member-save upsert keys on `user`,
-        #     so a second row for the same user made that upsert ambiguous;
-        #   * one person per name per org (case-insensitively) — a login-less
-        #     row created by the admin / bulk import used to sit alongside the
-        #     one created when that person later got an account.
-        # Both are enforced only where the column is set: rows with user=NULL
-        # are legitimate (stakeholders without a login), and Postgres treats
-        # NULLs as distinct anyway, so the second constraint additionally
-        # scopes on organization which may itself be NULL — hence the explicit
-        # condition on the first and a plain Lower() index on the second.
+        #   * one DataPerson per login per organization — the member-save
+        #     upsert keys on that pair, while one login may span organizations;
+        #   * one trimmed display name per org (case-insensitively). Namesakes
+        #     remain distinct people, but one receives a deterministic suffix.
+        # Rows with user=NULL are legitimate stakeholders without a login.
+        # Organization may also be NULL, so nulls_distinct=False makes the
+        # display-name rule cover the unscoped rows instead of silently exempting
+        # every one of them.
         constraints = [
             models.UniqueConstraint(
-                fields=['user'], condition=models.Q(user__isnull=False),
-                name='uniq_dataperson_user',
+                fields=['user', 'organization'],
+                condition=models.Q(user__isnull=False),
+                name='uniq_dataperson_user_org',
+                nulls_distinct=False,
             ),
             models.UniqueConstraint(
-                Lower('name'), 'organization',
+                Lower(Trim('name')), 'organization',
                 name='uniq_dataperson_name_org',
+                nulls_distinct=False,
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(name__regex=r'^\s*$'),
+                name='dataperson_name_not_blank',
             ),
         ]
 
@@ -101,6 +106,14 @@ class Category(models.Model):
     class Meta:
         ordering = ['name']
         unique_together = ('name', 'organization')
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(
+                    name__iregex=r'^\s*to be deleted\s*$',
+                ),
+                name='category_name_not_reserved',
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -154,10 +167,27 @@ class ItemManager(models.Manager):
                 kind = ItemGroup.KIND_MEASURE_NAME
             else:
                 key, kind = f'item::{item.pk}', ItemGroup.KIND_SINGLETON
-            grp, _ = ItemGroup.objects.get_or_create(
+            grp = ItemGroup.objects.filter(
                 group_key=key,
-                defaults={'kind': kind, 'organization_id': item.organization_id},
-            )
+                organization_id=item.organization_id,
+            ).first()
+            if grp is None:
+                try:
+                    with transaction.atomic():
+                        grp = ItemGroup.objects.create(
+                            group_key=key,
+                            kind=kind,
+                            organization_id=item.organization_id,
+                        )
+                except IntegrityError:
+                    # A same-tenant concurrent creator is safe to adopt. A
+                    # foreign tenant holding the globally unique key is not.
+                    grp = ItemGroup.objects.filter(
+                        group_key=key,
+                        organization_id=item.organization_id,
+                    ).first()
+            if grp is None:
+                return item
             item.item_group = grp
             item.save(update_fields=['item_group'])
         changed = False
@@ -444,6 +474,15 @@ class ItemGroup(models.Model):
             models.Index(fields=['kind'], name='cat_itemgroup_kind_idx'),
             models.Index(fields=['organization'], name='cat_itemgroup_org_idx'),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(definition__isnull=True)
+                    | models.Q(kind='measure_name')
+                ),
+                name='itemgroup_definition_measure_only',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.group_key} ({self.kind})'
@@ -488,7 +527,13 @@ class Definition(models.Model):
         ordering = ['name']
         constraints = [
             models.UniqueConstraint(
-                Lower('name'), 'organization', name='uniq_definition_name_org',
+                Lower(Trim('name')), 'organization',
+                name='uniq_definition_name_org',
+                nulls_distinct=False,
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(name__regex=r'^\s*$'),
+                name='definition_name_not_blank',
             ),
         ]
 
@@ -556,9 +601,8 @@ class GovernanceTask(models.Model):
         on_delete=models.SET_NULL, related_name='tasks',
     )
     # The person the task is routed to. May be null (unassigned task).
-    # Today this is always the asset's steward, but the model is intentionally
-    # role-agnostic: `assignee_role` records *why* this person was picked so the
-    # routing policy can expand to owners / others later without a schema change.
+    # `assignee_role` records *why* this person was picked: hygiene work routes
+    # to the Owner, while Attention / To Be Deleted routes to the Steward.
     assignee = models.ForeignKey(
         DataPerson, null=True, blank=True,
         on_delete=models.SET_NULL, related_name='tasks',
@@ -572,8 +616,8 @@ class GovernanceTask(models.Model):
     reason = models.CharField(
         max_length=32, choices=REASON_CHOICES, default=REASON_ATTENTION, db_index=True,
     )
-    # The status that triggered / last refreshed this task ('ATTENTION' |
-    # 'DELETED'). Null for reasons that aren't status-derived (NO_CATEGORY).
+    # The status that triggered / last refreshed this task ('UNVERIFIED',
+    # 'ATTENTION', or 'DELETED'). Null for NO_CATEGORY.
     trigger_status = models.CharField(
         max_length=20, choices=Item.STATUS_CHOICES, blank=True, null=True,
     )
@@ -586,6 +630,11 @@ class GovernanceTask(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # For a manually completed task, records the first time reconciliation
+    # observed that its underlying condition had actually cleared. Until this is
+    # set, Generate must not recreate the same task: Done durably dismisses the
+    # current episode. Once cleared, a later relapse opens a fresh audit row.
+    condition_cleared_at = models.DateTimeField(null=True, blank=True)
     completed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True,
         on_delete=models.SET_NULL, related_name='completed_tasks',

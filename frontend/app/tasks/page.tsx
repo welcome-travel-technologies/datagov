@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Search, Sparkles, TriangleAlert } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -20,6 +20,18 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth";
 import {
+  buildGenerationCommitRequest,
+  buildTaskListParams,
+  generationPreviewAuthorizes,
+  generationPreviewKey,
+  generationPreviewTokenRequired,
+  TASK_DEFAULT_KIND_SCOPE,
+  TASK_PAGE_SIZE as PAGE_SIZE,
+  TASK_REASON_UI as REASONS,
+  visibleSelectedTaskIds,
+  type TaskScope,
+} from "@/app/tasks/task-manager-state";
+import {
   api,
   getApiErrorMessage,
   unwrapResults,
@@ -28,15 +40,7 @@ import {
   type TaskSweepResult,
 } from "@/lib/api";
 
-/** Which DataPerson the viewer is acting as. Most logins aren't linked to a
- *  DataPerson yet, so the person picks their own name and we remember it. */
-const PERSON_KEY = "datagov.tasks.actingPersonId";
-
-/** Rows per page. Production has ~4,100 open tasks, so the board has to page —
- *  a single fat request silently dropped everything past the limit. */
-const PAGE_SIZE = 200;
-
-type Scope = "mine" | "unassigned" | "all" | "done";
+const EMPTY_TASKS: GovernanceTask[] = [];
 
 /** Delay a fast-changing value. The search box feeds the react-query key, so
  *  without this every keystroke fired a full page request. */
@@ -52,13 +56,6 @@ function useDebounced<T>(value: T, ms = 350): T {
 /** The reason groups, in the order the work should be tackled. Hints are the
  *  customer's own framing of why each task exists — the assignee needs to know
  *  the intent, not just the title. */
-const REASONS: { key: string; label: string; hint: string }[] = [
-  { key: "UNVERIFIED", label: "Verify", hint: "You own these — move each to Verified, or flag it for Attention." },
-  { key: "NO_CATEGORY", label: "Category", hint: "You own these — give each measure a category." },
-  { key: "ATTENTION", label: "Attention", hint: "You steward these — agree with the Owner whether they get deleted." },
-  { key: "DELETED", label: "To Be Deleted", hint: "You steward these — confirm the asset can go, or restore it." },
-];
-
 function fmtDateTime(iso?: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -107,30 +104,22 @@ export default function TasksPage() {
   const { user } = useAuth();
   const isAdmin = !!(user?.perms?.is_admin || user?.role === "admin");
 
-  const [scope, setScope] = useState<Scope>("mine");
+  const [scope, setScope] = useState<TaskScope>("mine");
   const [reason, setReason] = useState("");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [genOpen, setGenOpen] = useState(false);
   const [page, setPage] = useState(1);
 
-  // Acting identity: the linked DataPerson if the login has one, else whatever
-  // name the person picked (remembered per browser until the accounts are
-  // properly linked).
+  // Only admins may inspect another person's Mine view. Ordinary members are
+  // always derived from the login-linked DataPerson on the server.
   const [personId, setPersonId] = useState<string>("");
   useEffect(() => {
-    const stored = typeof window !== "undefined" ? window.localStorage.getItem(PERSON_KEY) : null;
-    if (stored) setPersonId(stored);
-    else if (user?.data_person?.id) setPersonId(String(user.data_person.id));
-  }, [user?.data_person?.id]);
-
-  function pickPerson(value: string) {
-    setPersonId(value);
-    if (typeof window !== "undefined") {
-      if (value) window.localStorage.setItem(PERSON_KEY, value);
-      else window.localStorage.removeItem(PERSON_KEY);
+    if (!isAdmin) {
+      setPersonId("");
+      setScope("mine");
     }
-  }
+  }, [isAdmin]);
 
   const peopleQ = useQuery({
     queryKey: ["task-people"],
@@ -148,43 +137,33 @@ export default function TasksPage() {
       return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
     staleTime: 5 * 60_000,
+    enabled: isAdmin,
   });
   const people = peopleQ.data ?? [];
 
   const search = useDebounced(q);
-  const listParams = useMemo(() => {
-    const p: Record<string, string | number | undefined> = {
-      limit: PAGE_SIZE,
-      page,
-      ordering: "-created_at",
-      state: scope === "done" ? "done" : "open",
-    };
-    if (scope === "mine") {
-      // An explicitly picked name wins; `scope=mine` is the fallback for logins
-      // that ARE linked to a DataPerson.
-      if (personId) p.assignee = personId;
-      else p.scope = "mine";
-    } else if (scope === "unassigned") {
-      p.scope = "unassigned";
-    }
-    if (reason) p.reason = reason;
-    if (search.trim()) p.search = search.trim();
-    return p;
-  }, [scope, personId, reason, search, page]);
+  const listParams = useMemo(
+    () => buildTaskListParams({ scope, isAdmin, personId, reason, search, page }),
+    [scope, personId, reason, search, page, isAdmin],
+  );
 
   const tasksQ = useQuery({
     queryKey: ["tasks", listParams],
     queryFn: () => api.tasks.list(listParams),
   });
   const summaryQ = useQuery({
-    queryKey: ["tasks-summary", personId],
-    queryFn: () => api.tasks.summary(personId ? { person: personId } : {}),
+    queryKey: ["tasks-summary", isAdmin ? personId : "linked"],
+    queryFn: () => api.tasks.summary(isAdmin && personId ? { person: personId } : {}),
   });
 
-  const rows = tasksQ.data?.results ?? [];
+  const rows = tasksQ.data?.results ?? EMPTY_TASKS;
   const summary = summaryQ.data;
+  const visibleSelectedIds = useMemo(
+    () => visibleSelectedTaskIds(rows.map((row) => row.id), selected),
+    [rows, selected],
+  );
 
-  // Any change to what's listed drops the selection and returns to page 1.
+  // A filter change drops the selection and returns to page 1.
   // Otherwise ticking rows, then narrowing the filter, then pressing "Mark N
   // done" would close tasks that are no longer on screen — the one genuinely
   // destructive thing this page can do.
@@ -193,12 +172,19 @@ export default function TasksPage() {
     setPage(1);
   }, [reason, search, personId, scope]);
 
+  // A page change also drops selection, but must not jump back to page 1.
+  // This keeps Bulk Done limited to rows that are still visible.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [page]);
+
   const total = tasksQ.data?.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const firstRow = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const lastRow = Math.min(page * PAGE_SIZE, total);
 
   function refresh() {
+    setPage(1);
     qc.invalidateQueries({ queryKey: ["tasks"] });
     qc.invalidateQueries({ queryKey: ["tasks-summary"] });
     setSelected(new Set());
@@ -209,6 +195,7 @@ export default function TasksPage() {
   const doneMut = useMutation({
     mutationFn: (id: number) => api.tasks.done(id),
     onSuccess: refresh,
+    onError: (e) => setBulkNote(getApiErrorMessage(e, "Could not close this task.")),
   });
   const bulkMut = useMutation({
     mutationFn: (ids: number[]) => api.tasks.bulkDone(ids),
@@ -257,10 +244,11 @@ export default function TasksPage() {
       if (!byReason.has(key)) byReason.set(key, []);
       byReason.get(key)!.push(t);
     }
-    const ordered = REASONS.filter((r) => byReason.has(r.key)).map((r) => ({
+    const ordered: { key: string; label: string; hint: string; tasks: GovernanceTask[] }[] =
+      REASONS.filter((r) => byReason.has(r.key)).map((r) => ({
       ...r,
       tasks: byReason.get(r.key)!,
-    }));
+      }));
     for (const [key, tasks] of byReason) {
       if (!REASONS.some((r) => r.key === key)) {
         ordered.push({ key, label: tasks[0]?.reason_label || key, hint: "", tasks });
@@ -269,13 +257,17 @@ export default function TasksPage() {
     return ordered;
   }, [rows]);
 
-  const showPersonPrompt = scope === "mine" && !personId && !summary?.linked;
+  const showPersonPrompt =
+    scope === "mine" &&
+    !(isAdmin && personId) &&
+    !!summary &&
+    (summary.identity_required === true || !summary.linked);
 
   return (
     <div>
       <PageHeader
         title="Task Manager"
-        description="Governance follow-ups: unverified and uncategorised measures go to their Owner, flagged assets to their Steward. Mark one Done once handled."
+        description="Governance follow-ups: unverified measures and uncategorised assets go to their Owner, flagged assets to their Steward. Mark one Done once handled."
         actions={
           isAdmin ? (
             <Button variant="brand" size="sm" onClick={() => setGenOpen(true)}>
@@ -285,20 +277,22 @@ export default function TasksPage() {
         }
       />
 
-      {/* Who am I — until logins are linked to data people, the viewer says so. */}
       <Card className="mb-4">
         <div className="flex flex-wrap items-end gap-3 p-4">
-          <div className="min-w-[220px]">
-            <label className="mb-1 block text-[11px] font-medium text-faint">I am</label>
-            <SimpleSelect
-              value={personId}
-              onValueChange={pickPerson}
-              options={[
-                { value: "", label: summary?.linked ? "My linked profile" : "— pick your name —" },
-                ...people.map((p) => ({ value: String(p.id), label: p.name })),
-              ]}
-            />
-          </div>
+          {isAdmin && (
+            <div className="min-w-[220px]">
+              <label className="mb-1 block text-[11px] font-medium text-faint">Mine view (admin)</label>
+              <SimpleSelect
+                aria-label="Person for Mine view"
+                value={personId}
+                onValueChange={setPersonId}
+                options={[
+                  { value: "", label: summary?.linked ? "My linked profile" : "Select a person" },
+                  ...people.map((p) => ({ value: String(p.id), label: p.name })),
+                ]}
+              />
+            </div>
+          )}
           <div className="min-w-[150px]">
             <label className="mb-1 block text-[11px] font-medium text-faint">Reason</label>
             <SimpleSelect
@@ -325,20 +319,21 @@ export default function TasksPage() {
         </div>
       </Card>
 
-      <Tabs value={scope} onValueChange={(v) => setScope(v as Scope)}>
+      <Tabs value={scope} onValueChange={(v) => setScope(v as TaskScope)}>
         <TabsList className="mb-4">
           <TabsTrigger value="mine">
             Mine {summary ? <span className="ml-1.5 text-faint">{summary.mine_open}</span> : null}
           </TabsTrigger>
-          <TabsTrigger value="unassigned">
-            Unassigned {summary ? <span className="ml-1.5 text-faint">{summary.unassigned_open}</span> : null}
-          </TabsTrigger>
-          <TabsTrigger value="all">
-            Everyone {summary ? <span className="ml-1.5 text-faint">{summary.total_open}</span> : null}
-          </TabsTrigger>
-          <TabsTrigger value="done">
-            Completed {summary ? <span className="ml-1.5 text-faint">{summary.done_total}</span> : null}
-          </TabsTrigger>
+          {isAdmin && (
+            <>
+              <TabsTrigger value="unassigned">
+                Unassigned {summary ? <span className="ml-1.5 text-faint">{summary.unassigned_open}</span> : null}
+              </TabsTrigger>
+              <TabsTrigger value="all">
+                Everyone {summary ? <span className="ml-1.5 text-faint">{summary.total_open}</span> : null}
+              </TabsTrigger>
+            </>
+          )}
         </TabsList>
       </Tabs>
 
@@ -347,27 +342,30 @@ export default function TasksPage() {
           <div className="flex items-start gap-2.5 p-4 text-[13px]">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
             <div>
-              <div className="font-semibold">Pick your name to see your tasks</div>
+              <div className="font-semibold">
+                {isAdmin ? "Select a person to inspect their tasks" : "Your task profile needs linking"}
+              </div>
               <div className="mt-0.5 text-muted-foreground">
-                Your login isn&apos;t linked to a data person yet, so we can&apos;t tell which tasks are
-                yours. Choose your name in <span className="font-medium">I am</span> above — we&apos;ll remember it.
+                {isAdmin
+                  ? "Your login is not linked to a data person. Select a person in the admin-only Mine view above."
+                  : "Your login is not linked to a data person, so the server cannot determine your tasks. Ask an administrator to link your account."}
               </div>
             </div>
           </div>
         </Card>
       )}
 
-      {selected.size > 0 && (
+      {visibleSelectedIds.length > 0 && (
         <div className="mb-3 flex items-center gap-3 rounded-lg border border-brand/40 bg-brand/5 px-4 py-2.5">
           <ListChecks className="h-4 w-4 text-brand" />
-          <span className="text-[13px] font-medium">{selected.size} selected</span>
+          <span className="text-[13px] font-medium">{visibleSelectedIds.length} selected</span>
           <Button
             variant="brand"
             size="sm"
             disabled={bulkMut.isPending}
-            onClick={() => bulkMut.mutate([...selected])}
+            onClick={() => bulkMut.mutate(visibleSelectedIds)}
           >
-            <Check /> Mark {selected.size} done
+            <Check /> Mark {visibleSelectedIds.length} done
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
             Clear
@@ -400,11 +398,24 @@ export default function TasksPage() {
           />
         </Card>
       )}
+      {summaryQ.isError && (
+        <Card className="mb-3">
+          <EmptyState
+            title="Could not load task totals"
+            hint={getApiErrorMessage(summaryQ.error, "Refresh the page to try again.")}
+          />
+        </Card>
+      )}
+      {isAdmin && peopleQ.isError && (
+        <div className="mb-3 rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err">
+          {getApiErrorMessage(peopleQ.error, "Could not load the admin person list.")}
+        </div>
+      )}
 
       {!tasksQ.isLoading && !tasksQ.isError && rows.length === 0 && (
         <Card>
           <EmptyState
-            title={scope === "done" ? "Nothing completed yet." : "No open tasks 🎉"}
+            title="No open tasks 🎉"
             hint={
               scope === "mine"
                 ? "Nothing is assigned to you right now."
@@ -429,40 +440,36 @@ export default function TasksPage() {
               <Table>
                 <THead>
                   <TR>
-                    {scope !== "done" && (
-                      <TH className="w-[40px]">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select all ${group.label} tasks`}
-                          checked={groupAllSelected}
-                          onChange={() => toggleGroup(groupIds, !groupAllSelected)}
-                          className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
-                        />
-                      </TH>
-                    )}
+                    <TH className="w-[40px]">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select all ${group.label} tasks`}
+                        checked={groupAllSelected}
+                        onChange={() => toggleGroup(groupIds, !groupAllSelected)}
+                        className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
+                      />
+                    </TH>
                     <TH className="min-w-[260px]">Task</TH>
                     <TH className="min-w-[180px]">Asset</TH>
                     <TH>Reason</TH>
                     <TH className="min-w-[150px]">Assignee</TH>
                     <TH>Age</TH>
-                    <TH>{scope === "done" ? "Completed" : "Created"}</TH>
-                    {scope !== "done" && <TH className="text-right">Action</TH>}
+                    <TH>Created</TH>
+                    <TH className="text-right">Action</TH>
                   </TR>
                 </THead>
                 <TBody>
                   {group.tasks.map((t) => (
                     <TR key={t.id}>
-                      {scope !== "done" && (
-                        <TD>
-                          <input
-                            type="checkbox"
-                            aria-label={`Select task ${t.title}`}
-                            checked={selected.has(t.id)}
-                            onChange={() => toggleOne(t.id)}
-                            className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
-                          />
-                        </TD>
-                      )}
+                      <TD>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select task ${t.title}`}
+                          checked={selected.has(t.id)}
+                          onChange={() => toggleOne(t.id)}
+                          className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
+                        />
+                      </TD>
                       <TD>
                         <div className="font-semibold">{t.title || "—"}</div>
                         {t.asset_context && (
@@ -486,31 +493,18 @@ export default function TasksPage() {
                         <AgeBadge days={t.age_days} />
                       </TD>
                       <TD className="whitespace-nowrap text-[12px]">
-                        {scope === "done" ? (
-                          <span className="inline-flex items-center gap-1.5">
-                            {fmtDateTime(t.completed_at)}
-                            {t.closed_reason === "resolved" && (
-                              <Badge variant="outline" title="Closed automatically because the gap was fixed">
-                                auto
-                              </Badge>
-                            )}
-                          </span>
-                        ) : (
-                          fmtDateTime(t.created_at)
-                        )}
+                        {fmtDateTime(t.created_at)}
                       </TD>
-                      {scope !== "done" && (
-                        <TD className="text-right">
-                          <Button
-                            variant="brand"
-                            size="sm"
-                            disabled={doneMut.isPending}
-                            onClick={() => doneMut.mutate(t.id)}
-                          >
-                            <Check /> Done
-                          </Button>
-                        </TD>
-                      )}
+                      <TD className="text-right">
+                        <Button
+                          variant="brand"
+                          size="sm"
+                          disabled={doneMut.isPending}
+                          onClick={() => doneMut.mutate(t.id)}
+                        >
+                          <Check /> Done
+                        </Button>
+                      </TD>
                     </TR>
                   ))}
                 </TBody>
@@ -567,9 +561,12 @@ function GenerateDialog({
   onDone: () => void;
 }) {
   const [picked, setPicked] = useState<string[]>(REASONS.map((r) => r.key));
-  const [kindScope, setKindScope] = useState("measure_name");
+  const [kindScope, setKindScope] = useState(TASK_DEFAULT_KIND_SCOPE);
+  const [scopeInitialized, setScopeInitialized] = useState(false);
   const [preview, setPreview] = useState<TaskSweepResult | null>(null);
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const dialogEpoch = useRef(0);
 
   // The reasons and scopes are backend policy — read them rather than
   // hard-coding a second copy that can drift.
@@ -580,34 +577,116 @@ function GenerateDialog({
     staleTime: 60 * 60_000,
   });
   const scopes = optionsQ.data?.kind_scopes ?? [
-    { key: "measure_name", label: "PowerBI measures", hint: "" },
+    {
+      key: TASK_DEFAULT_KIND_SCOPE,
+      label: "All assets",
+      hint: "All eligible assets. Unverified remains measure-only; Category may create tens of thousands of tasks.",
+    },
   ];
+  const currentPreviewKey = generationPreviewKey(picked, kindScope);
+  const previewMatches = generationPreviewAuthorizes({
+    dryRun: preview?.dry_run,
+    previewKey,
+    currentKey: currentPreviewKey,
+    kindScope,
+    previewToken: preview?.preview_token,
+  });
+
+  useEffect(() => {
+    if (open && !scopeInitialized && optionsQ.data?.default_kind_scope) {
+      setKindScope(optionsQ.data.default_kind_scope);
+      setScopeInitialized(true);
+    }
+  }, [open, optionsQ.data?.default_kind_scope, scopeInitialized]);
 
   const previewMut = useMutation({
-    mutationFn: () => api.tasks.generate({ reasons: picked, dry_run: true, kind_scope: kindScope }),
-    onSuccess: (r) => {
+    mutationFn: (request: {
+      reasons: string[];
+      kindScope: string;
+      key: string;
+      epoch: number;
+    }) =>
+      api.tasks.generate({
+        reasons: request.reasons,
+        dry_run: true,
+        kind_scope: request.kindScope,
+      }),
+    onSuccess: (r, request) => {
+      if (request.epoch !== dialogEpoch.current) return;
+      if (generationPreviewTokenRequired(request.kindScope) && !r.preview_token) {
+        setPreview(null);
+        setPreviewKey(null);
+        setError(
+          "The server did not authorize this broad preview. Preview again after the deployment is complete.",
+        );
+        return;
+      }
       setPreview(r);
+      setPreviewKey(request.key);
       setError(null);
     },
-    onError: (e) => setError(getApiErrorMessage(e, "Preview failed.")),
+    onError: (e, request) => {
+      if (request.epoch !== dialogEpoch.current) return;
+      setError(getApiErrorMessage(e, "Preview failed."));
+    },
   });
   const runMut = useMutation({
-    mutationFn: () => api.tasks.generate({ reasons: picked, dry_run: false, kind_scope: kindScope }),
-    onSuccess: (r) => {
-      setPreview(r);
-      setError(null);
+    mutationFn: (request: {
+      reasons: string[];
+      kindScope: string;
+      previewToken?: string;
+      epoch: number;
+    }) =>
+      api.tasks.generate(
+        buildGenerationCommitRequest(
+          request.reasons,
+          request.kindScope,
+          request.previewToken,
+        ),
+      ),
+    onSuccess: (r, request) => {
+      if (request.epoch === dialogEpoch.current) {
+        setPreview(r);
+        setPreviewKey(null);
+        setError(null);
+      }
       onDone();
     },
-    onError: (e) => setError(getApiErrorMessage(e, "Generate failed.")),
+    onError: (e, request) => {
+      if (request.epoch !== dialogEpoch.current) return;
+      setPreview(null);
+      setPreviewKey(null);
+      setError(getApiErrorMessage(e, "Generate failed."));
+    },
   });
 
   function toggle(key: string) {
     setPreview(null);
+    setPreviewKey(null);
     setPicked((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   }
 
+  function resetDialog() {
+    dialogEpoch.current += 1;
+    setPicked(REASONS.map((r) => r.key));
+    setKindScope(
+      optionsQ.data?.default_kind_scope ?? TASK_DEFAULT_KIND_SCOPE,
+    );
+    setScopeInitialized(false);
+    setPreview(null);
+    setPreviewKey(null);
+    setError(null);
+    previewMut.reset();
+    runMut.reset();
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (!next) resetDialog();
+    onOpenChange(next);
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Generate governance tasks</DialogTitle>
@@ -640,6 +719,8 @@ function GenerateDialog({
             value={kindScope}
             onValueChange={(v) => {
               setPreview(null);
+              setPreviewKey(null);
+              setScopeInitialized(true);
               setKindScope(v);
             }}
             options={scopes.map((s) => ({ value: s.key, label: s.label }))}
@@ -657,8 +738,13 @@ function GenerateDialog({
         {error && (
           <div className="rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err">{error}</div>
         )}
+        {optionsQ.isError && (
+          <div className="rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err">
+            {getApiErrorMessage(optionsQ.error, "Could not load generation options.")}
+          </div>
+        )}
 
-        {preview && (
+        {preview && (!preview.dry_run || previewMatches) && (
           <div className="rounded-md border border-line bg-panel2/50 px-3 py-2.5 text-[12px]">
             <div className="mb-1 font-semibold">
               {preview.dry_run ? "Preview — nothing was written" : "Done"}
@@ -680,20 +766,45 @@ function GenerateDialog({
           <Button
             variant="outline"
             size="sm"
-            disabled={previewMut.isPending || picked.length === 0}
-            onClick={() => previewMut.mutate()}
+            disabled={
+              optionsQ.isPending ||
+              previewMut.isPending ||
+              runMut.isPending ||
+              picked.length === 0 ||
+              optionsQ.isError
+            }
+            onClick={() =>
+              previewMut.mutate({
+                reasons: [...picked],
+                kindScope,
+                key: currentPreviewKey,
+                epoch: dialogEpoch.current,
+              })
+            }
           >
             Preview
           </Button>
           <Button
             variant="brand"
             size="sm"
-            disabled={runMut.isPending || picked.length === 0}
-            onClick={() => runMut.mutate()}
+            disabled={runMut.isPending || previewMut.isPending || !previewMatches}
+            onClick={() =>
+              runMut.mutate({
+                reasons: [...picked],
+                kindScope,
+                previewToken: preview?.preview_token,
+                epoch: dialogEpoch.current,
+              })
+            }
           >
             <Sparkles /> Generate
           </Button>
         </div>
+        {!previewMatches && picked.length > 0 && (
+          <p className="text-right text-[11px] text-faint">
+            Run Preview for the current reasons and scope before Generate.
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );

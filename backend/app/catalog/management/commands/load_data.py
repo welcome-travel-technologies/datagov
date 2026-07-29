@@ -1,9 +1,25 @@
 import os
 import pandas as pd
-from django.core.management.base import BaseCommand
-from catalog.models import Summary, Item, NetworkNode, NetworkEdge
+from django.core.management.base import BaseCommand, CommandError
+from catalog.models import (
+    Item,
+    NetworkEdge,
+    NetworkNode,
+    Organization,
+    Summary,
+)
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Q
+from django.db.models.functions import Coalesce, Now
+from catalog.services.load_scope import (
+    assert_incoming_identities_available,
+    catalog_load_session_lock,
+    read_incoming_identities,
+    require_grouping_commit_boundary,
+    require_exact_load_scope,
+    network_domain_is_exclusive,
+)
 
 class Command(BaseCommand):
     help = 'Load data from CSVs into the database'
@@ -14,9 +30,14 @@ class Command(BaseCommand):
         parser.add_argument('--source-id', type=int, default=None,
                             help='IntegrationSource PK that produced this data')
 
+    @catalog_load_session_lock()
     def handle(self, *args, **kwargs):
-        self.organization_id = kwargs.get('organization_id')
-        self.source_id = kwargs.get('source_id')
+        require_grouping_commit_boundary()
+        self.organization_id, self.source_id = require_exact_load_scope(
+            kwargs.get('organization_id'),
+            kwargs.get('source_id'),
+            expected_source_types={'powerbi_fabric'},
+        )
         # Build the organization_id literal for SQL injection-safe usage (used throughout)
         org_id_literal = 'NULL'
         if self.organization_id is not None:
@@ -36,28 +57,38 @@ class Command(BaseCommand):
         usage_csv = os.path.join(data_dir, 'fabric_info_usage.csv')
 
         if not os.path.exists(items_csv):
-            self.stdout.write(self.style.ERROR(f'items CSV not found at {items_csv}'))
-            return
+            raise CommandError(f'Items CSV not found at {items_csv}.')
             
         if not os.path.exists(graph_csv):
-            self.stdout.write(self.style.ERROR(f'graph CSV not found at {graph_csv}'))
-            return
+            raise CommandError(f'Graph CSV not found at {graph_csv}.')
 
-        self.stdout.write('Cleaning up non-persistent Fabric/PowerBI network data...')
-        # Only delete non-dbt network data (preserve dbt graph when PowerBI re-runs).
-        # All dbt-side nodes have group/node_id starting with 'DBT_' (DBT_MODEL,
-        # DBT_SOURCE, DBT_SEED, DBT_TEST, DBT_COLUMN) so a single startswith
-        # filter is sufficient.
-        from django.db.models import Q
-        NetworkNode.objects.exclude(group__startswith='DBT_').delete()
-        # Delete non-dbt edges
-        NetworkEdge.objects.exclude(
-            Q(source__startswith='DBT_') | Q(target__startswith='DBT_')
-        ).delete()
-        # Also delete cross-tool bridge edges (they will be rebuilt by the final step)
-        NetworkEdge.objects.filter(
-            Q(source__startswith='DBT_') & ~Q(target__startswith='DBT_')
-        ).delete()
+        item_ids, node_ids, edges = read_incoming_identities(
+            items_csv, graph_csv,
+        )
+        assert_incoming_identities_available(
+            organization_id=self.organization_id,
+            source_id=self.source_id,
+            item_ids=item_ids,
+            node_ids=node_ids,
+            edges=edges,
+        )
+
+        # Network rows have no integration-source FK. Exact replacement is safe
+        # only when this is the org's sole PowerBI source; otherwise retain
+        # additive behavior so a sibling source's lineage cannot be erased.
+        replace_network_domain = network_domain_is_exclusive(
+            self.organization_id, self.source_id,
+        )
+        if replace_network_domain:
+            self.stdout.write(
+                'Replacing exact-organization PowerBI network data...',
+            )
+        else:
+            self.stdout.write(self.style.WARNING(
+                'Multiple PowerBI sources share this organization; graph rows '
+                'will be upserted additively because the legacy graph schema '
+                'has no integration-source ownership.'
+            ))
 
         # ==========================================
         # FAST POSTGRESQL PATH (Using COPY)
@@ -66,6 +97,17 @@ class Command(BaseCommand):
             self.stdout.write('Using blazing fast PostgreSQL COPY for bulk loading...')
             
             with transaction.atomic(), connection.cursor() as cursor:
+                if replace_network_domain:
+                    NetworkNode.objects.filter(
+                        organization_id=self.organization_id,
+                    ).exclude(group__startswith='DBT_').delete()
+                    NetworkEdge.objects.filter(
+                        organization_id=self.organization_id,
+                    ).exclude(
+                        Q(source__startswith='DBT_')
+                        & Q(target__startswith='DBT_')
+                    ).delete()
+
                 # 1. Network Nodes & Edges
                 # The temp table mirrors the new graph CSV schema, which carries
                 # both composite unique ids (source_id/target_id of the form
@@ -100,12 +142,16 @@ class Command(BaseCommand):
                 # by the primary-key conflict handler.
                 cursor.execute(f"""
                     INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                    SELECT source_id, source, source_type, {org_id_literal} FROM temp_nodes
+                    SELECT TRIM(source_id), source, source_type, {org_id_literal} FROM temp_nodes
                     WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
                     UNION
-                    SELECT target_id, target, target_type, {org_id_literal} FROM temp_nodes
+                    SELECT TRIM(target_id), target, target_type, {org_id_literal} FROM temp_nodes
                     WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
-                    ON CONFLICT (node_id) DO NOTHING;
+                    ON CONFLICT (node_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        "group" = EXCLUDED."group"
+                    WHERE catalog_networknode.organization_id
+                          IS NOT DISTINCT FROM EXCLUDED.organization_id;
                 """)
                 # Insert edges using composite ids for stable cross-references.
                 # kind/level are classified from the endpoint types via the
@@ -121,14 +167,17 @@ class Command(BaseCommand):
                 lineage_type_expr = "NULLIF(TRIM(lineage_type), '')" if 'lineage_type' in g_cols else "NULL"
                 cursor.execute(f"""
                     INSERT INTO catalog_networkedge (source, target, organization_id, kind, level, lineage_type)
-                    SELECT DISTINCT source_id, target_id, {org_id_literal},
+                    SELECT DISTINCT TRIM(source_id), TRIM(target_id), {org_id_literal},
                            {kind_expr}, {level_case_sql()}, {lineage_type_expr}
                     FROM temp_nodes
                     WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
                       AND target_id IS NOT NULL AND TRIM(target_id) != ''
                     ON CONFLICT (source, target) DO UPDATE SET
-                        kind = EXCLUDED.kind, level = EXCLUDED.level,
-                        lineage_type = EXCLUDED.lineage_type;
+                        kind = EXCLUDED.kind,
+                        level = EXCLUDED.level,
+                        lineage_type = EXCLUDED.lineage_type
+                    WHERE catalog_networkedge.organization_id
+                          IS NOT DISTINCT FROM EXCLUDED.organization_id;
                 """)
                 
                 # 2. Catalog Items
@@ -222,7 +271,7 @@ class Command(BaseCommand):
                         is_unused, connected_reports, connected_report_pages, connected_visuals,
                         connected_measures, connected_columns, connected_tables, deleted, web_url,
                         ownership_department_id, ownership_person_id, steward_id,
-                        category_id, custom_description,
+                        category_id, custom_description, status,
                         organization_id, connected_reports_json,
                         database_name, tags, meta,
                         integration_source_id,
@@ -258,7 +307,7 @@ class Command(BaseCommand):
                         FALSE,
                         NULLIF(TRIM(web_url), ''),
                         NULL, NULL, NULL,
-                        NULL, NULL,
+                        NULL, NULL, 'UNVERIFIED',
                         {org_id_literal},
                         {crj_select},
                         NULL,
@@ -308,15 +357,19 @@ class Command(BaseCommand):
                         connected_columns = EXCLUDED.connected_columns,
                         connected_tables = EXCLUDED.connected_tables,
                         deleted = EXCLUDED.deleted,
+                        deleted_at = NULL,
                         web_url = EXCLUDED.web_url,
-                        organization_id = EXCLUDED.organization_id,
                         connected_reports_json = EXCLUDED.connected_reports_json,
                         bq_project = EXCLUDED.bq_project,
                         bq_schema = EXCLUDED.bq_schema,
                         bq_source_name = EXCLUDED.bq_source_name,
                         is_related = EXCLUDED.is_related,
                         relationships_json = EXCLUDED.relationships_json,
-                        group_id = EXCLUDED.group_id;
+                        group_id = EXCLUDED.group_id
+                    WHERE catalog_item.organization_id
+                              IS NOT DISTINCT FROM EXCLUDED.organization_id
+                      AND catalog_item.integration_source_id
+                              IS NOT DISTINCT FROM EXCLUDED.integration_source_id;
                         -- Governance (owner / steward / status / category /
                         -- annotation / primary) lives on catalog_itemgroup
                         -- now and is NEVER touched by ETL — see
@@ -331,11 +384,18 @@ class Command(BaseCommand):
                 self.stdout.write(f'  → {items_upserted} items inserted/updated.')
                 
                 # Mark obsolete Fabric/PowerBI items as deleted (preserve dbt items)
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE catalog_item
-                    SET deleted = TRUE
+                    SET deleted = TRUE,
+                        deleted_at = COALESCE(deleted_at, NOW())
                     WHERE (service IS NULL OR service != 'dbt')
-                      AND item_id NOT IN (SELECT NULLIF(TRIM(item_id), '') FROM temp_items);
+                      AND organization_id IS NOT DISTINCT FROM {org_id_literal}
+                      AND integration_source_id IS NOT DISTINCT FROM {source_id_literal}
+                      AND item_id NOT IN (
+                          SELECT NULLIF(TRIM(item_id), '')
+                          FROM temp_items
+                          WHERE NULLIF(TRIM(item_id), '') IS NOT NULL
+                      );
                 """)
 
                 # 3. PowerBI Report Usage (per workspace × report × user × month)
@@ -493,7 +553,10 @@ class Command(BaseCommand):
                     False, # deleted
                     safe_str(row.get('web_url')),
                     safe_str(row.get('item_service')),
+                    'UNVERIFIED',
                     group_id,
+                    self.organization_id,
+                    self.source_id,
                 ))
 
             self.stdout.write(f'Upserting {len(items_data)} items via raw SQL for maximum speed...')
@@ -505,8 +568,8 @@ class Command(BaseCommand):
                 datatype, column_type, expression, compiled_expression, properties_yaml, formatstring,
                 is_unused, connected_reports, connected_report_pages, connected_visuals,
                 connected_measures, connected_columns, connected_tables, deleted, web_url, service,
-                group_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                status, group_id, organization_id, integration_source_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(item_id) DO UPDATE SET
                 lineage_tag = EXCLUDED.lineage_tag,
                 item_name = EXCLUDED.item_name,
@@ -531,9 +594,14 @@ class Command(BaseCommand):
                 connected_columns = EXCLUDED.connected_columns,
                 connected_tables = EXCLUDED.connected_tables,
                 deleted = EXCLUDED.deleted,
+                deleted_at = NULL,
                 web_url = EXCLUDED.web_url,
                 service = EXCLUDED.service,
                 group_id = EXCLUDED.group_id
+            WHERE catalog_item.organization_id
+                      IS NOT DISTINCT FROM EXCLUDED.organization_id
+              AND catalog_item.integration_source_id
+                      IS NOT DISTINCT FROM EXCLUDED.integration_source_id
             """
             
             with connection.cursor() as cursor:
@@ -543,7 +611,13 @@ class Command(BaseCommand):
                     cursor.executemany(upsert_query, items_data[i:i + chunk_size])
 
             self.stdout.write('Marking obsolete items as deleted...')
-            Item.objects.exclude(item_id__in=seen_item_ids).update(deleted=True)
+            Item.objects.filter(
+                organization_id=self.organization_id,
+                integration_source_id=self.source_id,
+            ).exclude(item_id__in=seen_item_ids).update(
+                deleted=True,
+                deleted_at=Coalesce('deleted_at', Now()),
+            )
 
             self.stdout.write('Loading Network Graph...')
             df_graph = pd.read_csv(graph_csv)
@@ -569,7 +643,10 @@ class Command(BaseCommand):
                     edges_set.add((src_id, tgt_id))
 
             from catalog.services.network_classify import classify_edge
-            nodes_data = [(nid, name, grp) for nid, (name, grp) in nodes_by_id.items()]
+            nodes_data = [
+                (nid, name, grp, self.organization_id)
+                for nid, (name, grp) in nodes_by_id.items()
+            ]
             # Tag each edge with kind/level from its endpoint types (single
             # source of truth) so the SQLite path matches the Postgres COPY path.
             edges_data = []
@@ -577,7 +654,9 @@ class Command(BaseCommand):
                 s_type = (nodes_by_id.get(src) or ('', ''))[1]
                 t_type = (nodes_by_id.get(tgt) or ('', ''))[1]
                 kind, level = classify_edge(s_type, t_type)
-                edges_data.append((src, tgt, kind, level))
+                edges_data.append((
+                    src, tgt, kind, level, self.organization_id,
+                ))
 
             self.stdout.write(f'Inserting {len(nodes_data)} nodes and {len(edges_data)} edges via raw SQL...')
 
@@ -585,14 +664,24 @@ class Command(BaseCommand):
                 chunk_size = 2000
                 for i in range(0, len(nodes_data), chunk_size):
                     cursor.executemany(
-                        'INSERT INTO catalog_networknode (node_id, name, "group") VALUES (%s, %s, %s)'
-                        ' ON CONFLICT (node_id) DO NOTHING',
+                        'INSERT INTO catalog_networknode '
+                        '(node_id, name, "group", organization_id) '
+                        'VALUES (%s, %s, %s, %s)'
+                        ' ON CONFLICT (node_id) DO UPDATE SET '
+                        'name = excluded.name, "group" = excluded."group" '
+                        'WHERE catalog_networknode.organization_id '
+                        'IS NOT DISTINCT FROM excluded.organization_id',
                         nodes_data[i:i + chunk_size],
                     )
                 for i in range(0, len(edges_data), chunk_size):
                     cursor.executemany(
-                        'INSERT INTO catalog_networkedge (source, target, kind, level) VALUES (%s, %s, %s, %s)'
-                        ' ON CONFLICT (source, target) DO UPDATE SET kind = excluded.kind, level = excluded.level',
+                        'INSERT INTO catalog_networkedge '
+                        '(source, target, kind, level, organization_id) '
+                        'VALUES (%s, %s, %s, %s, %s)'
+                        ' ON CONFLICT (source, target) DO UPDATE SET '
+                        'kind = excluded.kind, level = excluded.level '
+                        'WHERE catalog_networkedge.organization_id '
+                        'IS NOT DISTINCT FROM excluded.organization_id',
                         edges_data[i:i + chunk_size],
                     )
 
@@ -600,25 +689,38 @@ class Command(BaseCommand):
         # for new items; never touches existing groups' curated governance).
         self.stdout.write('Syncing ItemGroups...')
         from catalog.services.item_groups import ensure_item_groups
+        require_grouping_commit_boundary()
         linked = ensure_item_groups(self.organization_id)
         self.stdout.write(f'  → {linked} items linked to groups.')
 
         # Calculate Summary
         self.stdout.write('Calculating Summary...')
-        total_measures = Item.objects.filter(item_type='PB_MEASURE', deleted=False).count()
-        unused_measures = Item.objects.filter(item_type='PB_MEASURE', is_unused=True, deleted=False).count()
-        total_columns = Item.objects.filter(item_type='PB_COLUMN', deleted=False).count()
-        unused_columns = Item.objects.filter(item_type='PB_COLUMN', is_unused=True, deleted=False).count()
-        total_reports = Item.objects.filter(item_type='PB_REPORT', deleted=False).count()
+        catalog = Item.objects.filter(organization_id=self.organization_id)
+        total_measures = catalog.filter(
+            item_type='PB_MEASURE', deleted=False).count()
+        unused_measures = catalog.filter(
+            item_type='PB_MEASURE', is_unused=True, deleted=False).count()
+        total_columns = catalog.filter(
+            item_type='PB_COLUMN', deleted=False).count()
+        unused_columns = catalog.filter(
+            item_type='PB_COLUMN', is_unused=True, deleted=False).count()
+        total_reports = catalog.filter(
+            item_type='PB_REPORT', deleted=False).count()
 
-        Summary.objects.all().delete()
-        Summary.objects.create(
-            total_measures=total_measures,
-            unused_measures=unused_measures,
-            total_columns=total_columns,
-            unused_columns=unused_columns,
-            total_reports=total_reports,
-            organization_id=self.organization_id,
-        )
+        with transaction.atomic():
+            Organization.objects.select_for_update().get(
+                pk=self.organization_id,
+            )
+            Summary.objects.filter(
+                organization_id=self.organization_id,
+            ).delete()
+            Summary.objects.create(
+                total_measures=total_measures,
+                unused_measures=unused_measures,
+                total_columns=total_columns,
+                unused_columns=unused_columns,
+                total_reports=total_reports,
+                organization_id=self.organization_id,
+            )
 
         self.stdout.write(self.style.SUCCESS('Successfully loaded all data from CSVs'))

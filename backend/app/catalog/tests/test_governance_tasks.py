@@ -14,13 +14,20 @@ the open-by-default feed) and the Slack alert.
 """
 import json
 import pytest
+from io import StringIO
 from unittest.mock import patch, MagicMock
 
-from django.db import IntegrityError, transaction
+from django.contrib.auth.models import Group
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
-from catalog.governance_tasks import generate_tasks
+from catalog.governance_tasks import generate_tasks, sync_group_metadata_tasks
 from catalog.models import (
-    Category, DataPerson, GovernanceTask, Item, ItemGroup, Organization,
+    Category, CustomUser, DataPerson, GovernanceTask, Item, ItemGroup,
+    Organization, OrganizationMembership,
 )
 
 
@@ -93,18 +100,29 @@ class TestTaskCreation:
         assert resp.status_code == 200
 
         tasks = GovernanceTask.objects.filter(item_group_id=gpk, state='open')
-        assert tasks.count() == 1
-        task = tasks.first()
+        expected_reasons = (
+            {'ATTENTION', 'NO_CATEGORY'}
+            if status == 'ATTENTION'
+            else {'DELETED'}
+        )
+        assert set(tasks.values_list('reason', flat=True)) == expected_reasons
+        task = tasks.get(reason=status)
         assert task.trigger_status == status
         # The two status-derived reasons deliberately share the status value.
         assert task.reason == status
 
-    def test_verified_creates_no_task(self, client, rw_user, item_with_org):
+    def test_verified_still_creates_missing_category_task(
+            self, client, rw_user, item_with_org):
         client.login(username='writer@example.com', password='testpass')
         gpk = item_with_org.item_group_id
         resp = _patch_group_status(client, gpk, 'VERIFIED')
         assert resp.status_code == 200
-        assert not GovernanceTask.objects.filter(item_group_id=gpk).exists()
+        assert set(
+            GovernanceTask.objects.filter(
+                item_group_id=gpk,
+                state=GovernanceTask.STATE_OPEN,
+            ).values_list('reason', flat=True)
+        ) == {GovernanceTask.REASON_NO_CATEGORY}
 
     def test_task_assigned_to_steward(self, client, rw_user, item_with_org):
         steward = DataPerson.objects.create(
@@ -119,7 +137,11 @@ class TestTaskCreation:
         resp = _patch_group_status(client, grp.pk, 'ATTENTION')
         assert resp.status_code == 200
 
-        task = GovernanceTask.objects.get(item_group=grp, state='open')
+        task = GovernanceTask.objects.get(
+            item_group=grp,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        )
         assert task.assignee_id == steward.id
         assert task.assignee_role == 'steward'
 
@@ -155,11 +177,11 @@ class TestTaskCreation:
         assert task.assignee_role == 'owner'
 
     def test_event_path_is_not_kind_scoped(self, org):
-        """The sweep is bounded to measure groups (see KIND_SCOPES); the event
-        path deliberately is not, so hand-flagging a table / report / dbt model
-        still raises a task for it."""
+        """Attention applies to every kind, including singleton assets."""
         from catalog.governance_tasks import sync_status_task
         grp = _singleton_group(org)
+        grp.status = 'ATTENTION'
+        grp.save(update_fields=['status'])
 
         task = sync_status_task(grp, 'ATTENTION', None)
 
@@ -171,16 +193,43 @@ class TestTaskCreation:
         client.login(username='writer@example.com', password='testpass')
         gpk = item_with_org.item_group_id
         _patch_group_status(client, gpk, 'ATTENTION')
-        task = GovernanceTask.objects.get(item_group_id=gpk, state='open')
+        task = GovernanceTask.objects.get(
+            item_group_id=gpk,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        )
         assert task.assignee_id is None
 
-    def test_repeat_flip_refreshes_the_same_task(self, client, rw_user, item_with_org):
-        """Landing on the same status twice refreshes the one open task for that
-        reason instead of spawning a second."""
+    def test_corrupt_cross_tenant_steward_is_never_routed(
+            self, client, rw_user, item_with_org):
+        other = Organization.objects.create(name='Neighbour')
+        foreign = DataPerson.objects.create(
+            name='Foreign steward', organization=other, is_steward=True,
+        )
+        group = item_with_org.item_group
+        ItemGroup.objects.filter(pk=group.pk).update(steward=foreign)
+        client.login(username='writer@example.com', password='testpass')
+
+        response = _patch_group_status(client, group.pk, 'ATTENTION')
+
+        assert response.status_code == 200
+        task = GovernanceTask.objects.get(
+            item_group_id=group.pk, reason='ATTENTION', state='open',
+        )
+        assert task.assignee_id is None
+        assert task.assignee_role is None
+
+    def test_condition_clear_then_relapse_opens_a_fresh_task(
+            self, client, rw_user, item_with_org):
+        """A resolved episode stays as audit history; relapse gets a new row."""
         client.login(username='writer@example.com', password='testpass')
         gpk = item_with_org.item_group_id
         _patch_group_status(client, gpk, 'ATTENTION')
-        first_id = GovernanceTask.objects.get(item_group_id=gpk, state='open').id
+        first_id = GovernanceTask.objects.get(
+            item_group_id=gpk,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        ).id
 
         _patch_group_status(client, gpk, 'VERIFIED')
         _patch_group_status(client, gpk, 'ATTENTION')
@@ -188,12 +237,13 @@ class TestTaskCreation:
         open_tasks = GovernanceTask.objects.filter(
             item_group_id=gpk, reason='ATTENTION', state='open')
         assert open_tasks.count() == 1
-        assert open_tasks.first().id == first_id
+        assert open_tasks.first().id != first_id
+        first = GovernanceTask.objects.get(pk=first_id)
+        assert first.state == GovernanceTask.STATE_DONE
+        assert first.closed_reason == GovernanceTask.CLOSED_RESOLVED
 
     def test_different_status_opens_its_own_reason(self, client, rw_user, item_with_org):
-        """`reason` is half the dedupe key, so ATTENTION -> DELETED leaves two
-        open tasks. Retiring the one that no longer applies is the sweep's job,
-        not the event path's — the event path only knows about the new status."""
+        """A status transition resolves the old episode and opens the new one."""
         client.login(username='writer@example.com', password='testpass')
         gpk = item_with_org.item_group_id
         _patch_group_status(client, gpk, 'ATTENTION')
@@ -201,7 +251,7 @@ class TestTaskCreation:
 
         reasons = set(GovernanceTask.objects.filter(item_group_id=gpk, state='open')
                       .values_list('reason', flat=True))
-        assert reasons == {'ATTENTION', 'DELETED'}
+        assert reasons == {'DELETED'}
 
         generate_tasks(item_with_org.organization, reasons=['ATTENTION'])
 
@@ -217,7 +267,7 @@ class TestTaskCreation:
         client.login(username='writer@example.com', password='testpass')
         gpk = item_with_org.item_group_id
         resp = client.patch(
-            f'/api/items/{item_with_org.item_id}/',
+            f'/api/item-groups/{gpk}/',
             data=json.dumps({'deleted': True}),
             content_type='application/json',
         )
@@ -256,6 +306,32 @@ class TestSweepCreation:
         # The title names the asset, not the group key.
         assert all('Revenue' in t.title for t in GovernanceTask.objects.all())
 
+    def test_command_requires_explicit_confirmation_for_broad_apply(self, org):
+        group = _singleton_group(org)
+        ItemGroup.objects.filter(pk=group.pk).update(status='ATTENTION')
+
+        args = (
+            'generate_governance_tasks',
+            '--org', str(org.pk),
+            '--reasons', 'ATTENTION',
+            '--kind-scope', 'all',
+        )
+        with pytest.raises(CommandError, match='--confirm-broad'):
+            call_command(*args, stdout=StringIO())
+        assert not GovernanceTask.objects.filter(item_group=group).exists()
+
+        preview_out = StringIO()
+        call_command(*args, '--dry-run', stdout=preview_out)
+        assert 'DRY RUN' in preview_out.getvalue()
+        assert not GovernanceTask.objects.filter(item_group=group).exists()
+
+        call_command(*args, '--confirm-broad', stdout=StringIO())
+        assert GovernanceTask.objects.filter(
+            item_group=group,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        ).exists()
+
     def test_second_run_creates_nothing(self, org):
         """Idempotence is the whole reason the sweep is a reconciler: an admin
         can press Generate as often as they like."""
@@ -281,6 +357,25 @@ class TestSweepCreation:
         assert task.assignee_id == owner.id
         assert task.assignee_role == 'owner'
 
+    def test_sweep_never_routes_to_a_cross_tenant_owner(self, org):
+        other = Organization.objects.create(name='Neighbour')
+        foreign = DataPerson.objects.create(
+            name='Foreign owner', organization=other, is_owner=True,
+        )
+        group = _measure_group(org)
+        ItemGroup.objects.filter(pk=group.pk).update(
+            ownership_person=foreign,
+        )
+
+        result = generate_tasks(org, reasons=['UNVERIFIED'])
+
+        task = GovernanceTask.objects.get(
+            item_group=group, reason='UNVERIFIED',
+        )
+        assert result['totals']['unassigned'] == 1
+        assert task.assignee_id is None
+        assert task.assignee_role is None
+
     def test_attention_routes_to_steward(self, org):
         grp = _measure_group(org)
         steward = _person(org, 'Sam Steward', is_steward=True)
@@ -295,9 +390,38 @@ class TestSweepCreation:
         assert task.assignee_id == steward.id
         assert task.assignee_role == 'steward'
 
-    def test_unverified_falls_back_to_steward_when_no_owner(self, org):
-        """Owner-first, but a measure with no owner still has to land somewhere —
-        the ordered-roles fallback is what stops it going unassigned."""
+    def test_source_obsolete_member_skips_hygiene_but_attention_still_routes(
+            self, org):
+        group = _measure_group(org)
+        owner = _person(org, 'Olivia Owner', is_owner=True)
+        steward = _person(org, 'Sam Steward', is_steward=True)
+        ItemGroup.objects.filter(pk=group.pk).update(
+            ownership_person=owner,
+            steward=steward,
+        )
+        Item.objects.filter(item_group=group).update(deleted=True)
+
+        hygiene = generate_tasks(
+            org, reasons=['UNVERIFIED', 'NO_CATEGORY'],
+        )
+        assert hygiene['totals']['target'] == 0
+        assert hygiene['totals']['created'] == 0
+
+        ItemGroup.objects.filter(pk=group.pk).update(status='ATTENTION')
+        attention = generate_tasks(org, reasons=['ATTENTION'])
+
+        assert attention['totals']['target'] == 1
+        task = GovernanceTask.objects.get(
+            item_group=group,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        )
+        assert task.assignee_id == steward.pk
+        assert task.assignee_role == 'steward'
+
+    def test_unverified_is_unassigned_when_no_owner(self, org):
+        """Routing is strict: a measure with no Owner remains unassigned even
+        when it has a Steward."""
         grp = _measure_group(org)
         steward = _person(org, 'Sam Steward', is_steward=True)
         grp.steward = steward
@@ -305,10 +429,10 @@ class TestSweepCreation:
 
         result = generate_tasks(org, reasons=['UNVERIFIED'])
 
-        assert result['reasons']['UNVERIFIED']['unassigned'] == 0
+        assert result['reasons']['UNVERIFIED']['unassigned'] == 1
         task = GovernanceTask.objects.get(item_group=grp, reason='UNVERIFIED')
-        assert task.assignee_id == steward.id
-        assert task.assignee_role == 'steward'
+        assert task.assignee_id is None
+        assert task.assignee_role is None
 
     def test_rerun_picks_up_ownership_added_later(self, org):
         """"Now that we have full ownership, re-run it" — assignees are
@@ -335,24 +459,64 @@ class TestSweepCreation:
         assert task.assignee_role == 'owner'
         assert GovernanceTask.objects.filter(item_group=grp, reason='UNVERIFIED').count() == 1
 
-    def test_singleton_is_outside_the_default_sweep_scope(self, org):
-        """Every non-measure item has its own singleton group; sweeping them
-        would mint tens of thousands of tasks nobody asked for, so the default
-        kind_scope is measures-only. Reaching them is a caller's explicit choice
-        (the Generate dialog's dropdown / --kind-scope), not a code change."""
+    def test_default_sweep_includes_singleton_attention(self, org):
+        """The default is all-assets so literal Attention coverage is complete."""
         grp = _singleton_group(org)
         assert grp.kind == ItemGroup.KIND_SINGLETON
         ItemGroup.objects.filter(pk=grp.pk).update(status='ATTENTION')
 
-        default_run = generate_tasks(org)
-        assert default_run['kind_scope'] == 'measure_name'
-        assert default_run['totals']['created'] == 0
-        assert not GovernanceTask.objects.filter(item_group=grp).exists()
+        default_run = generate_tasks(org, reasons=['ATTENTION'])
 
-        widened = generate_tasks(org, reasons=['ATTENTION'], kind_scope='all')
-        assert widened['reasons']['ATTENTION']['created'] == 1
+        assert default_run['kind_scope'] == 'all'
+        assert default_run['reasons']['ATTENTION']['created'] == 1
         assert GovernanceTask.objects.filter(
-            item_group=grp, reason='ATTENTION', state='open').exists()
+            item_group=grp,
+            reason='ATTENTION',
+            state='open',
+        ).exists()
+
+    @pytest.mark.parametrize('kind_scope', ['singleton', 'all'])
+    def test_reason_policy_still_limits_singleton_unverified(
+            self, org, kind_scope):
+        group = _singleton_group(org)
+        owner = _person(org, 'Singleton Owner', is_owner=True)
+        ItemGroup.objects.filter(pk=group.pk).update(
+            ownership_person=owner,
+        )
+
+        result = generate_tasks(
+            org,
+            reasons=['UNVERIFIED', 'NO_CATEGORY'],
+            kind_scope=kind_scope,
+        )
+
+        assert result['totals']['target'] == 1
+        assert result['totals']['created'] == 1
+        tasks = GovernanceTask.objects.filter(
+            item_group=group,
+            state=GovernanceTask.STATE_OPEN,
+        )
+        assert set(tasks.values_list('reason', flat=True)) == {
+            GovernanceTask.REASON_NO_CATEGORY,
+        }
+        assert set(tasks.values_list('assignee_role', flat=True)) == {'owner'}
+        assert set(tasks.values_list('assignee_id', flat=True)) == {owner.pk}
+
+    def test_metadata_helper_creates_singleton_category_work(self, org):
+        group = _singleton_group(org)
+
+        result = sync_group_metadata_tasks(
+            [group.pk],
+            create_missing_category=True,
+            create_missing_status=False,
+        )
+
+        assert result['created'] == 1
+        assert GovernanceTask.objects.filter(
+            item_group=group,
+            reason=GovernanceTask.REASON_NO_CATEGORY,
+            state=GovernanceTask.STATE_OPEN,
+        ).exists()
 
     def test_narrow_sweep_leaves_out_of_scope_tasks_alone(self, org):
         """Auto-close only applies inside the swept scope. A measures-only run
@@ -363,7 +527,9 @@ class TestSweepCreation:
         generate_tasks(org, reasons=['ATTENTION'], kind_scope='all')
         task = GovernanceTask.objects.get(item_group=grp, reason='ATTENTION')
 
-        result = generate_tasks(org, reasons=['ATTENTION'])
+        result = generate_tasks(
+            org, reasons=['ATTENTION'], kind_scope='measure_name',
+        )
 
         assert result['reasons']['ATTENTION']['closed'] == 0
         task.refresh_from_db()
@@ -410,6 +576,77 @@ class TestSweepCreation:
 @pytest.mark.django_db
 class TestSweepAutoClose:
     """Finished work leaves the board without anyone pressing Done."""
+
+    def test_empty_reason_selection_is_rejected_at_service_boundary(self, org):
+        with pytest.raises(ValueError, match='At least one'):
+            generate_tasks(org, reasons=[])
+
+    def test_empty_group_is_not_targeted_and_existing_work_is_closed(
+            self, org):
+        group = ItemGroup.objects.create(
+            group_key=f'{org.id}::preserved-empty',
+            kind=ItemGroup.KIND_MEASURE_NAME,
+            organization=org,
+            status='UNVERIFIED',
+        )
+        task = GovernanceTask.objects.create(
+            organization=org,
+            item_group=group,
+            reason=GovernanceTask.REASON_UNVERIFIED,
+            trigger_status='UNVERIFIED',
+            title='Verify preserved empty group',
+        )
+
+        result = generate_tasks(org, reasons=['UNVERIFIED'])
+
+        assert result['reasons']['UNVERIFIED']['target'] == 0
+        assert result['reasons']['UNVERIFIED']['created'] == 0
+        assert result['reasons']['UNVERIFIED']['closed'] == 1
+        task.refresh_from_db()
+        assert task.state == GovernanceTask.STATE_DONE
+        assert task.closed_reason == GovernanceTask.CLOSED_RESOLVED
+
+    def test_linking_item_into_preserved_group_creates_applicable_tasks(
+            self, org):
+        owner = _person(org, 'Preserved Owner', is_owner=True)
+        group = ItemGroup.objects.create(
+            group_key=f'{org.id}::preserved-reappeared',
+            kind=ItemGroup.KIND_MEASURE_NAME,
+            organization=org,
+            ownership_person=owner,
+            status='UNVERIFIED',
+        )
+        assert generate_tasks(
+            org, reasons=['UNVERIFIED', 'NO_CATEGORY'],
+        )['totals']['target'] == 0
+
+        # ETL inserts raw Item rows and the post-load linker attaches them.
+        Item.objects.bulk_create([
+            Item(
+                item_id='preserved-reappeared-item',
+                item_name='Preserved Reappeared',
+                item_type='PB_MEASURE',
+                group_id=group.group_key,
+                organization=org,
+                service='powerbi',
+            ),
+        ])
+        from catalog.services.item_groups import ensure_item_groups
+
+        ensure_item_groups(organization_id=org.id)
+
+        item = Item.objects.get(pk='preserved-reappeared-item')
+        assert item.item_group_id == group.pk
+        tasks = GovernanceTask.objects.filter(
+            item_group=group,
+            state=GovernanceTask.STATE_OPEN,
+        ).order_by('reason')
+        assert set(tasks.values_list('reason', flat=True)) == {
+            GovernanceTask.REASON_UNVERIFIED,
+            GovernanceTask.REASON_NO_CATEGORY,
+        }
+        assert set(tasks.values_list('assignee_id', flat=True)) == {owner.pk}
+        assert set(tasks.values_list('assignee_role', flat=True)) == {'owner'}
 
     def test_verifying_closes_the_unverified_task(self, org):
         grp = _measure_group(org)
@@ -463,6 +700,160 @@ class TestSweepAutoClose:
 
 
 @pytest.mark.django_db
+class TestDurableManualEpisodes:
+
+    def test_done_stays_dismissed_until_clear_then_relapse(self, org):
+        grp = _measure_group(org)
+        generate_tasks(org, reasons=['UNVERIFIED'])
+        first = GovernanceTask.objects.get(
+            item_group=grp, reason='UNVERIFIED', state='open',
+        )
+        first.state = GovernanceTask.STATE_DONE
+        first.closed_reason = GovernanceTask.CLOSED_MANUAL
+        first.completed_at = timezone.now()
+        first.save(update_fields=['state', 'closed_reason', 'completed_at'])
+
+        same_episode = generate_tasks(org, reasons=['UNVERIFIED'])
+        assert same_episode['totals']['created'] == 0
+        assert not GovernanceTask.objects.filter(
+            item_group=grp, reason='UNVERIFIED', state='open',
+        ).exists()
+
+        ItemGroup.objects.filter(pk=grp.pk).update(status='VERIFIED')
+        generate_tasks(org, reasons=['UNVERIFIED'])
+        first.refresh_from_db()
+        assert first.condition_cleared_at is not None
+
+        ItemGroup.objects.filter(pk=grp.pk).update(status='UNVERIFIED')
+        relapse = generate_tasks(org, reasons=['UNVERIFIED'])
+        assert relapse['totals']['created'] == 1
+        fresh = GovernanceTask.objects.get(
+            item_group=grp, reason='UNVERIFIED', state='open',
+        )
+        assert fresh.pk != first.pk
+
+    def test_null_org_groups_are_never_adopted_by_a_sweep(self, org):
+        ItemGroup.objects.create(
+            group_key='legacy-null', kind=ItemGroup.KIND_MEASURE_NAME,
+            organization=None, status='UNVERIFIED',
+        )
+
+        result = generate_tasks(org, reasons=['UNVERIFIED'])
+
+        assert result['totals']['target'] == 0
+        assert GovernanceTask.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestImmediateMetadataReconciliation:
+
+    def test_owner_change_reassigns_existing_unverified_task(
+            self, client, rw_user, org):
+        grp = _measure_group(org)
+        generate_tasks(org, reasons=['UNVERIFIED'])
+        task = GovernanceTask.objects.get(item_group=grp, reason='UNVERIFIED')
+        assert task.assignee_id is None
+        owner = _person(org, 'New Owner', is_owner=True)
+
+        client.login(username='writer@example.com', password='testpass')
+        response = client.patch(
+            f'/api/item-groups/{grp.pk}/',
+            data=json.dumps({'ownership_person': owner.pk}),
+            content_type='application/json',
+        )
+
+        assert response.status_code == 200
+        task.refresh_from_db()
+        assert task.assignee_id == owner.pk
+        assert task.assignee_role == 'owner'
+
+    def test_category_add_closes_and_later_removal_opens_fresh_task(
+            self, client, rw_user, org):
+        grp = _measure_group(org)
+        generate_tasks(org, reasons=['NO_CATEGORY'])
+        first = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        category = Category.objects.create(name='Finance', organization=org)
+        client.login(username='writer@example.com', password='testpass')
+
+        added = client.patch(
+            f'/api/item-groups/{grp.pk}/',
+            data=json.dumps({'category': category.pk}),
+            content_type='application/json',
+        )
+        assert added.status_code == 200
+        first.refresh_from_db()
+        assert first.state == GovernanceTask.STATE_DONE
+        assert first.closed_reason == GovernanceTask.CLOSED_RESOLVED
+
+        removed = client.patch(
+            f'/api/item-groups/{grp.pk}/',
+            data=json.dumps({'category': None}),
+            content_type='application/json',
+        )
+        assert removed.status_code == 200
+        fresh = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        assert fresh.pk != first.pk
+
+    @pytest.mark.parametrize(
+        'restore_status', ['VERIFIED', 'UNVERIFIED', 'ATTENTION'],
+    )
+    def test_deleted_status_immediately_suspends_category_task(
+            self, client, rw_user, org, restore_status):
+        grp = _measure_group(org)
+        generate_tasks(org, reasons=['NO_CATEGORY'])
+        first = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        client.login(username='writer@example.com', password='testpass')
+
+        deleted = _patch_group_status(client, grp.pk, 'DELETED')
+        assert deleted.status_code == 200
+        first.refresh_from_db()
+        assert first.state == GovernanceTask.STATE_DONE
+        assert first.closed_reason == GovernanceTask.CLOSED_RESOLVED
+
+        restored = _patch_group_status(client, grp.pk, restore_status)
+        assert restored.status_code == 200
+        fresh = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        assert fresh.pk != first.pk
+
+    def test_deleted_transition_clears_manual_category_episode(
+            self, org):
+        grp = _measure_group(org)
+        generate_tasks(org, reasons=['NO_CATEGORY'])
+        dismissed = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        dismissed.state = GovernanceTask.STATE_DONE
+        dismissed.closed_reason = GovernanceTask.CLOSED_MANUAL
+        dismissed.completed_at = timezone.now()
+        dismissed.save(
+            update_fields=['state', 'closed_reason', 'completed_at'],
+        )
+        from catalog.governance_tasks import sync_status_task
+
+        ItemGroup.objects.filter(pk=grp.pk).update(status='DELETED')
+        grp.refresh_from_db()
+        sync_status_task(grp, 'DELETED', notify=False)
+        dismissed.refresh_from_db()
+        assert dismissed.condition_cleared_at is not None
+
+        ItemGroup.objects.filter(pk=grp.pk).update(status='VERIFIED')
+        grp.refresh_from_db()
+        sync_status_task(grp, 'VERIFIED', notify=False)
+        fresh = GovernanceTask.objects.get(
+            item_group=grp, reason='NO_CATEGORY', state='open',
+        )
+        assert fresh.pk != dismissed.pk
+
+
+@pytest.mark.django_db
 class TestSweepNotifications:
     """A sweep must never post one Slack message per task."""
 
@@ -475,6 +866,27 @@ class TestSweepNotifications:
         assert result['totals']['created'] == 2
         mock_alert.assert_not_called()
         mock_digest.assert_not_called()
+
+    @patch('etl.hooks.slack.slack_alerts.send_slack_task_digest')
+    @patch('etl.hooks.slack.slack_alerts.send_slack_task_alert')
+    def test_reassigned_only_run_sends_one_digest(
+            self, mock_alert, mock_digest, org, slack_hook):
+        group = _measure_group(org)
+        generate_tasks(org, reasons=['UNVERIFIED'], notify=False)
+        owner = _person(org, 'Owner', is_owner=True)
+        ItemGroup.objects.filter(pk=group.pk).update(
+            ownership_person=owner,
+        )
+
+        result = generate_tasks(
+            org, reasons=['UNVERIFIED'], notify=True,
+        )
+
+        assert result['totals']['created'] == 0
+        assert result['totals']['closed'] == 0
+        assert result['totals']['reassigned'] == 1
+        mock_digest.assert_called_once()
+        mock_alert.assert_not_called()
 
     @patch('etl.hooks.slack.slack_alerts.send_slack_task_digest')
     @patch('etl.hooks.slack.slack_alerts.send_slack_task_alert')
@@ -491,13 +903,26 @@ class TestSweepNotifications:
 @pytest.mark.django_db
 class TestDoneAction:
 
-    def _open_task(self, client, item_with_org):
+    def _open_task(self, client, item_with_org, rw_user):
+        steward = DataPerson.objects.create(
+            name='Writer Steward',
+            organization=item_with_org.organization,
+            user=rw_user,
+            is_steward=True,
+        )
+        group = item_with_org.item_group
+        group.steward = steward
+        group.save(update_fields=['steward'])
         _patch_group_status(client, item_with_org.item_group_id, 'ATTENTION')
-        return GovernanceTask.objects.get(item_group_id=item_with_org.item_group_id, state='open')
+        return GovernanceTask.objects.get(
+            item_group_id=item_with_org.item_group_id,
+            reason=GovernanceTask.REASON_ATTENTION,
+            state=GovernanceTask.STATE_OPEN,
+        )
 
     def test_done_marks_and_hides(self, client, rw_user, item_with_org):
         client.login(username='writer@example.com', password='testpass')
-        task = self._open_task(client, item_with_org)
+        task = self._open_task(client, item_with_org, rw_user)
 
         resp = client.post(f'/api/tasks/{task.id}/done/')
         assert resp.status_code == 200
@@ -514,6 +939,18 @@ class TestDoneAction:
         # ...but it's still reachable via ?state=done.
         done_ids = [t['id'] for t in client.get('/api/tasks/?state=done').json()['results']]
         assert task.id in done_ids
+
+    def test_bulk_done_rejects_non_object_body(self, client, rw_user):
+        client.login(username='writer@example.com', password='testpass')
+
+        response = client.post(
+            '/api/tasks/bulk-done/',
+            data=json.dumps([]),
+            content_type='application/json',
+        )
+
+        assert response.status_code == 400
+        assert response.json()['error'] == 'Expected an object payload.'
 
 
 @pytest.mark.django_db
@@ -543,9 +980,12 @@ class TestTaskFeedApi:
         assert results == []
 
     def test_default_list_excludes_done_tasks(self, client, rw_user, org):
-        still_open = _bare_task(org, title='Open one')
+        me = DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        still_open = _bare_task(org, assignee=me, title='Open one')
         closed = _bare_task(org, reason='DELETED', title='Closed one',
-                            state='done', closed_reason='manual')
+                            assignee=me, state='done', closed_reason='manual')
 
         client.login(username='writer@example.com', password='testpass')
         ids = [t['id'] for t in client.get('/api/tasks/').json()['results']]
@@ -555,9 +995,14 @@ class TestTaskFeedApi:
         assert {still_open.id, closed.id} <= set(all_ids)
 
     def test_bulk_done_closes_the_given_ids(self, client, rw_user, org):
-        first = _bare_task(org, title='One')
-        second = _bare_task(org, reason='DELETED', title='Two')
-        untouched = _bare_task(org, reason='UNVERIFIED', title='Three')
+        me = DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        first = _bare_task(org, assignee=me, title='One')
+        second = _bare_task(org, assignee=me, reason='DELETED', title='Two')
+        untouched = _bare_task(
+            org, assignee=me, reason='UNVERIFIED', title='Three',
+        )
 
         client.login(username='writer@example.com', password='testpass')
         resp = client.post(
@@ -617,8 +1062,13 @@ class TestTaskFeedApi:
     def test_bulk_done_reports_requested_alongside_updated(self, client, rw_user, org):
         """`updated` alone can't be compared to what the user selected — an
         already-done task lowers it. Returning both lets the UI say so."""
-        open_task = _bare_task(org, title='Open')
-        already = _bare_task(org, reason='DELETED', title='Already done')
+        me = DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        open_task = _bare_task(org, assignee=me, title='Open')
+        already = _bare_task(
+            org, assignee=me, reason='DELETED', title='Already done',
+        )
         already.state = 'done'
         already.save(update_fields=['state'])
 
@@ -633,10 +1083,342 @@ class TestTaskFeedApi:
 
 
 @pytest.mark.django_db
+class TestTaskApiSecurity:
+
+    def test_nonadmin_cannot_widen_or_complete_someone_elses_task(
+            self, client, rw_user, org):
+        me = DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        other = _person(org, 'Other')
+        mine = _bare_task(org, assignee=me, title='Mine')
+        theirs = _bare_task(
+            org, assignee=other, reason='DELETED', title='Theirs',
+        )
+        client.login(username='writer@example.com', password='testpass')
+
+        listed = client.get('/api/tasks/?scope=all').json()['results']
+        assert [row['id'] for row in listed] == [mine.pk]
+        assert client.post(f'/api/tasks/{theirs.pk}/done/').status_code == 404
+        bulk = client.post(
+            '/api/tasks/bulk-done/',
+            data=json.dumps({'ids': [theirs.pk]}),
+            content_type='application/json',
+        )
+        assert bulk.json()['updated'] == 0
+        theirs.refresh_from_db()
+        assert theirs.state == GovernanceTask.STATE_OPEN
+
+    def test_done_rechecks_current_assignee_after_initial_selection(
+            self, client, rw_user, org):
+        """A stale pre-lock selection cannot authorize the former assignee."""
+        from catalog.views import GovernanceTaskViewSet
+
+        DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        other = _person(org, 'Other')
+        reassigned = _bare_task(
+            org, assignee=other, reason='DELETED', title='Reassigned',
+        )
+        client.login(username='writer@example.com', password='testpass')
+
+        # Simulate a row that passed an earlier assignee-scoped lookup before a
+        # concurrent metadata reconciliation reassigned it.
+        stale_scope = GovernanceTask.objects.filter(organization=org)
+        with patch.object(
+            GovernanceTaskViewSet,
+            '_action_queryset',
+            return_value=stale_scope,
+        ):
+            single = client.post(f'/api/tasks/{reassigned.pk}/done/')
+            bulk = client.post(
+                '/api/tasks/bulk-done/',
+                data=json.dumps({'ids': [reassigned.pk]}),
+                content_type='application/json',
+            )
+
+        assert single.status_code == 404
+        assert bulk.status_code == 200
+        assert bulk.json()['updated'] == 0
+        reassigned.refresh_from_db()
+        assert reassigned.state == GovernanceTask.STATE_OPEN
+
+    def test_unlinked_member_gets_empty_feed_and_identity_signal(
+            self, client, ro_user, org):
+        _bare_task(org, assignee=_person(org, 'Other'))
+        client.login(username='readonly@example.com', password='testpass')
+
+        assert client.get('/api/tasks/?scope=all').json()['results'] == []
+        summary = client.get('/api/tasks/summary/').json()
+        assert summary['identity_required'] is True
+        assert summary['total_open'] == 0
+        assert summary['mine_open'] == 0
+
+    def test_generic_task_crud_is_not_exposed(self, client, rw_user, org):
+        me = DataPerson.objects.create(
+            name='Writer', organization=org, user=rw_user,
+        )
+        task = _bare_task(org, assignee=me)
+        client.login(username='writer@example.com', password='testpass')
+
+        assert client.post(
+            '/api/tasks/',
+            data=json.dumps({'title': 'Forged'}),
+            content_type='application/json',
+        ).status_code == 405
+        assert client.patch(
+            f'/api/tasks/{task.pk}/',
+            data=json.dumps({'assignee': None}),
+            content_type='application/json',
+        ).status_code == 405
+        assert client.delete(f'/api/tasks/{task.pk}/').status_code == 405
+
+    def test_anonymous_and_orgless_callers_fail_closed(self, client, org):
+        anonymous = client.get('/api/tasks/')
+        assert anonymous.status_code in (401, 403)
+
+        orgless = CustomUser.objects.create_user(
+            username='orgless', email='orgless@example.com', password='testpass',
+        )
+        client.login(username=orgless.email, password='testpass')
+        assert client.get('/api/tasks/').status_code == 403
+        assert client.get('/api/items/').status_code == 403
+
+    def test_null_org_task_is_not_visible_even_to_admin(self, client, org):
+        admin = CustomUser.objects.create_user(
+            username='admin', email='admin@example.com', password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        linked = DataPerson.objects.create(
+            name='Admin', user=admin, organization=org,
+        )
+        visible = _bare_task(org, assignee=linked, title='Visible')
+        _bare_task(None, assignee=linked, reason='DELETED', title='Quarantined')
+        client.login(username=admin.email, password='testpass')
+
+        ids = [
+            row['id']
+            for row in client.get('/api/tasks/?scope=all').json()['results']
+        ]
+        assert ids == [visible.pk]
+
+    def test_company_page_tier_is_enforced_by_task_and_definition_apis(
+            self, client, org):
+        user = CustomUser.objects.create_user(
+            username='no-tier', email='no-tier@example.com', password='testpass',
+        )
+        OrganizationMembership.objects.create(user=user, organization=org)
+        client.login(username=user.email, password='testpass')
+
+        assert client.get('/api/tasks/').status_code == 403
+        assert client.get('/api/definitions/').status_code == 403
+
+        company, _ = Group.objects.get_or_create(name='Company')
+        user.groups.add(company)
+        assert client.get('/api/tasks/').status_code == 200
+        assert client.get('/api/definitions/').status_code == 200
+
+
+@pytest.mark.django_db
+class TestGenerateApiPreview:
+
+    def test_explicit_empty_reason_list_is_rejected_without_writes(
+            self, client, org):
+        admin = CustomUser.objects.create_user(
+            username='empty-reasons-admin',
+            email='empty-reasons-admin@example.com',
+            password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        _measure_group(org)
+        client.login(
+            username='empty-reasons-admin@example.com',
+            password='testpass',
+        )
+
+        response = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({'reasons': []}),
+            content_type='application/json',
+        )
+
+        assert response.status_code == 400
+        assert GovernanceTask.objects.count() == 0
+
+    @pytest.mark.parametrize('invalid_scope', ['', 0, False])
+    def test_provided_falsy_kind_scope_is_rejected(
+            self, client, org, invalid_scope):
+        admin = CustomUser.objects.create_user(
+            username=f'invalid-scope-{invalid_scope!r}',
+            email=f'invalid-scope-{str(invalid_scope).lower() or "blank"}@example.com',
+            password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        _measure_group(org)
+        client.force_login(admin)
+
+        response = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({'kind_scope': invalid_scope}),
+            content_type='application/json',
+        )
+
+        assert response.status_code == 400
+        assert GovernanceTask.objects.count() == 0
+
+    def test_generate_rejects_non_object_body(self, client, org):
+        admin = CustomUser.objects.create_user(
+            username='array-body-admin',
+            email='array-body-admin@example.com',
+            password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        client.force_login(admin)
+
+        response = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps([]),
+            content_type='application/json',
+        )
+
+        assert response.status_code == 400
+        assert response.json()['error'] == 'Expected an object payload.'
+
+    def test_broad_commit_requires_exact_signed_preview(self, client, org):
+        admin = CustomUser.objects.create_user(
+            username='admin', email='admin@example.com', password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        grp = _singleton_group(org)
+        ItemGroup.objects.filter(pk=grp.pk).update(status='ATTENTION')
+        client.login(username=admin.email, password='testpass')
+        base = {
+            'reasons': ['ATTENTION'],
+            'kind_scope': 'all',
+            'require_assignee': False,
+        }
+
+        no_preview = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps(base),
+            content_type='application/json',
+        )
+        assert no_preview.status_code == 400
+
+        preview = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({**base, 'dry_run': True}),
+            content_type='application/json',
+        )
+        assert preview.status_code == 200
+        token = preview.json()['preview_token']
+
+        mismatch = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({
+                **base,
+                'reasons': ['DELETED'],
+                'preview_token': token,
+            }),
+            content_type='application/json',
+        )
+        assert mismatch.status_code == 400
+
+        committed = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({**base, 'preview_token': token}),
+            content_type='application/json',
+        )
+        assert committed.status_code == 200
+        assert committed.json()['totals']['created'] == 1
+
+    def test_broad_commit_rejects_a_catalog_snapshot_that_widened(
+            self, client, org):
+        admin = CustomUser.objects.create_user(
+            username='snapshot-admin',
+            email='snapshot-admin@example.com',
+            password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=admin, organization=org, is_admin=True,
+        )
+        first = _singleton_group(org, 'dbt_first')
+        ItemGroup.objects.filter(pk=first.pk).update(status='ATTENTION')
+        client.login(username=admin.email, password='testpass')
+        options = {
+            'reasons': ['ATTENTION'],
+            'kind_scope': 'all',
+            'require_assignee': False,
+        }
+        preview = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({**options, 'dry_run': True}),
+            content_type='application/json',
+        )
+
+        second = _singleton_group(org, 'dbt_second')
+        ItemGroup.objects.filter(pk=second.pk).update(status='ATTENTION')
+        commit = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({
+                **options,
+                'preview_token': preview.json()['preview_token'],
+            }),
+            content_type='application/json',
+        )
+
+        assert commit.status_code == 409
+        assert commit.json()['code'] == 'preview_stale'
+        assert not GovernanceTask.objects.filter(
+            organization=org, reason='ATTENTION',
+        ).exists()
+
+    def test_all_scope_snapshot_avoids_a_monolithic_id_list(
+            self, org):
+        for index in range(3):
+            group = _singleton_group(org, f'boundary_{index}')
+            ItemGroup.objects.filter(pk=group.pk).update(status='ATTENTION')
+
+        with CaptureQueriesContext(connection) as queries:
+            generate_tasks(
+                org,
+                reasons=['ATTENTION'],
+                kind_scope='all',
+                dry_run=True,
+            )
+
+        sql = '\n'.join(query['sql'] for query in queries.captured_queries)
+        assert '"catalog_governancetask"."item_group_id" IN (' not in sql
+        assert '"catalog_itemgroup"."id" IN (' not in sql
+
+    def test_nonadmin_cannot_generate(self, client, rw_user, org):
+        client.login(username='writer@example.com', password='testpass')
+        response = client.post(
+            '/api/tasks/generate/',
+            data=json.dumps({'dry_run': True}),
+            content_type='application/json',
+        )
+        assert response.status_code == 403
+
+
+@pytest.mark.django_db
 class TestSlackTaskAlert:
 
     @patch('slack_sdk.WebClient')
-    def test_alert_tags_steward_handle(self, MockWebClient, item_with_org, slack_hook):
+    def test_alert_tags_steward_handle(
+            self, MockWebClient, item_with_org, slack_hook,
+            django_capture_on_commit_callbacks):
         mock_client = MagicMock()
         MockWebClient.return_value = mock_client
 
@@ -646,10 +1428,12 @@ class TestSlackTaskAlert:
         )
         grp = ItemGroup.objects.get(pk=item_with_org.item_group_id)
         grp.steward = steward
-        grp.save(update_fields=['steward'])
+        grp.status = 'ATTENTION'
+        grp.save(update_fields=['steward', 'status'])
 
         from catalog.governance_tasks import sync_status_task
-        task = sync_status_task(grp, 'ATTENTION', None)
+        with django_capture_on_commit_callbacks(execute=True):
+            task = sync_status_task(grp, 'ATTENTION', None)
 
         assert task is not None
         mock_client.chat_postMessage.assert_called_once()
@@ -658,14 +1442,19 @@ class TestSlackTaskAlert:
         assert 'governance task' in text.lower()
 
     @patch('slack_sdk.WebClient')
-    def test_no_handle_no_tag(self, MockWebClient, item_with_org, slack_hook):
+    def test_no_handle_no_tag(
+            self, MockWebClient, item_with_org, slack_hook,
+            django_capture_on_commit_callbacks):
         """Unassigned task posts an alert but no @handle line."""
         mock_client = MagicMock()
         MockWebClient.return_value = mock_client
 
         grp = ItemGroup.objects.get(pk=item_with_org.item_group_id)
+        grp.status = 'DELETED'
+        grp.save(update_fields=['status'])
         from catalog.governance_tasks import sync_status_task
-        sync_status_task(grp, 'DELETED', None)
+        with django_capture_on_commit_callbacks(execute=True):
+            sync_status_task(grp, 'DELETED', None)
 
         mock_client.chat_postMessage.assert_called_once()
         text = mock_client.chat_postMessage.call_args[1]['text']
@@ -674,6 +1463,8 @@ class TestSlackTaskAlert:
     def test_no_hook_skips_gracefully(self, item_with_org):
         """No active slack hook → task still created, no exception."""
         grp = ItemGroup.objects.get(pk=item_with_org.item_group_id)
+        grp.status = 'ATTENTION'
+        grp.save(update_fields=['status'])
         from catalog.governance_tasks import sync_status_task
         task = sync_status_task(grp, 'ATTENTION', None)
         assert task is not None

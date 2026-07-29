@@ -113,7 +113,10 @@ def test_chat_api_enqueues_task_and_creates_user_message(chat_user, monkeypatch)
     assert captured["path"] == "catalog.views.run_chat_event_sync"
     assert captured["args"][0] == session.id
     assert captured["args"][1] == "hello"
-    assert captured["kwargs"].get("timeout") == 300
+    # Organization.chat_timeout_seconds defaults to 180s. Django-Q gets a
+    # 30-second hard-kill grace period so the friendly in-agent timeout can
+    # finish first.
+    assert captured["kwargs"].get("timeout") == 210
 
 
 @override_settings(CACHES=LOCMEM)

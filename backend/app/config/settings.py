@@ -112,6 +112,12 @@ INTERNAL_IPS = [
 NPM_BIN_PATH = r"C:\Program Files\nodejs\npm.cmd"
 
 REST_FRAMEWORK = {
+    # API access is authenticated by default. Truly public endpoints (for
+    # example the tokenized Metrics Map share view) opt out explicitly with
+    # ``AllowAny`` at the view.
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
 }

@@ -5,14 +5,16 @@ matched back by group_pk (then group_id).
 """
 import csv
 import io
+from unittest.mock import patch
 
 import pytest
+from django.contrib.auth.models import Group
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from catalog.models import (
-    Category, DataPerson, Department, Item, ItemGroup,
-    Organization, OrganizationMembership, CustomUser,
+    Category, CustomUser, DataPerson, Department, GovernanceTask, Item,
+    ItemGroup, Organization, OrganizationMembership,
 )
 
 EXPORT_URL = '/api/governance/export-csv/'
@@ -29,6 +31,8 @@ def member(db, org):
     u = CustomUser.objects.create_user(
         username='govuser', email='gov@example.com', password='pw')
     OrganizationMembership.objects.create(user=u, organization=org)
+    company, _ = Group.objects.get_or_create(name='Company')
+    u.groups.add(company)
     return u
 
 
@@ -86,7 +90,7 @@ def _upload(client, rows, header=None):
 # --------------------------------------------------------------------------- #
 
 def test_export_requires_auth(db):
-    assert APIClient().get(EXPORT_URL).status_code == 401
+    assert APIClient().get(EXPORT_URL).status_code in (401, 403)
 
 
 def test_export_headers_and_one_row_per_group(client, group, people):
@@ -137,7 +141,19 @@ def test_export_is_org_scoped(client, group, db):
 # --------------------------------------------------------------------------- #
 
 def test_import_requires_auth(db):
-    assert APIClient().post(IMPORT_URL).status_code == 401
+    assert APIClient().post(IMPORT_URL).status_code in (401, 403)
+
+
+def test_dictionary_tier_is_required_for_csv_endpoints(db, org):
+    user = CustomUser.objects.create_user(
+        username='no-tier', email='no-tier@example.com', password='pw',
+    )
+    OrganizationMembership.objects.create(user=user, organization=org)
+    no_tier = APIClient()
+    no_tier.force_authenticate(user=user)
+
+    assert no_tier.get(EXPORT_URL).status_code == 403
+    assert no_tier.post(IMPORT_URL).status_code == 403
 
 
 def test_import_rejects_missing_file(client):
@@ -175,6 +191,23 @@ def test_unmatched_group_is_reported_not_created(client, group):
     assert ItemGroup.objects.count() == 1
 
 
+def test_duplicate_rows_for_one_group_reject_the_whole_import(
+        client, group, people):
+    alice, _ = people
+
+    response = _upload(client, [
+        {'group_pk': str(group.pk), 'status': 'VERIFIED'},
+        {'group_id': group.group_key, 'owner': alice.name},
+    ])
+
+    assert response.status_code == 400
+    assert response.json()['code'] == 'duplicate_group_rows'
+    group.refresh_from_db()
+    assert group.status == 'UNVERIFIED'
+    assert group.ownership_person_id is None
+    assert GovernanceTask.objects.count() == 0
+
+
 # --------------------------------------------------------------------------- #
 # Import — field application & rules
 # --------------------------------------------------------------------------- #
@@ -196,6 +229,47 @@ def test_full_happy_path(client, group, people, org):
     assert group.ownership_department_id == dept.id
     assert group.category_id == cat.id
     assert group.custom_description == 'hello'
+
+
+def test_bulk_status_import_reconciles_tasks_without_per_row_alerts(
+        client, group, org):
+    other_group = ItemGroup.objects.create(
+        group_key='gov::other',
+        kind=ItemGroup.KIND_SINGLETON,
+        organization=org,
+    )
+    Item.objects.create(
+        item_id='other-item',
+        item_name='Customer',
+        item_type='PB_TABLE',
+        service='powerbi',
+        organization=org,
+        item_group=other_group,
+    )
+
+    with patch(
+        'catalog.governance_tasks._send_task_alert_after_commit',
+    ) as send_alert:
+        response = _upload(client, [
+            {'group_pk': str(group.pk), 'status': 'ATTENTION'},
+            {'group_pk': str(other_group.pk), 'status': 'ATTENTION'},
+        ])
+
+    assert response.status_code == 200
+    assert response.json()['updated'] == 2
+    assert send_alert.call_count == 0
+    for target in (group, other_group):
+        target.refresh_from_db()
+        assert target.status == 'ATTENTION'
+        assert set(
+            GovernanceTask.objects.filter(
+                item_group=target,
+                state=GovernanceTask.STATE_OPEN,
+            ).values_list('reason', flat=True)
+        ) == {
+            GovernanceTask.REASON_ATTENTION,
+            GovernanceTask.REASON_NO_CATEGORY,
+        }
 
 
 def test_empty_cells_leave_values_unchanged(client, group, people):
@@ -231,7 +305,32 @@ def test_invalid_status_reported(client, group):
     assert group.status == 'UNVERIFIED'
 
 
-def test_ambiguous_name_reported(client, group, org):
+def test_import_cannot_restore_a_soft_deleted_group_by_status_alone(
+        client, group):
+    group.status = 'DELETED'
+    group.deleted = True
+    group.save(update_fields=['status', 'deleted'])
+    Item.objects.filter(item_group=group).update(
+        status='DELETED', deleted=True,
+    )
+
+    response = _upload(client, [{
+        'group_pk': str(group.pk),
+        'status': 'VERIFIED',
+    }])
+
+    assert response.status_code == 200
+    assert response.json()['updated'] == 0
+    assert len(response.json()['lifecycle_conflicts']) == 1
+    group.refresh_from_db()
+    item = Item.objects.get(item_group=group)
+    assert group.status == 'DELETED'
+    assert group.deleted is True
+    assert item.status == 'DELETED'
+    assert item.deleted is True
+
+
+def test_orgless_name_is_not_adopted_by_tenant_import(client, group, org):
     # Two same-name people in the SAME org are now impossible — that's exactly
     # what uniq_dataperson_name_org exists to prevent (it was the duplicate
     # Owner/Steward dropdown bug). The ambiguity branch is still reachable for
@@ -239,11 +338,10 @@ def test_ambiguous_name_reported(client, group, org):
     # org-less namesakes can coexist and `_resolve_named` falls back to them
     # when the org has no match. That's the case this guards.
     DataPerson.objects.create(name='Twin', is_owner=True, organization=None)
-    DataPerson.objects.create(name='Twin', is_owner=True, organization=None)
     resp = _upload(client, [{'group_pk': str(group.id), 'owner': 'Twin'}])
     data = resp.json()
     assert data['updated'] == 0
-    assert data['ambiguous'][0]['field'] == 'owner'
+    assert data['unmatched_values'][0]['field'] == 'owner'
     group.refresh_from_db()
     assert group.ownership_person_id is None
 

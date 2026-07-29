@@ -78,9 +78,10 @@ def _me_payload(user):
     # lets the Task Manager open on "my tasks" — the app otherwise knows who you
     # are but not which assets you own. None is a real state (an admin who owns
     # nothing), not an error.
-    from .access import resolve_data_person
+    from .access import resolve_data_person, resolve_org
 
-    dp = resolve_data_person(user)
+    active_org = mem.organization if mem and mem.organization else resolve_org(user)
+    dp = resolve_data_person(user, active_org)
     data_person = None
     if dp is not None:
         data_person = {
@@ -225,7 +226,14 @@ def _member_payload(membership, dp, request_user_id):
         "is_steward": dp.is_steward if dp else False,
         "is_other": dp.is_other if dp else False,
         "slack_handle": (dp.slack_handle if dp else "") or "",
-        "department_ids": list(dp.departments.values_list("id", flat=True)) if dp else [],
+        "department_ids": (
+            list(
+                dp.departments.filter(
+                    organization=membership.organization,
+                ).values_list("id", flat=True)
+            )
+            if dp else []
+        ),
     }
 
 
@@ -253,9 +261,9 @@ def org_members_view(request):
     user_ids = [m.user_id for m in memberships]
     dps = {
         dp.user_id: dp
-        for dp in DataPerson.objects.filter(user_id__in=user_ids).prefetch_related(
-            "departments"
-        )
+        for dp in DataPerson.objects.filter(
+            organization=org, user_id__in=user_ids,
+        ).prefetch_related("departments")
     }
     members = [
         _member_payload(m, dps.get(m.user_id), request.user.id) for m in memberships
@@ -371,7 +379,7 @@ def org_members_save_view(request):
     # for the admin to trip over on the retry.
     from django.db import transaction
 
-    from .access import DuplicateDataPersonName
+    from .access import CrossOrganizationDataPerson, DuplicateDataPersonName
 
     try:
         with transaction.atomic():
@@ -384,6 +392,8 @@ def org_members_save_view(request):
                       'Use a distinguishing name (e.g. add a surname or team).'},
             status=400,
         )
+    except CrossOrganizationDataPerson as exc:
+        return JsonResponse({"error": str(exc)}, status=409)
 
 
 def _save_member(request, org, data, edit_user, is_edit, email, password, name,
@@ -423,9 +433,10 @@ def _save_member(request, org, data, edit_user, is_edit, email, password, name,
     target_user.groups.set(chosen + other_groups)
 
     # Adopts a login-less namesake instead of creating a duplicate — see
-    # access.upsert_data_person for why that mattered. Raises
-    # DuplicateDataPersonName when the name belongs to somebody else; the caller
-    # turns that into a 400 and this transaction rolls back.
+    # Display names are not identity keys. A login-less namesake is reported as
+    # a conflict for deliberate linking instead of being silently claimed.
+    # The caller turns DuplicateDataPersonName into a 400 and this transaction
+    # rolls back.
     dp = upsert_data_person(
         target_user, org, name,
         is_owner=is_owner,

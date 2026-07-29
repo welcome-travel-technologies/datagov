@@ -1,12 +1,12 @@
 """
-Build the cross-tool bridge edges (dbt ↔ PowerBI) at table and column level.
+Build cross-tool bridge edges (dbt to PowerBI) at table and column level.
 
-This module owns the SQL I/O. The matching decision is delegated to
-``bridge_matching`` so it stays pure-python and unit-testable.
-
-Public entry point: :func:`build_cross_tool_bridges`.
+This module owns the SQL I/O. Matching decisions stay in ``bridge_matching``
+so they remain pure Python and unit-testable.
 """
 from typing import Callable, Optional
+
+from django.core.management.base import CommandError
 
 from .bridge_matching import (
     DbtModelKey,
@@ -15,66 +15,207 @@ from .bridge_matching import (
     iter_table_pairs,
 )
 from .network_classify import classify_edge
+from .load_scope import assert_incoming_identities_available
 
-# Bridges are deterministic by type: a table bridge (DBT_MODEL → PB_TABLE) is
-# model/asset-level; a column bridge (DBT_COLUMN → PB_COLUMN) is column-level.
-_TABLE_BRIDGE_KIND, _TABLE_BRIDGE_LEVEL = classify_edge('DBT_MODEL', 'PB_TABLE')
-_COLUMN_BRIDGE_KIND, _COLUMN_BRIDGE_LEVEL = classify_edge('DBT_COLUMN', 'PB_COLUMN')
+
+_TABLE_BRIDGE_KIND, _TABLE_BRIDGE_LEVEL = classify_edge(
+    'DBT_MODEL', 'PB_TABLE',
+)
+_COLUMN_BRIDGE_KIND, _COLUMN_BRIDGE_LEVEL = classify_edge(
+    'DBT_COLUMN', 'PB_COLUMN',
+)
 
 
 def _noop(_msg: str) -> None:  # pragma: no cover
     pass
 
 
-def build_cross_tool_bridges(
-    cursor,
-    org_id_literal: str,
-    write: Optional[Callable[[str], None]] = None,
-) -> dict:
-    """Replace the existing dbt → PBI bridge edges with a fresh set built by
-    the FQN-first matcher.
+class BridgeTenantCollision(RuntimeError):
+    """A globally unique graph key is already owned by another organization."""
 
-    Args:
-        cursor: An open Django DB cursor (caller manages the transaction).
-        org_id_literal: Either ``'NULL'`` or a stringified integer — interpolated
-            directly into SQL the same way the rest of the loaders do it.
-        write: Optional callable for status messages. Defaults to a noop.
 
-    Returns:
-        Dict with keys ``table_bridges`` and ``column_bridges`` (counts) plus
-        a per-reason breakdown under ``by_reason``.
-    """
-    write = write or _noop
+def _validated_organization_id(cursor, organization_id) -> int:
+    if isinstance(organization_id, bool):
+        raise ValueError('organization_id must be a positive integer.')
+    try:
+        organization_id = int(organization_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            'organization_id must be a positive integer.'
+        ) from exc
+    if organization_id <= 0:
+        raise ValueError('organization_id must be a positive integer.')
 
-    write('Building cross-tool bridge edges (dbt → PowerBI)...')
+    cursor.execute(
+        'SELECT 1 FROM catalog_organization WHERE id = %s;',
+        [organization_id],
+    )
+    if cursor.fetchone() is None:
+        raise ValueError(
+            f'Organization {organization_id} does not exist.'
+        )
+    return organization_id
 
-    # 1. Clean old bridge edges (DBT_* ↔ non-DBT_*).
+
+def _delete_existing_bridges(cursor, organization_id: int) -> None:
+    """Delete only bridge rows owned by the requested organization."""
     cursor.execute(r"""
         DELETE FROM catalog_networkedge
-        WHERE (source LIKE 'DBT\_%%' AND target NOT LIKE 'DBT\_%%')
-           OR (target LIKE 'DBT\_%%' AND source NOT LIKE 'DBT\_%%');
-    """)
+        WHERE organization_id = %s
+          AND (
+                (source LIKE 'DBT\_%%' AND target NOT LIKE 'DBT\_%%')
+             OR (target LIKE 'DBT\_%%' AND source NOT LIKE 'DBT\_%%')
+          );
+    """, [organization_id])
+    # Historical column bridges were not consistently tagged. Retain the
+    # endpoint-based cleanup, with exact-tenant predicates on both the edge and
+    # the Item subqueries.
     cursor.execute("""
         DELETE FROM catalog_networkedge
-        WHERE source IN (
-            SELECT 'DBT_COLUMN::' || item_id FROM catalog_item
-            WHERE item_type = 'DBT_COLUMN' AND deleted = FALSE
-        )
-        AND target IN (
-            SELECT 'PB_COLUMN::' || item_id FROM catalog_item
-            WHERE item_type = 'PB_COLUMN' AND deleted = FALSE
-        );
-    """)
+        WHERE organization_id = %s
+          AND source IN (
+              SELECT 'DBT_COLUMN::' || item_id FROM catalog_item
+              WHERE organization_id = %s
+                AND item_type = 'DBT_COLUMN'
+                AND deleted = FALSE
+          )
+          AND target IN (
+              SELECT 'PB_COLUMN::' || item_id FROM catalog_item
+              WHERE organization_id = %s
+                AND item_type = 'PB_COLUMN'
+                AND deleted = FALSE
+          );
+    """, [organization_id, organization_id, organization_id])
 
-    # 2. Load dbt models with the fields the matcher needs.
+
+def _preflight_graph_keys(
+    cursor,
+    organization_id: int,
+    planned_nodes: dict,
+    planned_edges: dict,
+) -> None:
+    """Reject foreign owners of legacy global graph keys before cleanup."""
+    try:
+        assert_incoming_identities_available(
+            organization_id=organization_id,
+            source_id=None,
+            node_ids=planned_nodes,
+            edges=planned_edges,
+        )
+    except CommandError as exc:
+        raise BridgeTenantCollision(
+            f'Cannot rebuild cross-tool bridges: {exc}'
+        ) from exc
+
+
+def _ensure_node(
+    cursor,
+    organization_id: int,
+    node_id: str,
+    name: str,
+    group: str,
+) -> None:
+    # The ownership read after INSERT closes the concurrent-insert race left
+    # between preflight and write.
     cursor.execute("""
-        SELECT item_id, item_name, database_name, schema_name, alias, table_name, dataset_id
+        INSERT INTO catalog_networknode (
+            node_id, name, "group", organization_id
+        )
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (node_id) DO NOTHING;
+    """, [node_id, name, group, organization_id])
+    cursor.execute("""
+        SELECT organization_id
+        FROM catalog_networknode
+        WHERE node_id = %s;
+    """, [node_id])
+    row = cursor.fetchone()
+    if row is None or row[0] != organization_id:
+        owner_id = row[0] if row else None
+        raise BridgeTenantCollision(
+            f'Graph node {node_id!r} was claimed by organization '
+            f'{owner_id!r} during bridge rebuild.'
+        )
+
+
+def _write_edge(
+    cursor,
+    organization_id: int,
+    source: str,
+    target: str,
+    reason: str,
+    kind: str,
+    level: str,
+    lineage_type,
+) -> None:
+    # Never let a global-key conflict update another tenant's row. Insert first,
+    # then update only the exact tenant. A zero-row update means a concurrent
+    # foreign claim and raises inside the caller's atomic transaction.
+    cursor.execute("""
+        INSERT INTO catalog_networkedge (
+            source, target, organization_id, bridge_reason,
+            kind, level, lineage_type
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (source, target) DO NOTHING;
+    """, [
+        source, target, organization_id, reason, kind, level, lineage_type,
+    ])
+    cursor.execute("""
+        UPDATE catalog_networkedge
+        SET bridge_reason = %s,
+            kind = %s,
+            level = %s,
+            lineage_type = %s
+        WHERE source = %s
+          AND target = %s
+          AND organization_id = %s;
+    """, [
+        reason, kind, level, lineage_type,
+        source, target, organization_id,
+    ])
+    if cursor.rowcount != 1:
+        cursor.execute("""
+            SELECT organization_id
+            FROM catalog_networkedge
+            WHERE source = %s AND target = %s;
+        """, [source, target])
+        row = cursor.fetchone()
+        owner_id = row[0] if row else None
+        raise BridgeTenantCollision(
+            f'Graph edge ({source!r}, {target!r}) was claimed by '
+            f'organization {owner_id!r} during bridge rebuild.'
+        )
+
+
+def build_cross_tool_bridges(
+    cursor,
+    organization_id: int,
+    write: Optional[Callable[[str], None]] = None,
+) -> dict:
+    """Replace one organization's dbt-to-PBI bridge edges.
+
+    ``organization_id`` is mandatory. The graph schema still uses global node
+    and edge keys, so this function rejects any planned key already owned by a
+    different organization before it deletes the caller's existing bridges.
+    The caller manages the surrounding transaction.
+    """
+    write = write or _noop
+    organization_id = _validated_organization_id(cursor, organization_id)
+    write('Building cross-tool bridge edges (dbt to PowerBI)...')
+
+    # Load candidates from the exact tenant. Identical names or FQNs in another
+    # organization must never influence matching.
+    cursor.execute("""
+        SELECT item_id, item_name, database_name, schema_name, alias,
+               table_name, dataset_id
         FROM catalog_item
-        WHERE service = 'dbt'
+        WHERE organization_id = %s
+          AND service = 'dbt'
           AND item_type = 'DBT_MODEL'
           AND table_name IS NOT NULL
           AND deleted = FALSE;
-    """)
+    """, [organization_id])
     dbt_rows = cursor.fetchall()
     dbt_models = [
         DbtModelKey(
@@ -85,29 +226,35 @@ def build_cross_tool_bridges(
             alias=alias,
             table_name=table_name,
         )
-        for (item_id, item_name, database_name, schema_name, alias, table_name, _ds) in dbt_rows
+        for (
+            item_id, item_name, database_name, schema_name, alias,
+            table_name, _dataset_id,
+        ) in dbt_rows
     ]
-    # dataset_id is needed for the column-level join below; keep a side map.
-    dbt_dataset_id_by_item: dict = {
-        item_id: ds for (item_id, _n, _db, _s, _a, _t, ds) in dbt_rows
+    dbt_dataset_id_by_item = {
+        item_id: dataset_id
+        for (
+            item_id, _name, _database, _schema, _alias, _table,
+            dataset_id,
+        ) in dbt_rows
     }
-    dbt_name_by_item: dict = {
-        item_id: name for (item_id, name, _db, _s, _a, _t, _ds) in dbt_rows
+    dbt_name_by_item = {
+        item_id: name
+        for (
+            item_id, name, _database, _schema, _alias, _table,
+            _dataset_id,
+        ) in dbt_rows
     }
 
-    if not dbt_models:
-        write('  No dbt models found for bridging.')
-        return {'table_bridges': 0, 'column_bridges': 0, 'by_reason': {}}
-
-    # 3. Load PowerBI tables with the bq_* triple.
     cursor.execute("""
         SELECT item_id, item_name, bq_project, bq_schema, bq_source_name
         FROM catalog_item
-        WHERE (service IS NULL OR service != 'dbt')
+        WHERE organization_id = %s
+          AND (service IS NULL OR service != 'dbt')
           AND item_type = 'PB_TABLE'
           AND item_name IS NOT NULL
           AND deleted = FALSE;
-    """)
+    """, [organization_id])
     pbi_rows = cursor.fetchall()
     pbi_tables = [
         PbiTableKey(
@@ -117,17 +264,18 @@ def build_cross_tool_bridges(
             bq_schema=bq_schema,
             bq_source_name=bq_source_name,
         )
-        for (item_id, item_name, bq_project, bq_schema, bq_source_name) in pbi_rows
+        for (
+            item_id, item_name, bq_project, bq_schema, bq_source_name,
+        ) in pbi_rows
     ]
-    pbi_name_by_item: dict = {item_id: name for (item_id, name, *_rest) in pbi_rows}
+    pbi_name_by_item = {
+        item_id: name
+        for item_id, name, *_rest in pbi_rows
+    }
 
-    if not pbi_tables:
-        write('  No PowerBI tables found for bridging.')
-        return {'table_bridges': 0, 'column_bridges': 0, 'by_reason': {}}
-
-    table_bridges = 0
-    column_bridges = 0
-    by_reason: dict = {}
+    planned_nodes = {}
+    planned_edges = {}
+    by_reason = {}
 
     for match in iter_table_pairs(pbi_tables, dbt_models):
         dbt_id = match.dbt_item_id
@@ -137,34 +285,26 @@ def build_cross_tool_bridges(
 
         src_node = f'DBT_MODEL::{dbt_id}'
         tgt_node = f'PB_TABLE::{pbi_id}'
+        planned_nodes[src_node] = (
+            dbt_name_by_item.get(dbt_id) or '', 'DBT_MODEL',
+        )
+        planned_nodes[tgt_node] = (
+            pbi_name_by_item.get(pbi_id) or '', 'PB_TABLE',
+        )
+        planned_edges[(src_node, tgt_node)] = (
+            reason, _TABLE_BRIDGE_KIND, _TABLE_BRIDGE_LEVEL, None,
+        )
 
-        cursor.execute(f"""
-            INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-            VALUES (%s, %s, 'DBT_MODEL', {org_id_literal})
-            ON CONFLICT (node_id) DO NOTHING;
-        """, [src_node, dbt_name_by_item.get(dbt_id) or ''])
-        cursor.execute(f"""
-            INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-            VALUES (%s, %s, 'PB_TABLE', {org_id_literal})
-            ON CONFLICT (node_id) DO NOTHING;
-        """, [tgt_node, pbi_name_by_item.get(pbi_id) or ''])
-        cursor.execute(f"""
-            INSERT INTO catalog_networkedge (source, target, organization_id, bridge_reason, kind, level)
-            VALUES (%s, %s, {org_id_literal}, %s, %s, %s)
-            ON CONFLICT (source, target) DO UPDATE SET
-                bridge_reason = EXCLUDED.bridge_reason,
-                kind = EXCLUDED.kind, level = EXCLUDED.level;
-        """, [src_node, tgt_node, reason, _TABLE_BRIDGE_KIND, _TABLE_BRIDGE_LEVEL])
-        table_bridges += 1
-
-        # Column-level bridge — same reason carried through.
         cursor.execute("""
             SELECT item_id, item_name
             FROM catalog_item
-            WHERE item_type = 'DBT_COLUMN'
+            WHERE organization_id = %s
+              AND item_type = 'DBT_COLUMN'
               AND dataset_id = %s
               AND deleted = FALSE;
-        """, [dbt_dataset_id_by_item.get(dbt_id)])
+        """, [
+            organization_id, dbt_dataset_id_by_item.get(dbt_id),
+        ])
         dbt_cols = cursor.fetchall()
         if not dbt_cols:
             continue
@@ -172,48 +312,78 @@ def build_cross_tool_bridges(
         cursor.execute("""
             SELECT item_id, item_name
             FROM catalog_item
-            WHERE item_type = 'PB_COLUMN'
+            WHERE organization_id = %s
+              AND item_type = 'PB_COLUMN'
               AND table_name = %s
               AND deleted = FALSE;
-        """, [pbi_name_by_item.get(pbi_id)])
+        """, [organization_id, pbi_name_by_item.get(pbi_id)])
         pbi_cols = cursor.fetchall()
         if not pbi_cols:
             continue
 
-        # Build name lookups for node-row inserts.
-        dbt_col_name_by_id = {cid: cname for cid, cname in dbt_cols}
-        pbi_col_name_by_id = {cid: cname for cid, cname in pbi_cols}
-
-        for dbt_col_id, pbi_col_id in iter_column_pairs(pbi_cols, dbt_cols):
+        dbt_col_name_by_id = {
+            column_id: name for column_id, name in dbt_cols
+        }
+        pbi_col_name_by_id = {
+            column_id: name for column_id, name in pbi_cols
+        }
+        for dbt_col_id, pbi_col_id in iter_column_pairs(
+            pbi_cols, dbt_cols,
+        ):
             col_src = f'DBT_COLUMN::{dbt_col_id}'
             col_tgt = f'PB_COLUMN::{pbi_col_id}'
-            cursor.execute(f"""
-                INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                VALUES (%s, %s, 'DBT_COLUMN', {org_id_literal})
-                ON CONFLICT (node_id) DO NOTHING;
-            """, [col_src, dbt_col_name_by_id.get(dbt_col_id) or ''])
-            cursor.execute(f"""
-                INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                VALUES (%s, %s, 'PB_COLUMN', {org_id_literal})
-                ON CONFLICT (node_id) DO NOTHING;
-            """, [col_tgt, pbi_col_name_by_id.get(pbi_col_id) or ''])
-            # The dbt model column feeds the PowerBI table column 1:1, so the
-            # cross-tool bridge is a column-level pass-through.
-            cursor.execute(f"""
-                INSERT INTO catalog_networkedge (source, target, organization_id, bridge_reason, kind, level, lineage_type)
-                VALUES (%s, %s, {org_id_literal}, %s, %s, %s, 'pass-through')
-                ON CONFLICT (source, target) DO UPDATE SET
-                    bridge_reason = EXCLUDED.bridge_reason,
-                    kind = EXCLUDED.kind, level = EXCLUDED.level,
-                    lineage_type = EXCLUDED.lineage_type;
-            """, [col_src, col_tgt, reason, _COLUMN_BRIDGE_KIND, _COLUMN_BRIDGE_LEVEL])
-            column_bridges += 1
+            planned_nodes[col_src] = (
+                dbt_col_name_by_id.get(dbt_col_id) or '', 'DBT_COLUMN',
+            )
+            planned_nodes[col_tgt] = (
+                pbi_col_name_by_id.get(pbi_col_id) or '', 'PB_COLUMN',
+            )
+            planned_edges[(col_src, col_tgt)] = (
+                reason, _COLUMN_BRIDGE_KIND, _COLUMN_BRIDGE_LEVEL,
+                'pass-through',
+            )
 
-    write(f'  → {table_bridges} table-level bridge edges created.')
-    write(f'  → {column_bridges} column-level bridge edges created.')
+    # Preflight every planned global key before the first destructive write.
+    _preflight_graph_keys(
+        cursor, organization_id, planned_nodes, planned_edges,
+    )
+    _delete_existing_bridges(cursor, organization_id)
+
+    for node_id, (name, group) in sorted(planned_nodes.items()):
+        _ensure_node(
+            cursor, organization_id, node_id, name, group,
+        )
+    for (source, target), edge in sorted(planned_edges.items()):
+        reason, kind, level, lineage_type = edge
+        _write_edge(
+            cursor, organization_id, source, target,
+            reason, kind, level, lineage_type,
+        )
+
+    table_bridges = sum(
+        1
+        for source, target in planned_edges
+        if source.startswith('DBT_MODEL::')
+        and target.startswith('PB_TABLE::')
+    )
+    column_bridges = sum(
+        1
+        for source, target in planned_edges
+        if source.startswith('DBT_COLUMN::')
+        and target.startswith('PB_COLUMN::')
+    )
+
+    if not dbt_models:
+        write('  No dbt models found for bridging.')
+    elif not pbi_tables:
+        write('  No PowerBI tables found for bridging.')
+    write(f'  -> {table_bridges} table-level bridge edges created.')
+    write(f'  -> {column_bridges} column-level bridge edges created.')
     if by_reason:
-        breakdown = ', '.join(f'{k}={v}' for k, v in sorted(by_reason.items()))
-        write(f'  → bridge reasons: {breakdown}')
+        breakdown = ', '.join(
+            f'{key}={value}' for key, value in sorted(by_reason.items())
+        )
+        write(f'  -> bridge reasons: {breakdown}')
 
     return {
         'table_bridges': table_bridges,

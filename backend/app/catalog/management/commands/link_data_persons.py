@@ -8,9 +8,10 @@
 ``DataPerson.user`` is the ONLY join between governance identity (who owns a
 measure) and authentication identity (who signed in) — see
 ``access.resolve_data_person``. Most rows don't have it set, which is why the
-Task Manager falls back to "pick your own name": without the link the app knows
-who you are but not which assets are yours. This command closes that gap in
-bulk, for the rows where the answer is not a guess.
+Task Manager cannot derive a non-admin's personal feed: without the link the app
+knows who signed in but not which governance identity they are. This command
+closes that gap in bulk for rows where the answer is not a guess; unresolved
+users get an explicit linking prompt rather than a browser-side identity picker.
 
 Why the matching bar is exact-and-unique
 ----------------------------------------
@@ -28,7 +29,7 @@ import csv
 import os
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from catalog.models import DataPerson, Organization, OrganizationMembership
 
@@ -74,7 +75,7 @@ class Command(BaseCommand):
 
         # Org members only: a login outside this org can never act here, so
         # linking it would create a dead reference that still trips the
-        # one-DataPerson-per-login constraint.
+        # one-DataPerson-per-org/login constraint.
         users = [
             m.user for m in OrganizationMembership.objects
             .filter(organization=org).select_related('user').order_by('user__email')
@@ -95,17 +96,17 @@ class Command(BaseCommand):
         else:
             plan, ambiguous, unmatched = self._auto_match(people, users)
 
-        plan, already, conflicts = self._reject_conflicts(plan)
+        plan, already, conflicts = self._reject_conflicts(plan, org)
         # Conflicts are printed inside UNMATCHED rather than as a fourth section:
         # from the reader's point of view they are simply rows that did not get
         # linked, and the CONFLICT marker says why. The summary counts them apart.
         unmatched.extend(conflicts)
 
         if apply and plan:
-            with transaction.atomic():
-                for person, user in plan:
-                    person.user = user
-                    person.save(update_fields=['user'])
+            plan, late_already, late_conflicts = self._apply_plan(plan, org)
+            already += late_already
+            conflicts.extend(late_conflicts)
+            unmatched.extend(late_conflicts)
 
         verb = 'LINK' if apply else 'PLAN'
         self._section('LINKED', len(plan), [
@@ -212,7 +213,7 @@ class Command(BaseCommand):
                     unmatched.append((subject, "— no DataPerson with that name in this org"))
         return plan, ambiguous, unmatched
 
-    def _reject_conflicts(self, plan):
+    def _reject_conflicts(self, plan, org):
         """Drop anything that would take a link away from someone.
 
         Four ways that happens, all of them a signal the data needs a human
@@ -228,7 +229,9 @@ class Command(BaseCommand):
         """
         taken = {
             dp.user_id: dp for dp in
-            DataPerson.objects.filter(user__isnull=False).select_related('user')
+            DataPerson.objects.filter(
+                organization=org, user__isnull=False,
+            ).select_related('user')
         }
         kept, conflicts, already = [], [], 0
         claimed_users, claimed_people = {}, {}
@@ -257,6 +260,98 @@ class Command(BaseCommand):
                 claimed_people[person.id] = user
                 kept.append((person, user))
         return kept, already, conflicts
+
+    def _apply_plan(self, plan, org):
+        """Lock and revalidate a previously computed plan before writing."""
+        from django.contrib.auth import get_user_model
+
+        person_ids = sorted({person.pk for person, _user in plan})
+        user_ids = sorted({user.pk for _person, user in plan})
+        applied, conflicts, already = [], [], 0
+
+        with transaction.atomic():
+            # Every command run takes identity and person locks in deterministic
+            # order. The plan was computed before this transaction and is never
+            # trusted as current state.
+            list(
+                get_user_model().objects.select_for_update()
+                .filter(pk__in=user_ids)
+                .order_by('pk')
+                .values_list('pk', flat=True)
+            )
+            locked_people = {
+                person.pk: person
+                for person in (
+                    DataPerson.objects.select_for_update()
+                    .filter(pk__in=person_ids)
+                    .order_by('pk')
+                )
+            }
+            existing_links = {
+                person.user_id: person
+                for person in (
+                    DataPerson.objects.select_for_update()
+                    .filter(organization=org, user_id__in=user_ids)
+                    .order_by('pk')
+                )
+            }
+            member_user_ids = set(
+                OrganizationMembership.objects.select_for_update()
+                .filter(organization=org, user_id__in=user_ids)
+                .values_list('user_id', flat=True)
+            )
+
+            for stale_person, user in plan:
+                person = locked_people.get(stale_person.pk)
+                subject = (
+                    f"  CONFLICT #{stale_person.pk} "
+                    f"{stale_person.name!r}"
+                )
+                if (
+                    person is None
+                    or person.organization_id != org.id
+                    or user.pk not in member_user_ids
+                ):
+                    conflicts.append((
+                        subject,
+                        "— person or login no longer belongs to the target organization",
+                    ))
+                    continue
+                if person.user_id == user.pk:
+                    already += 1
+                    continue
+                if person.user_id is not None:
+                    conflicts.append((
+                        subject,
+                        f"— person was linked to another login before apply "
+                        f"(wanted {user.email})",
+                    ))
+                    continue
+                current = existing_links.get(user.pk)
+                if current is not None and current.pk != person.pk:
+                    conflicts.append((
+                        subject,
+                        f"— {user.email} was linked to another person before apply",
+                    ))
+                    continue
+
+                person.user_id = user.pk
+                try:
+                    # Preserve the outer transaction if a non-cooperating
+                    # concurrent writer wins the database unique constraint.
+                    with transaction.atomic():
+                        person.save(update_fields=['user'])
+                except IntegrityError:
+                    conflicts.append((
+                        subject,
+                        f"— {user.email} was linked concurrently; no change made",
+                    ))
+                    person.user_id = None
+                    continue
+                existing_links[user.pk] = person
+                applied.append((person, user))
+
+        return applied, already, conflicts
 
     def _section(self, title, count, rows, style=None):
         self.stdout.write("")

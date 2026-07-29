@@ -92,6 +92,32 @@ def test_members_list_returns_members_and_support_data(admin_client, admin_user,
     )
 
 
+@pytest.mark.django_db
+def test_members_list_hides_cross_org_profile_departments(
+        admin_client, admin_user, org):
+    local = Department.objects.create(name="Local Finance", organization=org)
+    other_org = Organization.objects.create(name="Neighbour tenant")
+    foreign = Department.objects.create(
+        name="Foreign Secret Department",
+        organization=other_org,
+    )
+    profile = DataPerson.objects.create(
+        name="Org Admin", organization=org, user=admin_user,
+    )
+    profile.departments.add(local, foreign)
+
+    resp = admin_client.get("/api/org/members/")
+
+    assert resp.status_code == 200
+    member = next(
+        row for row in resp.json()["members"]
+        if row["user_id"] == admin_user.id
+    )
+    assert member["department_ids"] == [local.id]
+    assert foreign.id not in member["department_ids"]
+    assert "Foreign Secret Department" not in resp.content.decode()
+
+
 # ---- create ----------------------------------------------------------------
 
 @pytest.mark.django_db

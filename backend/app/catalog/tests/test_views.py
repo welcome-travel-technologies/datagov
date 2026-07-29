@@ -6,8 +6,9 @@ from unittest.mock import patch, MagicMock
 from django.test import TestCase, Client
 from django.contrib.auth.models import Group
 from catalog.models import (
-    CustomUser, Organization, OrganizationMembership, Summary, Item,
-    PowerBIReportUsage,
+    Category, CustomUser, DataPerson, Department, IntegrationSource, Item,
+    ItemGroup, Organization, OrganizationMembership, PowerBIReportUsage,
+    SourceRunLog, Summary,
 )
 
 
@@ -33,12 +34,14 @@ class ViewTests(TestCase):
         self.summary = Summary.objects.create(
             total_measures=10, unused_measures=2,
             total_columns=20, unused_columns=5,
-            total_reports=3
+            total_reports=3,
+            organization=self.org,
         )
         self.item = Item.objects.create(
             item_id="123",
             item_name="Sales",
-            item_type="SemanticModel"
+            item_type="SemanticModel",
+            organization=self.org,
         )
 
     # NOTE: the classic server-rendered pages (dashboard, dictionary, …) were
@@ -46,6 +49,7 @@ class ViewTests(TestCase):
     # were dropped; the API tests below are what back those screens.
 
     def test_api_summary(self):
+        self.client.login(username="jdoe@example.com", password="testpass")
         response = self.client.get('/api/summary/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['total_measures'], 10)
@@ -90,17 +94,350 @@ class TestItemAPINewFields:
 
 
 @pytest.mark.django_db
+class TestItemTenantIntegrity:
+
+    def test_corrupt_cross_tenant_group_link_is_hidden_and_cannot_be_mutated(
+            self, client, rw_user, item_with_org):
+        other = Organization.objects.create(name='Neighbour')
+        foreign_group = ItemGroup.objects.create(
+            group_key='foreign::group',
+            kind=ItemGroup.KIND_MEASURE_NAME,
+            organization=other,
+        )
+        Item.objects.filter(pk=item_with_org.pk).update(item_group=foreign_group)
+        client.login(username='writer@example.com', password='testpass')
+
+        assert client.get(
+            f'/api/items/{item_with_org.pk}/',
+        ).status_code == 404
+        listed_ids = {
+            row['item_id'] for row in client.get('/api/items/').json()['results']
+        }
+        assert item_with_org.pk not in listed_ids
+        assert client.patch(
+            f'/api/items/{item_with_org.pk}/',
+            data=json.dumps({'status': 'ATTENTION'}),
+            content_type='application/json',
+        ).status_code == 404
+        assert client.post(
+            f'/api/items/{item_with_org.pk}/set_primary/',
+        ).status_code == 404
+
+        foreign_group.refresh_from_db()
+        assert foreign_group.status == 'UNVERIFIED'
+        assert foreign_group.primary_item_id is None
+
+
+@pytest.mark.django_db
+class TestCatalogMutationSurfaceAndRbac:
+
+    @staticmethod
+    def _member(org, email, *, tier=None, admin=False):
+        user = CustomUser.objects.create_user(
+            username=email, email=email, password='testpass',
+        )
+        OrganizationMembership.objects.create(
+            user=user, organization=org, is_admin=admin,
+        )
+        if tier:
+            user.groups.add(Group.objects.get_or_create(name=tier)[0])
+        return user
+
+    def test_items_have_no_generic_create_put_or_destroy_and_patch_only_status(
+            self, client, rw_user, item_with_org):
+        client.login(username='writer@example.com', password='testpass')
+
+        assert client.post(
+            '/api/items/',
+            data=json.dumps({'item_id': 'injected'}),
+            content_type='application/json',
+        ).status_code == 405
+        assert client.put(
+            f'/api/items/{item_with_org.pk}/',
+            data=json.dumps({'status': 'VERIFIED'}),
+            content_type='application/json',
+        ).status_code == 405
+        assert client.delete(
+            f'/api/items/{item_with_org.pk}/',
+        ).status_code == 405
+
+        rejected = client.patch(
+            f'/api/items/{item_with_org.pk}/',
+            data=json.dumps({'item_name': 'Tampered'}),
+            content_type='application/json',
+        )
+        assert rejected.status_code == 400
+        item_with_org.refresh_from_db()
+        assert item_with_org.item_name == 'Revenue'
+
+    @patch('catalog.views.async_task')
+    def test_run_source_rejects_inactive_and_ambiguous_load_scope_before_queue(
+            self, async_task_mock, client, org):
+        admin = self._member(org, 'admin-source@example.com', admin=True)
+        inactive = IntegrationSource.objects.create(
+            organization=org,
+            name='Inactive Fabric',
+            source_type='powerbi_fabric',
+            is_active=False,
+        )
+        client.login(username=admin.email, password='testpass')
+
+        inactive_response = client.post(
+            f'/api/integrations/sources/{inactive.pk}/run/',
+        )
+
+        assert inactive_response.status_code == 400
+        assert 'Activate' in inactive_response.json()['error']
+        assert not SourceRunLog.objects.filter(source=inactive).exists()
+        async_task_mock.assert_not_called()
+
+        inactive.is_active = True
+        inactive.save(update_fields=['is_active'])
+        IntegrationSource.objects.create(
+            organization=org,
+            name='Duplicate Fabric',
+            source_type='powerbi_fabric',
+            is_active=True,
+        )
+
+        ambiguous_response = client.post(
+            f'/api/integrations/sources/{inactive.pk}/run/',
+        )
+
+        assert ambiguous_response.status_code == 400
+        assert 'multiple active sources' in ambiguous_response.json()['error']
+        assert not SourceRunLog.objects.filter(source=inactive).exists()
+        async_task_mock.assert_not_called()
+
+    def test_item_status_patch_needs_a_catalog_tier_and_primary_is_company_only(
+            self, client, org, item_with_org):
+        no_tier = self._member(org, 'none@example.com')
+        client.login(username=no_tier.email, password='testpass')
+        assert client.patch(
+            f'/api/items/{item_with_org.pk}/',
+            data=json.dumps({'status': 'ATTENTION'}),
+            content_type='application/json',
+        ).status_code == 403
+        client.logout()
+
+        analytics = self._member(
+            org, 'analytics@example.com', tier='Analytics',
+        )
+        client.login(username=analytics.email, password='testpass')
+        assert client.patch(
+            f'/api/items/{item_with_org.pk}/',
+            data=json.dumps({'status': 'ATTENTION'}),
+            content_type='application/json',
+        ).status_code == 200
+        assert client.post(
+            f'/api/items/{item_with_org.pk}/set_primary/',
+        ).status_code == 403
+        client.logout()
+
+        company = self._member(org, 'company@example.com', tier='Company')
+        client.login(username=company.email, password='testpass')
+        assert client.post(
+            f'/api/items/{item_with_org.pk}/set_primary/',
+        ).status_code == 200
+
+    def test_item_group_patch_is_payload_aware_by_tier(
+            self, client, org, item_with_org):
+        group = item_with_org.item_group
+        category = Category.objects.create(name='Finance', organization=org)
+
+        no_tier = self._member(org, 'none-group@example.com')
+        client.login(username=no_tier.email, password='testpass')
+        assert client.get(f'/api/item-groups/{group.pk}/').status_code == 403
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'status': 'ATTENTION'}),
+            content_type='application/json',
+        ).status_code == 403
+        client.logout()
+
+        analytics = self._member(
+            org, 'analytics-group@example.com', tier='Analytics',
+        )
+        client.login(username=analytics.email, password='testpass')
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'status': 'ATTENTION'}),
+            content_type='application/json',
+        ).status_code == 200
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'category': category.pk}),
+            content_type='application/json',
+        ).status_code == 403
+        client.logout()
+
+        company = self._member(
+            org, 'company-group@example.com', tier='Company',
+        )
+        client.login(username=company.email, password='testpass')
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'category': category.pk}),
+            content_type='application/json',
+        ).status_code == 200
+        group.refresh_from_db()
+        assert group.category_id == category.pk
+
+    def test_reference_crud_requires_company_and_people_writes_stay_admin_only(
+            self, client, org):
+        no_tier = self._member(org, 'none-reference@example.com')
+        client.login(username=no_tier.email, password='testpass')
+        for endpoint in ('departments', 'data-persons', 'categories'):
+            assert client.get(f'/api/{endpoint}/').status_code == 403
+        client.logout()
+
+        analytics = self._member(
+            org, 'analytics-reference@example.com', tier='Analytics',
+        )
+        client.login(username=analytics.email, password='testpass')
+        for endpoint in ('departments', 'data-persons', 'categories'):
+            assert client.get(f'/api/{endpoint}/').status_code == 403
+        client.logout()
+
+        company = self._member(
+            org, 'company-reference@example.com', tier='Company',
+        )
+        client.login(username=company.email, password='testpass')
+        for endpoint in ('departments', 'data-persons', 'categories'):
+            assert client.get(f'/api/{endpoint}/').status_code == 200
+        assert client.post(
+            '/api/departments/',
+            data=json.dumps({'name': 'Finance'}),
+            content_type='application/json',
+        ).status_code == 201
+        category = client.post(
+            '/api/categories/',
+            data=json.dumps({'name': 'Core'}),
+            content_type='application/json',
+        )
+        assert category.status_code == 201
+        assert client.post(
+            '/api/categories/',
+            data=json.dumps({'name': '  to BE deleted  '}),
+            content_type='application/json',
+        ).status_code == 400
+        assert client.patch(
+            f"/api/categories/{category.json()['id']}/",
+            data=json.dumps({'name': ' TO BE DELETED '}),
+            content_type='application/json',
+        ).status_code == 400
+        assert client.post(
+            '/api/data-persons/',
+            data=json.dumps({'name': 'Alice'}),
+            content_type='application/json',
+        ).status_code == 403
+
+    def test_data_person_normalized_name_errors_are_api_400s(
+            self, client, org):
+        admin = self._member(org, 'admin-people@example.com', admin=True)
+        client.login(username=admin.email, password='testpass')
+
+        created = client.post(
+            '/api/data-persons/',
+            data=json.dumps({'name': ' Alice '}),
+            content_type='application/json',
+        )
+        assert created.status_code == 201
+        alice = DataPerson.objects.get(pk=created.json()['id'])
+        assert alice.name == 'Alice'
+
+        duplicate = client.post(
+            '/api/data-persons/',
+            data=json.dumps({'name': '  aLiCe  '}),
+            content_type='application/json',
+        )
+        blank = client.post(
+            '/api/data-persons/',
+            data=json.dumps({'name': '   '}),
+            content_type='application/json',
+        )
+        bob = DataPerson.objects.create(name='Bob', organization=org)
+        rename = client.patch(
+            f'/api/data-persons/{bob.pk}/',
+            data=json.dumps({'name': ' ALICE '}),
+            content_type='application/json',
+        )
+
+        assert duplicate.status_code == 400
+        assert blank.status_code == 400
+        assert rename.status_code == 400
+        bob.refresh_from_db()
+        assert bob.name == 'Bob'
+
+    def test_data_person_duplicate_login_link_is_an_api_400(
+            self, client, org):
+        admin = self._member(org, 'admin-links@example.com', admin=True)
+        linked_user = self._member(org, 'linked@example.com')
+        first = DataPerson.objects.create(
+            name='First', organization=org, user=linked_user,
+        )
+        second = DataPerson.objects.create(name='Second', organization=org)
+        client.login(username=admin.email, password='testpass')
+
+        create = client.post(
+            '/api/data-persons/',
+            data=json.dumps({
+                'name': 'Duplicate link',
+                'user': linked_user.pk,
+            }),
+            content_type='application/json',
+        )
+        update = client.patch(
+            f'/api/data-persons/{second.pk}/',
+            data=json.dumps({'user': linked_user.pk}),
+            content_type='application/json',
+        )
+
+        assert create.status_code == 400
+        assert update.status_code == 400
+        assert 'user' in create.json()
+        assert 'user' in update.json()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert first.user_id == linked_user.pk
+        assert second.user_id is None
+
+    def test_data_person_representation_hides_cross_tenant_departments(
+            self, client, org):
+        admin = self._member(org, 'admin-m2m@example.com', admin=True)
+        local = Department.objects.create(name='Local', organization=org)
+        other = Organization.objects.create(name='Neighbour')
+        foreign = Department.objects.create(
+            name='Secret Department', organization=other,
+        )
+        person = DataPerson.objects.create(name='Alice', organization=org)
+        person.departments.add(local, foreign)
+        client.login(username=admin.email, password='testpass')
+
+        response = client.get(f'/api/data-persons/{person.pk}/')
+
+        assert response.status_code == 200
+        assert response.json()['departments'] == [local.pk]
+        assert response.json()['department_names'] == ['Local']
+        assert foreign.pk not in response.json()['departments']
+        assert 'Secret Department' not in response.content.decode()
+
+
+@pytest.mark.django_db
 class TestItemStatusSlackAlert:
     """Tests that PATCH status/deleted fires Slack alerts."""
 
     @patch('etl.hooks.slack.slack_alerts.send_slack_item_alert')
-    def test_patch_status_fires_slack(self, mock_alert, client, rw_user, item_with_org):
+    def test_patch_status_fires_slack(
+            self, mock_alert, client, rw_user, item_with_org,
+            django_capture_on_commit_callbacks):
         client.login(username='writer@example.com', password='testpass')
-        resp = client.patch(
-            f'/api/items/{item_with_org.item_id}/',
-            data=json.dumps({'status': 'VERIFIED'}),
-            content_type='application/json',
-        )
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.patch(
+                f'/api/items/{item_with_org.item_id}/',
+                data=json.dumps({'status': 'VERIFIED'}),
+                content_type='application/json',
+            )
         assert resp.status_code == 200
         mock_alert.assert_called_once()
         call_args = mock_alert.call_args
@@ -109,20 +446,24 @@ class TestItemStatusSlackAlert:
         assert call_args[0][4] == 'VERIFIED'  # new_value
 
     @patch('etl.hooks.slack.slack_alerts.send_slack_item_alert')
-    def test_patch_deleted_fires_slack(self, mock_alert, client, rw_user, item_with_org):
+    def test_item_level_deleted_is_rejected_without_side_effects(
+            self, mock_alert, client, rw_user, item_with_org,
+            django_capture_on_commit_callbacks):
         client.login(username='writer@example.com', password='testpass')
-        resp = client.patch(
-            f'/api/items/{item_with_org.item_id}/',
-            data=json.dumps({'deleted': True}),
-            content_type='application/json',
-        )
-        assert resp.status_code == 200
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.patch(
+                f'/api/items/{item_with_org.item_id}/',
+                data=json.dumps({'deleted': True}),
+                content_type='application/json',
+            )
+        assert resp.status_code == 400
         # Setting deleted=True also auto-changes status → DELETED, so the alert
         # fires twice (once for status, once for deleted).  Assert at least the
         # deleted call was made; call_args is always the most-recent call.
-        mock_alert.assert_called()
-        call_args = mock_alert.call_args
-        assert call_args[0][2] == 'deleted'
+        item_with_org.refresh_from_db()
+        assert item_with_org.deleted is False
+        assert item_with_org.status == 'UNVERIFIED'
+        mock_alert.assert_not_called()
 
     @patch('etl.hooks.slack.slack_alerts.send_slack_item_alert')
     def test_no_alert_when_status_unchanged(self, mock_alert, client, rw_user, item_with_org):
@@ -135,6 +476,54 @@ class TestItemStatusSlackAlert:
         )
         assert resp.status_code == 200
         mock_alert.assert_not_called()
+
+    def test_legacy_item_status_cannot_bypass_a_soft_deleted_group(
+            self, client, rw_user, item_with_org):
+        group = item_with_org.item_group
+        client.login(username='writer@example.com', password='testpass')
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'deleted': True}),
+            content_type='application/json',
+        ).status_code == 200
+
+        rejected = client.patch(
+            f'/api/items/{item_with_org.pk}/?include_deleted=true',
+            data=json.dumps({'status': 'VERIFIED'}),
+            content_type='application/json',
+        )
+
+        assert rejected.status_code == 400
+        group.refresh_from_db()
+        item_with_org.refresh_from_db()
+        assert group.deleted is True
+        assert group.status == 'DELETED'
+        assert item_with_org.deleted is True
+        assert item_with_org.status == 'DELETED'
+
+    def test_item_status_cannot_restore_a_soft_deleted_group(
+            self, client, rw_user, item_with_org):
+        group = item_with_org.item_group
+        client.login(username='writer@example.com', password='testpass')
+        assert client.patch(
+            f'/api/item-groups/{group.pk}/',
+            data=json.dumps({'deleted': True}),
+            content_type='application/json',
+        ).status_code == 200
+
+        rejected = client.patch(
+            f'/api/items/{item_with_org.pk}/?include_deleted=true',
+            data=json.dumps({'status': 'VERIFIED'}),
+            content_type='application/json',
+        )
+
+        assert rejected.status_code == 400
+        group.refresh_from_db()
+        item_with_org.refresh_from_db()
+        assert group.deleted is True
+        assert group.status == 'DELETED'
+        assert item_with_org.deleted is True
+        assert item_with_org.status == 'DELETED'
 
 
 @pytest.mark.django_db

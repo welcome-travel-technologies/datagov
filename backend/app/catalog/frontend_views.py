@@ -15,6 +15,7 @@ from django.db.models import Q
 
 from catalog.access import (
     GROUP_PERM_KEYS, ALL_PERM_KEYS, ASSIGNABLE_GROUPS, is_org_admin,
+    resolve_org,
 )
 from .models import Item
 
@@ -58,7 +59,7 @@ def get_user_permissions(user):
     # (Org Settings, Integrations) that no group unlocks. is_org_admin() is the
     # single admin predicate shared with the API gates. Editing in the dictionary
     # is open to any authenticated org member (no per-member read/write split).
-    if is_org_admin(user):
+    if is_org_admin(user, resolve_org(user)):
         for key in ALL_PERM_KEYS:
             perms[f'can_view_{key}'] = True
         perms['is_admin'] = True

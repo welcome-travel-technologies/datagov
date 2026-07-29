@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, Layers, Plus, Search, Trash2, X } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -10,6 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { SimpleSelect } from "@/components/ui/simple-select";
+import { useDebounced } from "@/lib/use-debounced";
+import { buildDefinitionCandidates } from "@/app/definitions/definition-assignment";
+import {
+  buildDefinitionCommitRequest,
+  buildDefinitionPreviewRequest,
+  definitionApplyContextKey,
+  definitionApplyPreviewAuthorizes,
+  definitionApplyResponseIsCurrent,
+  normalizeDefinitionApplyFields,
+} from "@/app/definitions/definition-apply";
 import {
   Dialog,
   DialogContent,
@@ -24,9 +34,9 @@ import {
   unwrapResults,
   type DataPerson,
   type Definition,
+  type DefinitionApplyField,
   type DefinitionApplyResult,
   type Department,
-  type Item,
 } from "@/lib/api";
 
 export default function DefinitionsPage() {
@@ -34,11 +44,12 @@ export default function DefinitionsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [definitionPreviewVersion, setDefinitionPreviewVersion] = useState(0);
   const [note, setNote] = useState<string | null>(null);
 
   const defsQ = useQuery({
     queryKey: ["definitions"],
-    queryFn: () => api.definitions.list({ limit: 1000 }),
+    queryFn: () => api.definitions.listAll({ limit: 1000 }),
   });
   const metaQ = useQuery({
     queryKey: ["definition-meta"],
@@ -55,14 +66,29 @@ export default function DefinitionsPage() {
     staleTime: 5 * 60_000,
   });
 
-  const definitions = unwrapResults<Definition>(defsQ.data);
+  const definitions = defsQ.data ?? [];
   const people = metaQ.data?.people ?? [];
   const departments = metaQ.data?.departments ?? [];
   const selected = definitions.find((d) => d.id === selectedId) ?? null;
 
+  function invalidateDefinitionPreview() {
+    setDefinitionPreviewVersion((version) => version + 1);
+  }
+
+  function handleAssignOpenChange(next: boolean) {
+    if (!next) invalidateDefinitionPreview();
+    setAssignOpen(next);
+  }
+
   function refresh() {
     qc.invalidateQueries({ queryKey: ["definitions"] });
     qc.invalidateQueries({ queryKey: ["definition-groups"] });
+    qc.invalidateQueries({ queryKey: ["definition-assign-search"] });
+    qc.invalidateQueries({ queryKey: ["dict-meta"] });
+    qc.invalidateQueries({ queryKey: ["dict-items"] });
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+    qc.invalidateQueries({ queryKey: ["tasks"] });
+    qc.invalidateQueries({ queryKey: ["tasks-summary"] });
   }
 
   const saveMut = useMutation({
@@ -78,6 +104,7 @@ export default function DefinitionsPage() {
       setNote("Definition deleted. Its measures kept their metadata.");
       refresh();
     },
+    onError: (e) => setNote(getApiErrorMessage(e, "Could not delete the definition.")),
   });
 
   return (
@@ -106,7 +133,20 @@ export default function DefinitionsPage() {
           <LoadingState label="Loading definitions…" />
         </Card>
       )}
-      {!defsQ.isLoading && definitions.length === 0 && (
+      {defsQ.isError && (
+        <Card>
+          <EmptyState
+            title="Could not load definitions"
+            hint={getApiErrorMessage(defsQ.error, "Refresh the page to try again.")}
+          />
+        </Card>
+      )}
+      {metaQ.isError && (
+        <div className="mb-4 rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err" role="alert">
+          {getApiErrorMessage(metaQ.error, "Could not load owners and departments.")}
+        </div>
+      )}
+      {!defsQ.isLoading && !defsQ.isError && definitions.length === 0 && (
         <Card>
           <EmptyState
             title="No definitions yet"
@@ -153,9 +193,14 @@ export default function DefinitionsPage() {
               definition={selected}
               people={people}
               departments={departments}
+              metadataPending={saveMut.isPending}
+              previewResetVersion={definitionPreviewVersion}
               onSave={(body) => saveMut.mutate({ id: selected.id, body })}
               onDelete={() => deleteMut.mutate(selected.id)}
-              onAssign={() => setAssignOpen(true)}
+              onAssign={() => {
+                invalidateDefinitionPreview();
+                setAssignOpen(true);
+              }}
               onApplied={(msg) => {
                 setNote(msg);
                 refresh();
@@ -179,10 +224,12 @@ export default function DefinitionsPage() {
       />
       {selected && (
         <AssignDialog
+          key={selected.id}
           open={assignOpen}
-          onOpenChange={setAssignOpen}
+          onOpenChange={handleAssignOpenChange}
           definition={selected}
           onDone={refresh}
+          onError={invalidateDefinitionPreview}
         />
       )}
     </div>
@@ -193,6 +240,8 @@ function DefinitionDetail({
   definition,
   people,
   departments,
+  metadataPending,
+  previewResetVersion,
   onSave,
   onDelete,
   onAssign,
@@ -201,6 +250,8 @@ function DefinitionDetail({
   definition: Definition;
   people: DataPerson[];
   departments: Department[];
+  metadataPending: boolean;
+  previewResetVersion: number;
   onSave: (body: Partial<Definition>) => void;
   onDelete: () => void;
   onAssign: () => void;
@@ -208,38 +259,194 @@ function DefinitionDetail({
 }) {
   const qc = useQueryClient();
   const [preview, setPreview] = useState<DefinitionApplyResult | null>(null);
+  const [previewSignature, setPreviewSignature] = useState<string | null>(null);
+  const [previewEpoch, setPreviewEpoch] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [applyFields, setApplyFields] = useState<DefinitionApplyField[]>([
+    "ownership_person",
+    "ownership_department",
+  ]);
+  const requestEpochRef = useRef(0);
 
   const groupsQ = useQuery({
     queryKey: ["definition-groups", definition.id],
     queryFn: () => api.definitions.groups(definition.id),
   });
   const groups = groupsQ.data ?? [];
+  const applyContextKey = definitionApplyContextKey({
+    definitionId: definition.id,
+    ownerId: definition.ownership_person ?? null,
+    departmentId: definition.ownership_department ?? null,
+    fields: applyFields,
+    groupIds: groups.map((group) => group.id),
+  });
+  const applyGuardKey = `${previewResetVersion}:${applyContextKey}`;
+  const currentGuardKeyRef = useRef(applyGuardKey);
+  if (currentGuardKeyRef.current !== applyGuardKey) {
+    currentGuardKeyRef.current = applyGuardKey;
+    requestEpochRef.current += 1;
+  }
+
+  function invalidatePreview(clearError = true) {
+    requestEpochRef.current += 1;
+    setPreview(null);
+    setPreviewSignature(null);
+    setPreviewEpoch(null);
+    if (clearError) setActionError(null);
+  }
+
+  const previewMatches =
+    definitionApplyPreviewAuthorizes({
+      dryRun: preview?.dry_run,
+      previewKey: previewSignature,
+      currentKey: applyGuardKey,
+      previewToken: preview?.preview_token,
+    }) && previewEpoch === requestEpochRef.current;
+
+  type ApplyRequest =
+    | {
+        mode: "preview";
+        signature: string;
+        epoch: number;
+        fields: DefinitionApplyField[];
+      }
+    | {
+        mode: "commit";
+        signature: string;
+        epoch: number;
+        fields: DefinitionApplyField[];
+        previewToken: string;
+      };
 
   const applyMut = useMutation({
-    mutationFn: (dry: boolean) => api.definitions.apply(definition.id, { dry_run: dry }),
-    onSuccess: (res) => {
-      if (res.dry_run) {
-        setPreview(res);
+    mutationFn: (request: ApplyRequest) =>
+      api.definitions.apply(
+        definition.id,
+        request.mode === "preview"
+          ? buildDefinitionPreviewRequest(request.fields)
+          : buildDefinitionCommitRequest(request.fields, request.previewToken),
+      ),
+    onSuccess: (res, request) => {
+      if (request.mode === "commit") {
+        invalidatePreview();
+        qc.invalidateQueries({ queryKey: ["definition-groups", definition.id] });
+        onApplied(
+          (res.updated ?? 0) === 0
+            ? "Nothing to change — every measure already matches."
+            : `Selected metadata applied to ${res.updated} measure group${res.updated === 1 ? "" : "s"}.`,
+        );
         return;
       }
-      setPreview(null);
-      qc.invalidateQueries({ queryKey: ["definition-groups", definition.id] });
-      onApplied(
-        res.updated === 0
-          ? "Nothing to change — every measure already matches."
-          : `Owner and department applied to ${res.updated} measure group${res.updated === 1 ? "" : "s"}.`,
-      );
+      if (
+        !definitionApplyResponseIsCurrent({
+          requestKey: request.signature,
+          currentKey: currentGuardKeyRef.current,
+          requestEpoch: request.epoch,
+          currentEpoch: requestEpochRef.current,
+        })
+      ) {
+        return;
+      }
+      setActionError(null);
+      if (res.dry_run !== true || !res.preview_token) {
+        invalidatePreview(false);
+        setActionError(
+          "The server did not authorize this preview. Preview again after the deployment is complete.",
+        );
+        return;
+      }
+      setPreview(res);
+      setPreviewSignature(request.signature);
+      setPreviewEpoch(request.epoch);
+    },
+    onError: (e, request) => {
+      if (
+        !definitionApplyResponseIsCurrent({
+          requestKey: request.signature,
+          currentKey: currentGuardKeyRef.current,
+          requestEpoch: request.epoch,
+          currentEpoch: requestEpochRef.current,
+        })
+      ) {
+        return;
+      }
+      invalidatePreview(false);
+      setActionError(getApiErrorMessage(e, "Could not apply definition metadata."));
     },
   });
   const unassignMut = useMutation({
     mutationFn: (groupId: number) => api.definitions.assign(definition.id, { remove: [groupId] }),
     onSuccess: () => {
+      invalidatePreview();
       qc.invalidateQueries({ queryKey: ["definition-groups", definition.id] });
       qc.invalidateQueries({ queryKey: ["definitions"] });
+      qc.invalidateQueries({ queryKey: ["dict-items"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["tasks-summary"] });
+    },
+    onError: (e) => {
+      invalidatePreview(false);
+      setActionError(getApiErrorMessage(e, "Could not remove this measure."));
     },
   });
 
-  const canApply = !!(definition.ownership_person || definition.ownership_department);
+  const normalizedFields = normalizeDefinitionApplyFields(applyFields);
+  const hasSelectedValue = normalizedFields.some((field) =>
+    field === "ownership_person"
+      ? !!definition.ownership_person
+      : !!definition.ownership_department,
+  );
+  const canApply =
+    groupsQ.isSuccess &&
+    normalizedFields.length > 0 &&
+    hasSelectedValue &&
+    !metadataPending;
+  const applyBlocker = metadataPending
+    ? "Wait for the owner or department change to finish before previewing."
+    : !groupsQ.isSuccess
+      ? "The exact measure membership must load before previewing."
+      : normalizedFields.length === 0
+        ? "Choose at least one field to apply."
+        : !hasSelectedValue
+          ? "Set a value for at least one selected field before previewing."
+          : null;
+
+  function toggleApplyField(field: DefinitionApplyField) {
+    invalidatePreview();
+    setApplyFields((current) =>
+      current.includes(field)
+        ? current.filter((candidate) => candidate !== field)
+        : [...current, field],
+    );
+  }
+
+  function startPreview() {
+    const epoch = requestEpochRef.current + 1;
+    requestEpochRef.current = epoch;
+    setPreview(null);
+    setPreviewSignature(null);
+    setPreviewEpoch(null);
+    setActionError(null);
+    applyMut.mutate({
+      mode: "preview",
+      signature: currentGuardKeyRef.current,
+      epoch,
+      fields: normalizeDefinitionApplyFields(applyFields),
+    });
+  }
+
+  function commitPreview() {
+    if (!previewMatches || !preview?.preview_token) return;
+    setActionError(null);
+    applyMut.mutate({
+      mode: "commit",
+      signature: currentGuardKeyRef.current,
+      epoch: requestEpochRef.current,
+      fields: normalizeDefinitionApplyFields(applyFields),
+      previewToken: preview.preview_token,
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -270,7 +477,11 @@ function DefinitionDetail({
           <Field label="Owner">
             <SimpleSelect
               value={definition.ownership_person ? String(definition.ownership_person) : ""}
-              onValueChange={(v) => onSave({ ownership_person: v ? Number(v) : null })}
+              disabled={metadataPending}
+              onValueChange={(v) => {
+                invalidatePreview();
+                onSave({ ownership_person: v ? Number(v) : null });
+              }}
               options={[
                 { value: "", label: "— none —" },
                 ...people.map((p) => ({ value: String(p.id), label: p.name })),
@@ -280,7 +491,11 @@ function DefinitionDetail({
           <Field label="Department">
             <SimpleSelect
               value={definition.ownership_department ? String(definition.ownership_department) : ""}
-              onValueChange={(v) => onSave({ ownership_department: v ? Number(v) : null })}
+              disabled={metadataPending}
+              onValueChange={(v) => {
+                invalidatePreview();
+                onSave({ ownership_department: v ? Number(v) : null });
+              }}
               options={[
                 { value: "", label: "— none —" },
                 ...departments.map((d) => ({ value: String(d.id), label: d.name })),
@@ -296,34 +511,66 @@ function DefinitionDetail({
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold">Inherit owner &amp; department</div>
             <div className="mt-0.5 text-[11px] text-faint">
-              Writes this definition&apos;s owner and department onto all {definition.group_count}{" "}
-              assigned measure group{definition.group_count === 1 ? "" : "s"}, replacing what they
+              Writes the selected metadata onto all {groups.length} assigned measure group
+              {groups.length === 1 ? "" : "s"}, replacing what they
               have. Fields left empty here are skipped, not cleared.
+            </div>
+            <div className="mt-2 flex flex-wrap gap-3 text-[12px]">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={applyFields.includes("ownership_person")}
+                  disabled={applyMut.isPending}
+                  onChange={() => toggleApplyField("ownership_person")}
+                  className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
+                />
+                Owner
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={applyFields.includes("ownership_department")}
+                  disabled={applyMut.isPending}
+                  onChange={() => toggleApplyField("ownership_department")}
+                  className="h-3.5 w-3.5 accent-[oklch(var(--welcome-teal))]"
+                />
+                Department
+              </label>
             </div>
           </div>
           <Button
             variant="outline"
             size="sm"
             disabled={!canApply || applyMut.isPending}
-            onClick={() => applyMut.mutate(true)}
+            onClick={startPreview}
           >
             Preview
           </Button>
           <Button
             variant="brand"
             size="sm"
-            disabled={!canApply || applyMut.isPending}
-            onClick={() => applyMut.mutate(false)}
+            disabled={!canApply || applyMut.isPending || !previewMatches}
+            onClick={commitPreview}
           >
             <ArrowDownToLine /> Apply
           </Button>
         </div>
-        {!canApply && (
+        {applyBlocker && (
           <div className="border-t border-line px-4 py-2 text-[11px] text-warn">
-            Set an owner or a department first — there is nothing to push down yet.
+            {applyBlocker}
           </div>
         )}
-        {preview && (
+        {canApply && !previewMatches && (
+          <div className="border-t border-line px-4 py-2 text-[11px] text-faint">
+            Preview the current owner, department, and membership before applying.
+          </div>
+        )}
+        {actionError && (
+          <div className="border-t border-err/30 bg-err/5 px-4 py-2 text-[12px] text-err" role="alert">
+            {actionError}
+          </div>
+        )}
+        {preview && previewMatches && (
           <div className="border-t border-line bg-panel2/50 px-4 py-2.5 text-[12px]">
             Would change <b>{preview.would_update}</b> of {preview.group_count} measure group
             {preview.group_count === 1 ? "" : "s"}.
@@ -345,7 +592,12 @@ function DefinitionDetail({
           <h3 className="text-[13px] font-bold uppercase tracking-wide">Measures</h3>
           <Badge variant="brand">{groups.length}</Badge>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onAssign}>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={applyMut.isPending}
+              onClick={onAssign}
+            >
               <Plus /> Assign measures
             </Button>
             <Button
@@ -363,6 +615,11 @@ function DefinitionDetail({
         </div>
         {groupsQ.isLoading ? (
           <LoadingState label="Loading measures…" />
+        ) : groupsQ.isError ? (
+          <EmptyState
+            title="Could not load assigned measures"
+            hint={getApiErrorMessage(groupsQ.error, "Refresh the page to try again.")}
+          />
         ) : groups.length === 0 ? (
           <EmptyState title="No measures assigned" hint="Use “Assign measures” to add some." />
         ) : (
@@ -387,7 +644,7 @@ function DefinitionDetail({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={unassignMut.isPending}
+                      disabled={unassignMut.isPending || applyMut.isPending}
                       onClick={() => unassignMut.mutate(g.id)}
                     >
                       <X /> Remove
@@ -434,8 +691,17 @@ function CreateDialog({
     onError: (e) => setError(getApiErrorMessage(e, "Could not create the definition.")),
   });
 
+  function handleOpenChange(next: boolean) {
+    if (!next) {
+      setName("");
+      setError(null);
+      mut.reset();
+    }
+    onOpenChange(next);
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New definition</DialogTitle>
@@ -452,7 +718,7 @@ function CreateDialog({
         />
         {error && <div className="text-[12px] text-err">{error}</div>}
         <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
           <Button
@@ -477,22 +743,32 @@ function AssignDialog({
   onOpenChange,
   definition,
   onDone,
+  onError,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   definition: Definition;
   onDone: () => void;
+  onError: () => void;
 }) {
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const search = useDebounced(q, 300);
+
+  useEffect(() => {
+    setQ("");
+    setPicked(new Set());
+    setError(null);
+  }, [definition.id]);
 
   const searchQ = useQuery({
-    queryKey: ["definition-assign-search", q],
+    queryKey: ["definition-assign-search", search],
     queryFn: () =>
-      api.items.list({
+      api.items.listAll({
         item_type: "PB_MEASURE",
-        search: q.trim() || undefined,
-        limit: 200,
+        search: search.trim() || undefined,
+        limit: 1000,
         ordering: "item_name",
       }),
     enabled: open,
@@ -500,31 +776,36 @@ function AssignDialog({
 
   // One row per measure group, not per instance — the group is what gets assigned.
   const candidates = useMemo(() => {
-    const rows = unwrapResults<Item>(searchQ.data);
-    const byGroup = new Map<number, { id: number; name: string; definition?: string | null }>();
-    for (const r of rows) {
-      const gid = r.group;
-      if (!gid || byGroup.has(gid)) continue;
-      byGroup.set(gid, {
-        id: gid,
-        name: r.item_name,
-        definition: (r as unknown as { definition_name?: string | null }).definition_name ?? null,
-      });
-    }
-    return [...byGroup.values()];
+    return buildDefinitionCandidates(searchQ.data ?? []);
   }, [searchQ.data]);
 
   const mut = useMutation({
     mutationFn: () => api.definitions.assign(definition.id, { add: [...picked] }),
     onSuccess: () => {
       setPicked(new Set());
+      setQ("");
+      setError(null);
       onOpenChange(false);
       onDone();
     },
+    onError: (e) => {
+      onError();
+      setError(getApiErrorMessage(e, "Could not assign the selected measures."));
+    },
   });
 
+  function handleOpenChange(next: boolean) {
+    if (!next) {
+      setQ("");
+      setPicked(new Set());
+      setError(null);
+      mut.reset();
+    }
+    onOpenChange(next);
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Assign measures to “{definition.name}”</DialogTitle>
@@ -547,6 +828,11 @@ function AssignDialog({
         <div className="max-h-[45vh] overflow-y-auto rounded-md border border-line">
           {searchQ.isLoading ? (
             <LoadingState label="Searching…" />
+          ) : searchQ.isError ? (
+            <EmptyState
+              title="Could not search measures"
+              hint={getApiErrorMessage(searchQ.error, "Try again.")}
+            />
           ) : candidates.length === 0 ? (
             <EmptyState title="No measures found" />
           ) : (
@@ -578,11 +864,21 @@ function AssignDialog({
             ))
           )}
         </div>
+        <div className="text-[11px] text-faint">
+          {searchQ.isFetching
+            ? "Loading all matching measure groups…"
+            : `${candidates.length.toLocaleString()} matching measure group${candidates.length === 1 ? "" : "s"}`}
+        </div>
+        {error && (
+          <div className="rounded-md border border-err/40 bg-err/5 px-3 py-2 text-[12px] text-err" role="alert">
+            {error}
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2">
           <span className="text-[12px] text-faint">{picked.size} selected</span>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            <Button variant="outline" size="sm" onClick={() => handleOpenChange(false)}>
               Cancel
             </Button>
             <Button

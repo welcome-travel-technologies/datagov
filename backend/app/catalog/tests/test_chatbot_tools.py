@@ -6,6 +6,18 @@ from catalog.bigquery_tools import make_bigquery_tools, validate_read_only_sql
 from catalog.models import Item, NetworkEdge, NetworkNode, OrganizationMembership
 from catalog.powerbi_tools import make_powerbi_tools
 from catalog.tools import get_agent, get_dbt_bigquery_lineage, get_dbt_sql
+from catalog.tools.organization_scope import bind_organization_read_tool
+
+
+@pytest.fixture(autouse=True)
+def _test_google_api_key(monkeypatch):
+    """Agent construction validates provider configuration eagerly.
+
+    These tests only inspect prompts/tool registration and never make a model
+    request, so a non-secret test key keeps them independent of developer and
+    CI environment variables.
+    """
+    monkeypatch.setenv('GOOGLE_API_KEY', 'test-only-not-a-real-key')
 
 
 def _registered_tool_names(agent):
@@ -140,7 +152,9 @@ def test_search_pb_columns_can_scope_to_measure_dataset(org):
 
     from catalog.tools import search_pb_columns
 
-    output = search_pb_columns(query='date', dataset_id='dataset_a', workspace_id='workspace_a')
+    output = bind_organization_read_tool(
+        search_pb_columns, org,
+    )(query='date', dataset_id='dataset_a', workspace_id='workspace_a')
     assert "DAX Reference: 'Calendar'[Date]" in output
     assert 'Dataset B' not in output
 
@@ -185,7 +199,7 @@ def test_get_dbt_sql_returns_full_sql(org):
         expression='select * from raw.orders',
     )
 
-    output = get_dbt_sql('stg_orders')
+    output = bind_organization_read_tool(get_dbt_sql, org)('stg_orders')
     assert 'Name: stg_orders' in output
     assert '```sql' in output
     assert 'select * from raw.orders' in output
@@ -201,7 +215,9 @@ def test_get_dbt_bigquery_lineage_reports_cross_system_edge(org):
     )
     NetworkEdge.objects.create(source='DBT_MODEL::m1', target='PB_TABLE::t1', organization=org)
 
-    output = get_dbt_bigquery_lineage('DBT_MODEL::m1')
+    output = bind_organization_read_tool(
+        get_dbt_bigquery_lineage, org,
+    )('DBT_MODEL::m1')
     assert 'DBT ↔ BigQuery/BI lineage for stg_orders' in output
     assert 'stg_orders (DBT_MODEL) → orders_table (PB_TABLE)' in output
 
@@ -521,7 +537,9 @@ def test_get_pb_measure_schema_collapses_copies_to_group_primary(org):
         'EXTERNALMEASURE("Failed Quotes", INTEGER, "DirectQuery to AS - Zoe")',
     )
 
-    out = get_pb_measure_schema('Failed Quotes')
+    out = bind_organization_read_tool(
+        get_pb_measure_schema, org,
+    )('Failed Quotes')
 
     assert '## Measure: **Failed Quotes**' in out
     assert 'DISTINCTCOUNT' in out                 # the primary's real DAX
@@ -544,7 +562,9 @@ def test_get_pb_measure_schema_falls_back_to_top_priority_without_primary(org):
         name='Cutoff Rate', connected_reports=3,
     )
 
-    out = get_pb_measure_schema('Cutoff Rate')
+    out = bind_organization_read_tool(
+        get_pb_measure_schema, org,
+    )('Cutoff Rate')
 
     assert '## Measure: **Cutoff Rate**' in out
     assert 'SUM(FactA[failed])' in out            # the more-used member wins
@@ -611,7 +631,9 @@ def test_pb_usage_analytics_report_mode_lists_measures(org):
     _usage_measure(org, 'm_mar', 'Margin', [('rep_sales', 'Sales Report')], visuals=5)
     _usage_measure(org, 'm_other', 'Headcount', [('rep_hr', 'HR Report')])
 
-    out = get_pb_usage_analytics(report_name='Sales Report')
+    out = bind_organization_read_tool(
+        get_pb_usage_analytics, org,
+    )(report_name='Sales Report')
 
     assert 'Report usage: **Sales Report**' in out
     assert 'Measures used in this report (2)' in out
@@ -633,7 +655,9 @@ def test_pb_usage_analytics_measure_mode_lists_reports(org):
     _usage_measure(org, 'm_b', 'Revenue', [('r3', 'Finance Report')],
                    dataset='Finance')
 
-    out = get_pb_usage_analytics(measure_name='Revenue')
+    out = bind_organization_read_tool(
+        get_pb_usage_analytics, org,
+    )(measure_name='Revenue')
 
     assert 'Measure usage: **Revenue**' in out
     assert 'Reports using this measure (3)' in out
@@ -656,7 +680,7 @@ def test_pb_usage_analytics_overview_ranks_and_flags_unused(org):
     _usage_measure(org, 'mid', 'Margin', [('rep1', 'Sales Report')], visuals=4)
     _usage_measure(org, 'dead', 'Legacy KPI', [])    # unused
 
-    out = get_pb_usage_analytics()
+    out = bind_organization_read_tool(get_pb_usage_analytics, org)()
 
     assert 'PowerBI usage analytics' in out
     assert 'Top' in out and 'measures by report coverage' in out
@@ -675,7 +699,9 @@ def test_pb_usage_analytics_workspace_filter(org):
     _usage_measure(org, 'a', 'Alpha', [('r1', 'Rep One')], workspace='Commercial')
     _usage_measure(org, 'b', 'Beta', [('r2', 'Rep Two')], workspace='Operations')
 
-    out = get_pb_usage_analytics(workspace='Commercial')
+    out = bind_organization_read_tool(
+        get_pb_usage_analytics, org,
+    )(workspace='Commercial')
     assert 'Alpha' in out
     assert 'Beta' not in out
 
@@ -683,7 +709,9 @@ def test_pb_usage_analytics_workspace_filter(org):
 @pytest.mark.django_db
 def test_pb_usage_analytics_unknown_report_is_honest(org):
     from catalog.tools import get_pb_usage_analytics
-    out = get_pb_usage_analytics(report_name='Nope')
+    out = bind_organization_read_tool(
+        get_pb_usage_analytics, org,
+    )(report_name='Nope')
     assert 'No PowerBI report matches' in out
 
 

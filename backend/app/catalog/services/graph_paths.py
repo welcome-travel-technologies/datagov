@@ -16,11 +16,24 @@ from typing import Optional
 from django.db import connection
 
 from ..models import Item, NetworkEdge
+from ..tools.organization_scope import require_bound_organization_id
 
 
 PB_TABLE = 'PB_TABLE'
 PB_COLUMN = 'PB_COLUMN'
 DEFAULT_MAX_DEPTH = 5
+
+
+def _item_objects():
+    return Item.objects.filter(
+        organization_id=require_bound_organization_id(),
+    )
+
+
+def _edge_objects():
+    return NetworkEdge.objects.filter(
+        organization_id=require_bound_organization_id(),
+    )
 
 
 @dataclass
@@ -52,7 +65,7 @@ def _hash_of(node_id: str) -> str:
 
 def _table_for_measure(measure_node_id: str) -> Optional[str]:
     edge = (
-        NetworkEdge.objects
+        _edge_objects()
         .filter(target=measure_node_id, source__startswith=f'{PB_TABLE}::')
         .first()
     )
@@ -61,7 +74,7 @@ def _table_for_measure(measure_node_id: str) -> Optional[str]:
 
 def _table_for_column(column_node_id: str) -> Optional[str]:
     edge = (
-        NetworkEdge.objects
+        _edge_objects()
         .filter(target=column_node_id, source__startswith=f'{PB_TABLE}::')
         .first()
     )
@@ -70,7 +83,7 @@ def _table_for_column(column_node_id: str) -> Optional[str]:
 
 def _columns_of_table(table_node_id: str, dataset_id: str) -> list:
     column_node_ids = list(
-        NetworkEdge.objects
+        _edge_objects()
         .filter(source=table_node_id, target__startswith=f'{PB_COLUMN}::')
         .values_list('target', flat=True)
     )
@@ -78,7 +91,7 @@ def _columns_of_table(table_node_id: str, dataset_id: str) -> list:
         return []
     item_ids = [_hash_of(c) for c in column_node_ids]
     valid = set(
-        Item.objects
+        _item_objects()
         .filter(item_id__in=item_ids, dataset_id=dataset_id)
         .values_list('item_id', flat=True)
     )
@@ -99,6 +112,7 @@ def find_relationship_path(
     invokes USERELATIONSHIP, so callers should refuse live DAX (or warn) when
     `inactive_hops` is non-empty.
     """
+    require_bound_organization_id()
     if not measure_node_id or not dim_column_node_id or not dataset_id:
         return PathResult(False, reason='Missing required identifiers.')
 
@@ -148,12 +162,15 @@ def _bfs_postgres(start_columns, target_columns, dataset_id, max_depth):
     """Recursive CTE: undirected walk on PB_COLUMN -> PB_COLUMN edges scoped
     to columns whose Item.dataset_id matches. Cycle-guarded via path array.
     Returns the list of node_ids of the shortest path, or [] if none."""
+    organization_id = require_bound_organization_id()
     sql = """
     WITH RECURSIVE
       ds_columns AS (
         SELECT 'PB_COLUMN::' || item_id AS node_id
         FROM   catalog_item
-        WHERE  item_type = 'PB_COLUMN' AND dataset_id = %(dataset_id)s
+        WHERE  item_type = 'PB_COLUMN'
+          AND  dataset_id = %(dataset_id)s
+          AND  organization_id = %(organization_id)s
       ),
       rel_edges AS (
         SELECT e.source, e.target
@@ -162,6 +179,7 @@ def _bfs_postgres(start_columns, target_columns, dataset_id, max_depth):
         JOIN   ds_columns tc ON tc.node_id = e.target
         WHERE  e.source LIKE 'PB_COLUMN::%%'
           AND  e.target LIKE 'PB_COLUMN::%%'
+          AND  e.organization_id = %(organization_id)s
       ),
       walk AS (
         SELECT  c::text AS node, 0 AS depth, ARRAY[c::text] AS path
@@ -188,6 +206,7 @@ def _bfs_postgres(start_columns, target_columns, dataset_id, max_depth):
     with connection.cursor() as cur:
         cur.execute(sql, {
             'dataset_id': dataset_id,
+            'organization_id': organization_id,
             'start_cols': list(start_columns),
             'target_cols': list(target_columns),
             'max_depth': max_depth,
@@ -198,13 +217,13 @@ def _bfs_postgres(start_columns, target_columns, dataset_id, max_depth):
 
 def _bfs_python(start_columns, target_columns, dataset_id, max_depth):
     dataset_column_ids = {
-        f'PB_COLUMN::{x}' for x in Item.objects.filter(
+        f'PB_COLUMN::{x}' for x in _item_objects().filter(
             item_type='PB_COLUMN', dataset_id=dataset_id,
         ).values_list('item_id', flat=True)
     }
     if not dataset_column_ids:
         return []
-    edges = NetworkEdge.objects.filter(
+    edges = _edge_objects().filter(
         source__in=dataset_column_ids, target__in=dataset_column_ids,
     ).values_list('source', 'target')
     adj: dict[str, set[str]] = {}
@@ -240,7 +259,9 @@ def _bfs_python(start_columns, target_columns, dataset_id, max_depth):
 
 def _label_columns(node_ids: list) -> list:
     item_ids = [_hash_of(n) for n in node_ids]
-    by_id = {i.item_id: i for i in Item.objects.filter(item_id__in=item_ids)}
+    by_id = {
+        i.item_id: i for i in _item_objects().filter(item_id__in=item_ids)
+    }
     out = []
     for n in node_ids:
         item = by_id.get(_hash_of(n))
@@ -253,7 +274,9 @@ def _label_columns(node_ids: list) -> list:
 
 def _build_result(path_node_ids: list) -> PathResult:
     item_ids = [_hash_of(n) for n in path_node_ids]
-    by_id = {i.item_id: i for i in Item.objects.filter(item_id__in=item_ids)}
+    by_id = {
+        i.item_id: i for i in _item_objects().filter(item_id__in=item_ids)
+    }
     labels = _label_columns(path_node_ids)
 
     hops: list[PathHop] = []

@@ -48,8 +48,10 @@ def build_context(org, *, client=None, scope_ids=None) -> str:
     org + scope (live API calls are slow). Empty when nothing is selected."""
     if client is None or not scope_ids:
         return ''
-    org_id = getattr(org, 'id', 'x')
-    key = f'asst_ctx_bq_{org_id}_{scope_key(scope_ids)}'
+    org_id = getattr(org, 'pk', None)
+    if org_id is None:
+        return ''
+    key = f'asst_ctx_bq_v2_{org_id}_{scope_key(scope_ids)}'
     return cached_context(key, lambda: _build(client, scope_ids))
 
 

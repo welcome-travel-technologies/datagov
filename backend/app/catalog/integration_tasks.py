@@ -11,6 +11,8 @@ from django.utils import timezone
 from django.core.management import call_command
 from django.core.cache import cache
 
+from catalog.services.pipeline_lock import static_etl_files_lock
+
 
 class WorkflowCancelled(Exception):
     """Raised when a user requests cancellation of a workflow run."""
@@ -160,21 +162,44 @@ def run_source_task(source_id, triggered_by='manual'):
         raise_if_cancelled()
 
         # ── Step 1 & 2: Extract + Transform ──────────────────────────────────
+        from catalog.services.load_scope import require_exact_load_scope
         from etl.sources.registry import get_source
+
+        require_exact_load_scope(
+            source.organization_id,
+            source.pk,
+            expected_source_types={source.source_type},
+        )
         src = get_source(source)
 
         # Use registry-provided ETL dir and load command — no hardcoded source_type
         etl_dir = src.__class__.get_etl_dir()
-        src.extract(etl_dir=etl_dir, log=log)
-        raise_if_cancelled()
+        with static_etl_files_lock():
+            try:
+                # Remove residue from a hard-killed prior owner only after we
+                # have proved no live pipeline is using the shared workspace.
+                _cleanup_local_files(log)
+                src.extract(etl_dir=etl_dir, log=log)
+                raise_if_cancelled()
 
-        # ── Step 3: Load into Django DB ───────────────────────────────────────
-        log(f'\n[{timezone.now().isoformat()}] Loading data into Django database...')
-        out = io.StringIO()
-        call_command(src.load_command, organization_id=source.organization_id,
-                     source_id=source.pk, stdout=out)
-        log(out.getvalue())
-        raise_if_cancelled()
+                # ── Step 3: Load into Django DB ───────────────────────────────
+                log(
+                    f'\n[{timezone.now().isoformat()}] '
+                    'Loading data into Django database...'
+                )
+                out = io.StringIO()
+                call_command(
+                    src.load_command,
+                    organization_id=source.organization_id,
+                    source_id=source.pk,
+                    stdout=out,
+                )
+                log(out.getvalue())
+                raise_if_cancelled()
+            finally:
+                # Cleanup is part of ownership: releasing before this point
+                # could delete a newly-started worker's static ETL files.
+                _cleanup_local_files(log)
 
         run_log.status = 'success'
         log(f'\n[{timezone.now().isoformat()}] ✅ Source run completed successfully.')
@@ -202,13 +227,10 @@ def run_source_task(source_id, triggered_by='manual'):
         except Exception:
             pass
 
-        # ── Step 4: Clean up local ETL files ─────────────────────────────────
-        _cleanup_local_files(log)
-
-        # ── Step 5: Clean up old run logs ─────────────────────────────────────
+        # ── Step 4: Clean up old run logs ─────────────────────────────────────
         _cleanup_old_run_logs(source, log)
 
-        # ── Step 6: Send Slack alert ──────────────────────────────────────────
+        # ── Step 5: Send Slack alert ──────────────────────────────────────────
         send_slack_alert(source, run_log)
 
     return run_log.status
@@ -461,10 +483,6 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
         log(f'  Triggered by : {triggered_by}')
         log('')
 
-        # Sweep leftovers from a previous hard-killed run (OOM / host restart
-        # skips the finally-block cleanup) so we start with a clean disk.
-        _cleanup_local_files(log)
-
         # Pre-flight disk check — the run writes gigabytes of temp files, so
         # fail fast with a clear message instead of dying mid-extraction with
         # a cryptic [Errno 28] halfway through a CSV write.
@@ -545,34 +563,60 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
             )
 
             try:
+                from catalog.services.load_scope import require_exact_load_scope
                 from etl.sources.registry import get_source
+
+                require_exact_load_scope(
+                    source.organization_id,
+                    source.pk,
+                    expected_source_types={source.source_type},
+                )
                 src = get_source(source)
 
                 # Use registry-provided ETL dir and load command (fully abstract)
                 etl_dir = src.__class__.get_etl_dir()
-                src.extract(etl_dir=etl_dir, log=log)
-                raise_if_cancelled(wf, run_log)
-
-                # Optional: zip + upload this source's pre-transform raw API
-                # output to GCS so it can be replayed through the transform later.
-                if raw_export and raw_export.is_active:
+                with static_etl_files_lock():
                     try:
-                        upload_source_raw_to_gcs(
-                            raw_export=raw_export,
-                            org=org,
-                            source=source,
-                            raw_dirs=src.__class__.get_raw_dirs(etl_dir),
-                            log=log,
-                        )
-                    except Exception as e:
-                        log(f'  [Raw Export] Unexpected error for {source.name}: {e}')
+                        # A crashed prior owner can leave partial files behind;
+                        # clear them only while holding exclusive ownership.
+                        _cleanup_local_files(log)
+                        src.extract(etl_dir=etl_dir, log=log)
+                        raise_if_cancelled(wf, run_log)
 
-                log(f'\n[{timezone.now().isoformat()}] Loading data into Django database...')
-                out = io.StringIO()
-                call_command(src.load_command, organization_id=org.id,
-                             source_id=source.pk, stdout=out)
-                log(out.getvalue())
-                raise_if_cancelled(wf, run_log)
+                        # Optional: zip + upload this source's pre-transform raw
+                        # API output before the static workspace is cleaned.
+                        if raw_export and raw_export.is_active:
+                            try:
+                                upload_source_raw_to_gcs(
+                                    raw_export=raw_export,
+                                    org=org,
+                                    source=source,
+                                    raw_dirs=src.__class__.get_raw_dirs(etl_dir),
+                                    log=log,
+                                )
+                            except Exception as e:
+                                log(
+                                    '  [Raw Export] Unexpected error for '
+                                    f'{source.name}: {e}'
+                                )
+
+                        log(
+                            f'\n[{timezone.now().isoformat()}] '
+                            'Loading data into Django database...'
+                        )
+                        out = io.StringIO()
+                        call_command(
+                            src.load_command,
+                            organization_id=org.id,
+                            source_id=source.pk,
+                            stdout=out,
+                        )
+                        log(out.getvalue())
+                        raise_if_cancelled(wf, run_log)
+                    finally:
+                        # Keep cleanup under the same ownership as extraction;
+                        # otherwise it can erase the next worker's files.
+                        _cleanup_local_files(log)
 
                 run_log.status = 'success'
                 source_results[source.name] = 'success'
@@ -595,12 +639,6 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
                 run_log.log_output = '\n'.join(log_lines)
                 run_log.save()
                 send_slack_alert(source, run_log)
-                # Free disk immediately — this source's raw downloads and CSVs
-                # are already loaded into the DB (or the run failed), and the
-                # next source / destination push needs the space. Waiting for
-                # the workflow-level cleanup keeps e.g. the whole cloned dbt
-                # repo on disk during the entire PowerBI extraction.
-                _cleanup_local_files(log)
 
         raise_if_cancelled(wf)
 
@@ -677,12 +715,6 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
         log(traceback.format_exc())
 
     finally:
-        # Always remove locally downloaded ETL files (raw PowerBI/Fabric
-        # definitions + transformed CSVs), even if the workflow was cancelled
-        # or failed — otherwise the device slowly fills up with leftover
-        # downloads from every interrupted run.
-        _cleanup_local_files(log)
-
         wf.finished_at = timezone.now()
         wf.log_output = '\n'.join(log_lines)
         wf.save()

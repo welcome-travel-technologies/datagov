@@ -29,6 +29,34 @@ export function getApiErrorMessage(error: unknown, fallback: string | null = nul
   return error instanceof ApiError ? error.message : fallback;
 }
 
+/** Pull the first useful DRF validation message out of either a top-level
+ * `detail` / `error` response or a field-error object such as
+ * `{name: ["A definition with this name already exists."]}`. */
+export function extractApiErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body === "string" && body.trim()) return body.trim();
+  if (Array.isArray(body)) {
+    for (const value of body) {
+      const message = extractApiErrorMessage(value, "");
+      if (message) return message;
+    }
+    return fallback;
+  }
+  if (body && typeof body === "object") {
+    const record = body as Record<string, unknown>;
+    for (const key of ["detail", "error", "non_field_errors"]) {
+      if (key in record) {
+        const message = extractApiErrorMessage(record[key], "");
+        if (message) return message;
+      }
+    }
+    for (const value of Object.values(record)) {
+      const message = extractApiErrorMessage(value, "");
+      if (message) return message;
+    }
+  }
+  return fallback;
+}
+
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -53,10 +81,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as Record<string, unknown>);
-    const message =
-      (body as { detail?: string; error?: string })?.detail ??
-      (body as { error?: string })?.error ??
-      res.statusText;
+    const message = extractApiErrorMessage(body, res.statusText || `Request failed (${res.status})`);
     throw new ApiError(res.status, message, body);
   }
   if (res.status === 204) return undefined as T;
@@ -87,6 +112,21 @@ export interface Paginated<T> {
 export function unwrapResults<T>(x: { results: T[] } | T[] | undefined): T[] {
   if (!x) return [];
   return Array.isArray(x) ? x : x.results;
+}
+
+/** Consume a DRF page-number endpoint without assuming that its `limit`
+ * parameter is honoured. */
+export async function collectPaginated<T>(
+  fetchPage: (page: number) => Promise<Paginated<T> | T[]>,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let page = 1; page <= 10_000; page += 1) {
+    const response = await fetchPage(page);
+    if (Array.isArray(response)) return [...all, ...response];
+    all.push(...response.results);
+    if (!response.next) return all;
+  }
+  throw new Error("Pagination exceeded 10,000 pages.");
 }
 
 export type NodeGroup =
@@ -263,6 +303,7 @@ export interface Item {
 export interface ItemGroupPatch {
   status?: ItemStatus;
   category?: number | null;
+  definition?: number | null;
   ownership_department?: number | null;
   ownership_person?: number | null;
   steward?: number | null;
@@ -320,6 +361,22 @@ export interface DefinitionGroup {
   ownership_department_name: string | null;
 }
 
+export type DefinitionApplyField =
+  | "ownership_person"
+  | "ownership_department";
+
+export type DefinitionApplyRequest =
+  | {
+      dry_run: true;
+      fields: DefinitionApplyField[];
+      preview_token?: never;
+    }
+  | {
+      dry_run?: false;
+      fields: DefinitionApplyField[];
+      preview_token: string;
+    };
+
 export interface DefinitionApplyResult {
   status: string;
   updated?: number;
@@ -327,6 +384,8 @@ export interface DefinitionApplyResult {
   group_count: number;
   skipped_unset: string[];
   dry_run?: boolean;
+  /** Signed authorization for a commit against this exact preview state. */
+  preview_token?: string;
   detail?: string;
 }
 
@@ -370,9 +429,11 @@ export interface TaskSummary {
   done_total: number;
   reasons: TaskReasonSummary[];
   data_person: { id: number; name: string } | null;
-  /** True when the signed-in LOGIN is linked to a DataPerson (as opposed to the
-   *  caller merely having picked a name in the UI). */
+  /** True when the signed-in login is linked to a DataPerson, independent of
+   *  any admin-only person being inspected. */
   linked: boolean;
+  /** The backend could not derive a task identity for this login. */
+  identity_required?: boolean;
 }
 
 /** Per-reason counts from a sweep (or its dry-run preview). */
@@ -389,12 +450,14 @@ export interface TaskSweepResult {
   totals: TaskSweepCounts;
   dry_run: boolean;
   kind_scope?: string;
+  /** Required on the matching commit for high-volume singleton/all previews. */
+  preview_token?: string;
 }
 
 export interface TaskGenerateOptions {
   reasons: { key: string; label: string; hint: string }[];
-  /** Which asset kinds the sweep may target. Defaults to PowerBI measures;
-   *  anything wider is orders of magnitude more tasks. */
+  /** Which asset kinds the sweep may target. Defaults to all assets; backend
+   *  policy still limits Unverified work to PowerBI measures. */
   kind_scopes: { key: string; label: string; hint: string }[];
   default_kind_scope: string;
 }
@@ -562,8 +625,8 @@ export interface User {
   perms: MePerms;
   organization?: { name?: string | null; primary_color?: string | null; icon?: string | null } | null;
   /** The governance identity behind this login, when the two are linked.
-   *  Usually null today — most accounts aren't linked yet, so the Task Manager
-   *  lets a person pick their own name instead. */
+   *  An unlinked non-admin receives an explicit linking prompt and cannot
+   *  select another person's identity in the browser. */
   data_person?: {
     id: number;
     name: string;
@@ -1110,6 +1173,10 @@ export const api = {
       request<Paginated<Item>>(`/items/${qs({ item_name: name })}`),
     list: (params: Record<string, string | number | undefined> = {}) =>
       request<Paginated<Item>>(`/items/${qs(params)}`),
+    listAll: (params: Record<string, string | number | undefined> = {}) =>
+      collectPaginated<Item>((page) =>
+        request<Paginated<Item>>(`/items/${qs({ ...params, page })}`),
+      ),
     /** Pin an item as its ItemGroup's primary instance. */
     setPrimary: (itemId: string) =>
       request<{ status: string; group: number; primary_item_id: number }>(
@@ -1174,6 +1241,10 @@ export const api = {
   definitions: {
     list: (params: Record<string, string | number | undefined> = {}) =>
       request<Paginated<Definition> | Definition[]>(`/definitions/${qs(params)}`),
+    listAll: (params: Record<string, string | number | undefined> = {}) =>
+      collectPaginated<Definition>((page) =>
+        request<Paginated<Definition> | Definition[]>(`/definitions/${qs({ ...params, page })}`),
+      ),
     create: (body: Partial<Definition>) =>
       request<Definition>(`/definitions/`, { method: "POST", body: JSON.stringify(body) }),
     update: (id: number, body: Partial<Definition>) =>
@@ -1188,8 +1259,9 @@ export const api = {
         `/definitions/${id}/assign/`,
         { method: "POST", body: JSON.stringify(body) },
       ),
-    /** Push owner + department onto the member groups. `dry_run` previews. */
-    apply: (id: number, body: { dry_run?: boolean; fields?: string[] } = {}) =>
+    /** Push selected metadata onto member groups. Every commit must echo the
+     * signed token returned by a successful preview. */
+    apply: (id: number, body: DefinitionApplyRequest) =>
       request<DefinitionApplyResult>(`/definitions/${id}/apply/`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -1228,6 +1300,7 @@ export const api = {
         dry_run?: boolean;
         require_assignee?: boolean;
         kind_scope?: string;
+        preview_token?: string;
       } = {},
     ) =>
       request<TaskSweepResult>(`/tasks/generate/`, {

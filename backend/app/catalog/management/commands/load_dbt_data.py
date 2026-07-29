@@ -7,10 +7,19 @@ PowerBI data untouched. It also builds cross-tool bridge edges between dbt
 models and PowerBI tables by matching materialized table names.
 """
 import os
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from catalog.models import Item, NetworkNode, NetworkEdge
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Q
+from catalog.services.load_scope import (
+    assert_incoming_identities_available,
+    catalog_load_session_lock,
+    read_incoming_identities,
+    require_grouping_commit_boundary,
+    require_exact_load_scope,
+    network_domain_is_exclusive,
+)
 
 
 class Command(BaseCommand):
@@ -22,9 +31,14 @@ class Command(BaseCommand):
         parser.add_argument('--source-id', type=int, default=None,
                             help='IntegrationSource PK that produced this data')
 
+    @catalog_load_session_lock()
     def handle(self, *args, **kwargs):
-        self.organization_id = kwargs.get('organization_id')
-        self.source_id = kwargs.get('source_id')
+        require_grouping_commit_boundary()
+        self.organization_id, self.source_id = require_exact_load_scope(
+            kwargs.get('organization_id'),
+            kwargs.get('source_id'),
+            expected_source_types={'dbt'},
+        )
         org_id_literal = 'NULL'
         if self.organization_id is not None:
             org_id_literal = str(int(self.organization_id))
@@ -37,20 +51,50 @@ class Command(BaseCommand):
         graph_csv = os.path.join(data_dir, 'dbt_info_graph.csv')
 
         if not os.path.exists(items_csv):
-            self.stdout.write(self.style.ERROR(f'dbt items CSV not found at {items_csv}'))
-            return
+            raise CommandError(f'dbt items CSV not found at {items_csv}.')
+        if not os.path.exists(graph_csv):
+            raise CommandError(f'dbt graph CSV not found at {graph_csv}.')
 
         # ── Clean up old dbt network data ─────────────────────────────────
-        self.stdout.write('Cleaning up old dbt network data...')
+        item_ids, node_ids, edges = read_incoming_identities(
+            items_csv, graph_csv,
+        )
+        assert_incoming_identities_available(
+            organization_id=self.organization_id,
+            source_id=self.source_id,
+            item_ids=item_ids,
+            node_ids=node_ids,
+            edges=edges,
+        )
 
-        # Delete DBT_* typed nodes (DBT_MODEL, DBT_SOURCE, DBT_SEED, DBT_TEST, DBT_COLUMN)
-        # plus their edges. DBT_COLUMN node_ids start with 'DBT_COLUMN::' so the
-        # source/target startswith filters cover them along with the others.
-        NetworkNode.objects.filter(group__startswith='DBT_').delete()
-        NetworkEdge.objects.filter(source__startswith='DBT_').delete()
-        NetworkEdge.objects.filter(target__startswith='DBT_').delete()
+        # Network rows have no integration-source FK. Replace the domain only
+        # when this is the org's sole dbt source; otherwise use additive upserts.
+        replace_network_domain = network_domain_is_exclusive(
+            self.organization_id, self.source_id,
+        )
+        if replace_network_domain:
+            self.stdout.write(
+                'Replacing exact-organization dbt network data...',
+            )
+        else:
+            self.stdout.write(self.style.WARNING(
+                'Multiple dbt sources share this organization; graph rows '
+                'will be upserted additively because the legacy graph schema '
+                'has no integration-source ownership.'
+            ))
 
         with transaction.atomic(), connection.cursor() as cursor:
+            if replace_network_domain:
+                NetworkNode.objects.filter(
+                    organization_id=self.organization_id,
+                    group__startswith='DBT_',
+                ).delete()
+                NetworkEdge.objects.filter(
+                    Q(source__startswith='DBT_')
+                    | Q(target__startswith='DBT_'),
+                    organization_id=self.organization_id,
+                ).delete()
+
             # ── Load items CSV ─────────────────────────────────────────────
             with open(items_csv, 'r', encoding='utf-8-sig') as f:
                 header_line = f.readline().rstrip('\n').rstrip('\r')
@@ -168,26 +212,36 @@ class Command(BaseCommand):
                     connected_columns = EXCLUDED.connected_columns,
                     connected_tables = EXCLUDED.connected_tables,
                     deleted = EXCLUDED.deleted,
+                    deleted_at = NULL,
                     web_url = EXCLUDED.web_url,
-                    organization_id = EXCLUDED.organization_id,
                     connected_reports_json = EXCLUDED.connected_reports_json,
                     -- New metadata fields
                     database_name = EXCLUDED.database_name,
                     schema_name = EXCLUDED.schema_name,
                     alias = EXCLUDED.alias,
                     tags = EXCLUDED.tags,
-                    meta = EXCLUDED.meta,
-                    integration_source_id = EXCLUDED.integration_source_id;
+                    meta = EXCLUDED.meta
+                WHERE catalog_item.organization_id
+                          IS NOT DISTINCT FROM EXCLUDED.organization_id
+                  AND catalog_item.integration_source_id
+                          IS NOT DISTINCT FROM EXCLUDED.integration_source_id;
             """)
             items_upserted = cursor.rowcount
             self.stdout.write(f'  → {items_upserted} dbt items inserted/updated.')
 
             # Mark obsolete dbt items as deleted (only service='dbt')
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE catalog_item
-                SET deleted = TRUE
+                SET deleted = TRUE,
+                    deleted_at = COALESCE(deleted_at, NOW())
                 WHERE service = 'dbt'
-                  AND item_id NOT IN (SELECT NULLIF(TRIM(item_id), '') FROM temp_dbt_items);
+                  AND organization_id IS NOT DISTINCT FROM {org_id_literal}
+                  AND integration_source_id IS NOT DISTINCT FROM {source_id_literal}
+                  AND item_id NOT IN (
+                      SELECT NULLIF(TRIM(item_id), '')
+                      FROM temp_dbt_items
+                      WHERE NULLIF(TRIM(item_id), '') IS NOT NULL
+                  );
             """)
 
             # ── Load graph CSV ─────────────────────────────────────────────
@@ -217,12 +271,16 @@ class Command(BaseCommand):
 
                 cursor.execute(f"""
                     INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                    SELECT source_id, source, source_type, {org_id_literal} FROM temp_dbt_nodes
+                    SELECT TRIM(source_id), source, source_type, {org_id_literal} FROM temp_dbt_nodes
                     WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
                     UNION
-                    SELECT target_id, target, target_type, {org_id_literal} FROM temp_dbt_nodes
+                    SELECT TRIM(target_id), target, target_type, {org_id_literal} FROM temp_dbt_nodes
                     WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
-                    ON CONFLICT (node_id) DO NOTHING;
+                    ON CONFLICT (node_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        "group" = EXCLUDED."group"
+                    WHERE catalog_networknode.organization_id
+                          IS NOT DISTINCT FROM EXCLUDED.organization_id;
                 """)
                 # Classify each edge (kind + level) from its endpoint types so
                 # reads filter on indexed columns. The CASE logic is generated
@@ -238,14 +296,17 @@ class Command(BaseCommand):
                 lineage_type_expr = "NULLIF(TRIM(lineage_type), '')" if 'lineage_type' in g_cols else "NULL"
                 cursor.execute(f"""
                     INSERT INTO catalog_networkedge (source, target, organization_id, kind, level, lineage_type)
-                    SELECT DISTINCT source_id, target_id, {org_id_literal},
+                    SELECT DISTINCT TRIM(source_id), TRIM(target_id), {org_id_literal},
                            {kind_expr}, {level_case_sql()}, {lineage_type_expr}
                     FROM temp_dbt_nodes
                     WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
                       AND target_id IS NOT NULL AND TRIM(target_id) != ''
                     ON CONFLICT (source, target) DO UPDATE SET
-                        kind = EXCLUDED.kind, level = EXCLUDED.level,
-                        lineage_type = EXCLUDED.lineage_type;
+                        kind = EXCLUDED.kind,
+                        level = EXCLUDED.level,
+                        lineage_type = EXCLUDED.lineage_type
+                    WHERE catalog_networkedge.organization_id
+                          IS NOT DISTINCT FROM EXCLUDED.organization_id;
                 """)
                 self.stdout.write('  → dbt graph nodes and edges loaded.')
             else:
@@ -260,6 +321,7 @@ class Command(BaseCommand):
         # existing groups' curated governance is preserved).
         self.stdout.write('Syncing ItemGroups...')
         from catalog.services.item_groups import ensure_item_groups
+        require_grouping_commit_boundary()
         linked = ensure_item_groups(self.organization_id)
         self.stdout.write(f'  → {linked} items linked to groups.')
 

@@ -6,6 +6,29 @@ from django.db.models import Q
 
 from ..models import Item, NetworkEdge
 from .catalog_search import _governance_lines
+from .organization_scope import require_bound_organization_id
+
+
+def _item_objects():
+    organization_id = require_bound_organization_id()
+    return Item.objects.filter(organization_id=organization_id).filter(
+        Q(item_group__organization_id=organization_id) |
+        Q(item_group__isnull=True)
+    ).filter(
+        Q(item_group__ownership_person__organization_id=organization_id) |
+        Q(item_group__ownership_person__isnull=True),
+        Q(item_group__steward__organization_id=organization_id) |
+        Q(item_group__steward__isnull=True),
+        Q(item_group__ownership_department__organization_id=organization_id) |
+        Q(item_group__ownership_department__isnull=True),
+    )
+
+
+def _edge_objects():
+    organization_id = require_bound_organization_id()
+    return NetworkEdge.objects.filter(
+        organization_id=organization_id,
+    )
 
 
 def _dbt_fqn(item) -> str:
@@ -25,7 +48,7 @@ def search_dbt_models(query: str = '', limit: int = 10) -> str:
     Returns model name, materialized table, database, materialization, tags,
     metadata, description, and a short SQL preview when available.
     """
-    qs = (Item.objects
+    qs = (_item_objects()
           .filter(deleted=False, service='dbt', item_type__in=['DBT_MODEL', 'DBT_SEED'])
           .select_related('item_group', 'item_group__ownership_department',
                           'item_group__ownership_person', 'item_group__steward'))
@@ -69,7 +92,9 @@ def search_dbt_sources(query: str = '', limit: int = 10) -> str:
     Use this WHEN the user asks about upstream dbt sources, source tables,
     loaders, source schemas, or source documentation.
     """
-    qs = Item.objects.filter(deleted=False, service='dbt', item_type='DBT_SOURCE')
+    qs = _item_objects().filter(
+        deleted=False, service='dbt', item_type='DBT_SOURCE',
+    )
     if query:
         qs = qs.filter(
             Q(item_name__icontains=query) |
@@ -103,7 +128,9 @@ def search_dbt_tests(query: str = '', limit: int = 10) -> str:
     Use this WHEN the user asks about dbt tests, constraints, data quality checks,
     uniqueness/not-null/relationship tests, or test SQL definitions.
     """
-    qs = Item.objects.filter(deleted=False, service='dbt', item_type='DBT_TEST')
+    qs = _item_objects().filter(
+        deleted=False, service='dbt', item_type='DBT_TEST',
+    )
     if query:
         qs = qs.filter(Q(item_name__icontains=query) | Q(description__icontains=query))
     qs = qs.order_by('item_name')
@@ -137,7 +164,7 @@ def get_dbt_sql(model_name_or_id: str) -> str:
     if not query:
         return 'Please provide a dbt model/test name or item_id.'
 
-    qs = Item.objects.filter(
+    qs = _item_objects().filter(
         deleted=False,
         service='dbt',
         item_type__in=['DBT_MODEL', 'DBT_SEED', 'DBT_TEST'],
@@ -191,7 +218,7 @@ def get_dbt_upstream_tree(model_name_or_id: str, max_depth: int = 5) -> str:
         return 'Please provide a dbt model/source name or item_id.'
     max_depth = max(1, min(int(max_depth or 5), 10))
 
-    qs = Item.objects.filter(
+    qs = _item_objects().filter(
         deleted=False, service='dbt',
         item_type__in=['DBT_MODEL', 'DBT_SEED', 'DBT_SOURCE', 'DBT_SNAPSHOT'],
     )
@@ -217,7 +244,7 @@ def get_dbt_upstream_tree(model_name_or_id: str, max_depth: int = 5) -> str:
     frontier = [root_node_id]
     for depth in range(1, max_depth + 1):
         next_frontier = []
-        edges = NetworkEdge.objects.filter(
+        edges = _edge_objects().filter(
             target__in=frontier, source__startswith='DBT_',
         ).values_list('source', 'target')
         for src, _tgt in edges:
@@ -231,7 +258,9 @@ def get_dbt_upstream_tree(model_name_or_id: str, max_depth: int = 5) -> str:
         frontier = next_frontier
 
     item_ids = [n.split('::', 1)[1] for n in visited if '::' in n]
-    items_by_id = {i.item_id: i for i in Item.objects.filter(item_id__in=item_ids)}
+    items_by_id = {
+        i.item_id: i for i in _item_objects().filter(item_id__in=item_ids)
+    }
 
     def _line(node_id: str) -> str:
         ihash = node_id.split('::', 1)[1] if '::' in node_id else node_id
@@ -277,7 +306,7 @@ def get_dbt_model_schema(model_name_or_id: str) -> str:
     if not query:
         return 'Please provide a dbt model/seed name or item_id.'
 
-    qs = Item.objects.filter(
+    qs = _item_objects().filter(
         deleted=False, service='dbt',
         item_type__in=['DBT_MODEL', 'DBT_SEED', 'DBT_SNAPSHOT'],
     )
@@ -313,7 +342,7 @@ def get_dbt_model_schema(model_name_or_id: str) -> str:
 
     # Columns are linked to the model by ``dataset_id`` (the dbt unique_id).
     cols = list(
-        Item.objects.filter(
+        _item_objects().filter(
             deleted=False, service='dbt', item_type='DBT_COLUMN',
             dataset_id=model.dataset_id,
         ).order_by('item_name').values('item_name', 'datatype', 'description')
@@ -336,7 +365,7 @@ def get_dbt_model_schema(model_name_or_id: str) -> str:
     # Direct downstream consumers (one hop): edges whose source is this node.
     node = f'{model.item_type}::{model.item_id}'
     down_targets = (
-        NetworkEdge.objects.filter(source=node)
+        _edge_objects().filter(source=node)
         .values_list('target', flat=True)[:100]
     )
     down_ids = [
@@ -345,7 +374,7 @@ def get_dbt_model_schema(model_name_or_id: str) -> str:
     ]
     if down_ids:
         downs = list(
-            Item.objects.filter(item_id__in=down_ids)
+            _item_objects().filter(item_id__in=down_ids)
             .values('item_name', 'item_type')
         )
         if downs:

@@ -29,19 +29,32 @@ def cascade_status_to_items(group):
 
 
 def cascade_delete_to_items(group, deleted):
-    """Soft-delete (``deleted=True``) or restore (``deleted=False``) every Item
-    in the group to match the group-level flag.
+    """Apply or restore one group soft-delete episode without losing provenance.
 
-    On delete we also stamp ``deleted_at`` and force the item's status mirror to
-    the group's (DELETED by the time this runs). On restore we clear both the
-    flag and the timestamp. Returns the number of rows updated.
+    ``Item.deleted`` can already be true because the source retired that one
+    asset. A group delete therefore stamps only active children with the
+    group's exact ``deleted_at`` marker. Restore clears only rows carrying that
+    same marker; independently source-obsolete rows remain deleted.
     """
     if group is None:
         return 0
     qs = Item.objects.filter(item_group=group)
     if deleted:
         from django.utils import timezone
-        return qs.exclude(deleted=True).update(
-            deleted=True, deleted_at=timezone.now(), status=group.status,
+        marker = group.deleted_at
+        if marker is None:
+            marker = timezone.now()
+            group.deleted_at = marker
+            group.save(update_fields=['deleted_at'])
+        return qs.filter(deleted=False).update(
+            deleted=True, deleted_at=marker, status=group.status,
         )
-    return qs.filter(deleted=True).update(deleted=False, deleted_at=None)
+    marker = group.deleted_at
+    if marker is None:
+        # Without an episode marker there is no safe way to distinguish a
+        # group-induced delete from source-level obsolescence.
+        return 0
+    return qs.filter(
+        deleted=True,
+        deleted_at=marker,
+    ).update(deleted=False, deleted_at=None)

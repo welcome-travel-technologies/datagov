@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart3, Database, Eye } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { LoadingState } from "@/components/ui/misc";
+import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { api, STATUS_LABELS, type DataPerson } from "@/lib/api";
 import { fmtInt } from "@/lib/utils";
@@ -28,6 +28,12 @@ interface WsStat { r: number; p: number; v30: number; vt: number }
 
 function pct(part: number, total: number): number {
   return total ? Math.round((part * 100) / total) : 0;
+}
+
+/** Collision-safe key for one pivot coordinate. Human labels can contain any
+ * number of spaces, so simple string concatenation is not injective. */
+export function pivotCellKey(row: string, column: string): string {
+  return JSON.stringify([row, column]);
 }
 
 export function DashboardView() {
@@ -141,7 +147,7 @@ export function DashboardView() {
       const x = String(g[xf]);
       rowSet.add(y);
       colSet.add(x);
-      const k = y + " " + x;
+      const k = pivotCellKey(y, x);
       tot[k] = (tot[k] || 0) + 1;
       desc[k] = (desc[k] || 0) + g.h;
       rowTot[y] = (rowTot[y] || 0) + 1;
@@ -176,6 +182,13 @@ export function DashboardView() {
   const loading = dashQ.isLoading;
 
   if (loading) return <LoadingState label="Building your governance overview…" />;
+  if (dashQ.isError) {
+    return (
+      <Card>
+        <EmptyState title="Could not load the dashboard" hint="Refresh the page to try again." />
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -398,7 +411,7 @@ export function DashboardView() {
                   <tr key={rk} className="border-b border-line">
                     <td className="px-2 py-2 font-medium">{rk}</td>
                     {pivot.cols.map((ck) => {
-                      const k = rk + " " + ck;
+                      const k = pivotCellKey(rk, ck);
                       const t = pivot.tot[k] || 0;
                       const d = pivot.desc[k] || 0;
                       return (
@@ -476,4 +489,3 @@ function PctCell({ ok, value, title }: { ok: boolean; value: number | null; titl
     </TD>
   );
 }
-

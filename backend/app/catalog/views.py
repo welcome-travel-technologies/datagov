@@ -1,26 +1,31 @@
 import csv
+import hashlib
 import io
 import json
 import logging
 import re
 import traceback
 import uuid
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
 
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
+from django.core import signing
+from django.db import transaction
 from django.db.models import Q, Count
+from django.utils import timezone
 
 from .decorators import api_login_required
 
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, mixins
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, action, parser_classes, permission_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
 
 from django_filters.rest_framework import DjangoFilterBackend
 from django_q.tasks import async_task
@@ -48,7 +53,7 @@ from .serializers import (
     GovernanceTaskSerializer, MetricsMapSerializer, PublicMetricsMapSerializer,
 )
 
-def _enrich_with_item_metadata(nodes):
+def _enrich_with_item_metadata(nodes, organization_id):
     """Augment ``nodes`` (list of dicts) with workspace and parent info from
     the Item table so the frontend can filter by workspace and prefix column
     labels with their parent table/dataset.
@@ -59,7 +64,15 @@ def _enrich_with_item_metadata(nodes):
     as-is.
 
     Module-level so both ``get_network`` and ``find_network_path`` can call it.
+    ``organization_id`` is mandatory: a graph node must never be hydrated from
+    an Item row owned by another tenant (or from an unowned legacy row).
     """
+    if (
+        isinstance(organization_id, bool)
+        or not isinstance(organization_id, int)
+        or organization_id <= 0
+    ):
+        raise ValueError('A positive organization_id is required.')
     hashes = []
     hash_to_node = {}
     for n in nodes:
@@ -72,7 +85,10 @@ def _enrich_with_item_metadata(nodes):
         return nodes
     chunk = 900
     for i in range(0, len(hashes), chunk):
-        rows = Item.objects.filter(item_id__in=hashes[i:i + chunk]).values(
+        rows = Item.objects.filter(
+            organization_id=organization_id,
+            item_id__in=hashes[i:i + chunk],
+        ).values(
             'item_id', 'workspace_id', 'workspace_name',
             'table_name', 'dataset_name', 'database_name', 'schema_name', 'datatype', 'tags',
         )
@@ -790,9 +806,76 @@ def delete_chat_session(request, session_id):
     return Response({'error': 'Session not found'}, status=404)
 
 def _get_user_organization(user):
-    """Return the Organization for the given user via OrganizationMembership, or None."""
-    membership = OrganizationMembership.objects.filter(user=user).select_related('organization').first()
-    return membership.organization if membership else None
+    """Return the exact organization the authenticated user acts in."""
+    from .access import resolve_org
+
+    return resolve_org(user)
+
+
+def _require_user_organization(user):
+    """Resolve the caller's tenant or fail closed before any queryset runs."""
+    org = _get_user_organization(user)
+    if org is None:
+        raise PermissionDenied('Organization membership is required.')
+    return org
+
+
+class TaskManagerAccessPermission(BasePermission):
+    """API counterpart of the Task Manager's Company-tier page gate."""
+
+    def has_permission(self, request, view):
+        if not getattr(request.user, 'is_authenticated', False):
+            return False
+        if _get_user_organization(request.user) is None:
+            return False
+        from .frontend_views import get_user_permissions
+        return bool(get_user_permissions(request.user)['can_view_tasks'])
+
+
+class DictionaryAccessPermission(BasePermission):
+    """API counterpart of the Definitions/Data Dictionary page gate."""
+
+    def has_permission(self, request, view):
+        if not getattr(request.user, 'is_authenticated', False):
+            return False
+        if _get_user_organization(request.user) is None:
+            return False
+        from .frontend_views import get_user_permissions
+        return bool(get_user_permissions(request.user)['can_view_dictionary'])
+
+
+class GovernanceCurationPermission(BasePermission):
+    """Authorize catalog curation at the owning product-tier boundary.
+
+    Company members may curate every ItemGroup governance field. Analytics
+    members may use only the lifecycle fields exposed by cleanup pages.
+    """
+
+    message = 'Company or Analytics access is required.'
+    ANALYTICS_FIELDS = frozenset({'status', 'deleted'})
+
+    def has_permission(self, request, view):
+        if not getattr(request.user, 'is_authenticated', False):
+            return False
+        if _get_user_organization(request.user) is None:
+            return False
+
+        from .frontend_views import get_user_permissions
+
+        perms = get_user_permissions(request.user)
+        company_access = bool(perms['can_view_dictionary'])
+        analytics_access = bool(
+            perms['can_view_unused'] or perms['can_view_dbt']
+        )
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return company_access or analytics_access
+        if request.method != 'PATCH':
+            return False
+        if company_access:
+            return True
+        if not analytics_access or not hasattr(request.data, 'keys'):
+            return False
+        return set(request.data.keys()).issubset(self.ANALYTICS_FIELDS)
 
 
 def _deleted_filter(org):
@@ -804,17 +887,23 @@ def _deleted_filter(org):
 
 class DepartmentViewSet(viewsets.ModelViewSet):
     serializer_class = DepartmentSerializer
+    permission_classes = [DictionaryAccessPermission]
     # Dropdown reference list — never paginate it (see DataPersonViewSet).
     pagination_class = None
 
     def get_queryset(self):
-        org = _get_user_organization(self.request.user)
-        if org:
-            return Department.objects.filter(organization=org)
-        return Department.objects.all()
+        org = _require_user_organization(self.request.user)
+        return Department.objects.filter(organization=org)
+
+    def perform_create(self, serializer):
+        serializer.save(organization=_require_user_organization(self.request.user))
+
+    def perform_update(self, serializer):
+        serializer.save(organization=_require_user_organization(self.request.user))
 
 class DataPersonViewSet(viewsets.ModelViewSet):
     serializer_class = DataPersonSerializer
+    permission_classes = [DictionaryAccessPermission]
     # Reference list, not a feed: every caller is a dropdown that needs ALL of
     # them. Without this it inherited the global PageNumberPagination (PAGE_SIZE
     # 50, no page-size query param), so the Owner / Steward dropdowns silently
@@ -827,8 +916,8 @@ class DataPersonViewSet(viewsets.ModelViewSet):
     filterset_fields = ['is_owner', 'is_steward', 'is_other']
 
     def get_queryset(self):
-        org = _get_user_organization(self.request.user)
-        qs = DataPerson.objects.filter(organization=org) if org else DataPerson.objects.all()
+        org = _require_user_organization(self.request.user)
+        qs = DataPerson.objects.filter(organization=org)
         qs = qs.prefetch_related('departments')
         # Convenience query param: ?role=owner / ?role=steward / ?role=other
         # returns only people flagged for that role. The dictionary UI uses
@@ -848,16 +937,39 @@ class DataPersonViewSet(viewsets.ModelViewSet):
             qs = qs.filter(departments__id=dept_id).distinct()
         return qs
 
+    def _require_admin(self):
+        from .access import is_org_admin
+
+        org = _require_user_organization(self.request.user)
+        if not is_org_admin(self.request.user, org):
+            raise PermissionDenied('Admin access required to manage people.')
+        return org
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self._require_admin())
+
+    def perform_update(self, serializer):
+        serializer.save(organization=self._require_admin())
+
+    def perform_destroy(self, instance):
+        self._require_admin()
+        instance.delete()
+
 class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
+    permission_classes = [DictionaryAccessPermission]
     # Dropdown reference list — never paginate it (see DataPersonViewSet).
     pagination_class = None
 
     def get_queryset(self):
-        org = _get_user_organization(self.request.user)
-        if org:
-            return Category.objects.filter(organization=org)
-        return Category.objects.all()
+        org = _require_user_organization(self.request.user)
+        return Category.objects.filter(organization=org)
+
+    def perform_create(self, serializer):
+        serializer.save(organization=_require_user_organization(self.request.user))
+
+    def perform_update(self, serializer):
+        serializer.save(organization=_require_user_organization(self.request.user))
 
 
 class MetricsMapViewSet(viewsets.ModelViewSet):
@@ -875,7 +987,7 @@ class MetricsMapViewSet(viewsets.ModelViewSet):
     ordering_fields = ['updated_at', 'created_at', 'name']
 
     def get_queryset(self):
-        org = _get_user_organization(self.request.user)
+        org = _require_user_organization(self.request.user)
         if not org:
             return MetricsMap.objects.none()
         return MetricsMap.objects.filter(organization=org).select_related('created_by')
@@ -936,28 +1048,85 @@ def metrics_map_public(request, token):
     return Response(PublicMetricsMapSerializer(m).data)
 
 
+def _send_item_alert_after_commit(item_id, user_id, field, old_value, new_value):
+    """Best-effort Slack notification after the surrounding DB commit."""
+    try:
+        from django.contrib.auth import get_user_model
+        from etl.hooks.slack.slack_alerts import send_slack_item_alert
+
+        item = Item.objects.filter(pk=item_id).first()
+        user = get_user_model().objects.filter(pk=user_id).first()
+        if item is not None:
+            send_slack_item_alert(item, user, field, old_value, new_value)
+    except Exception as e:
+        print(f'[Slack alert] notify failed: {e}')
+
+
 class ActionPermissionMixin:
     """Wraps Item updates with Slack notifications and the auto-DELETED-on-delete
-    rule. The name is historical — the read-only/read-write permission split was
-    removed; any authenticated org member can write. Page visibility is still
-    gated by group membership."""
+    rule. The name is historical; ``ItemViewSet.get_permissions`` applies the
+    same Company/Analytics curation boundary as the ItemGroup endpoint."""
 
+    @transaction.atomic
     def _apply_and_notify(self, request, super_call):
-        """Run the Item update, then fire Slack alerts if status or deleted
-        changed. Status lives on the item's ItemGroup now, so marking an item
-        deleted auto-DEPRECATEs its group (not a per-item column)."""
+        """Run a status-only Item update and synchronize the owning group."""
+        if not hasattr(request.data, 'keys'):
+            raise ValidationError({'detail': 'Expected an object payload.'})
+        unsupported = sorted(set(request.data.keys()) - {'status'})
+        if unsupported:
+            raise ValidationError({
+                'detail': (
+                    'Items are ingestion-owned. Only the legacy `status` field '
+                    'may be patched; curate lifecycle and metadata on the '
+                    'ItemGroup endpoint.'
+                ),
+                'fields': unsupported,
+            })
+
         instance = self.get_object()
+        org = _require_user_organization(request.user)
+        expected_group_id = instance.item_group_id
+        if 'status' in request.data and expected_group_id is None:
+            raise ValidationError({
+                'status': 'This item has no ItemGroup to own its status.'
+            })
+        if expected_group_id is not None:
+            ItemGroup.objects.select_for_update(of=('self',)).get(
+                pk=expected_group_id, organization=org,
+            )
+        instance = (
+            Item.objects.select_for_update(of=('self',))
+            .select_related('item_group')
+            .get(pk=instance.pk, organization=org)
+        )
+        if instance.item_group_id != expected_group_id or (
+            instance.item_group_id is not None
+            and instance.item_group.organization_id != org.id
+        ):
+            raise PermissionDenied(
+                'The item has an invalid cross-organization group link.'
+            )
         grp = instance.item_group
         old_status = grp.status if grp else instance.status
-        old_deleted = instance.deleted
 
         # An item-level `status` write is captured here and routed to the item's
         # ItemGroup below — the group is the single source of truth, and the
         # change is cascaded back down to every item. So acting on one item
         # updates the whole group and fires exactly one alert/task.
         requested_status = None
-        if hasattr(request, 'data') and 'status' in request.data:
+        if 'status' in request.data:
             requested_status = request.data.get('status')
+        if (
+            grp is not None
+            and grp.deleted
+            and requested_status not in (None, 'DELETED')
+        ):
+            raise ValidationError({
+                'status': (
+                    'Restore this soft-deleted ItemGroup before changing its '
+                    'status.'
+                )
+            })
 
         response = super_call(request)
         instance.refresh_from_db()
@@ -968,17 +1137,6 @@ class ActionPermissionMixin:
             grp.status = requested_status
             grp.save(update_fields=['status'])
 
-        # Stamp / clear the deletion timestamp so we retain when each item was
-        # marked for deletion (and clear it if the item is restored).
-        if instance.deleted != old_deleted:
-            from django.utils import timezone
-            instance.deleted_at = timezone.now() if instance.deleted else None
-            instance.save(update_fields=['deleted_at'])
-        # Marking an item deleted auto-DEPRECATEs its group.
-        if instance.deleted and not old_deleted and grp and grp.status != 'DELETED':
-            grp.status = 'DELETED'
-            grp.save(update_fields=['status'])
-
         new_status = grp.status if grp else instance.status
         # Mirror the group's (possibly new) status onto every item so the
         # denormalized column stays consistent across the whole group.
@@ -986,20 +1144,27 @@ class ActionPermissionMixin:
             from .services.group_cascade import cascade_status_to_items
             cascade_status_to_items(grp)
             instance.refresh_from_db(fields=['status'])
-        try:
-            from etl.hooks.slack.slack_alerts import send_slack_item_alert
-            if new_status != old_status:
-                send_slack_item_alert(instance, request.user, 'status', old_status, new_status)
-            if instance.deleted and not old_deleted:
-                send_slack_item_alert(instance, request.user, 'deleted', old_deleted, instance.deleted)
-        except Exception as e:
-            print(f'[Slack alert] notify failed: {e}')
         if new_status != old_status and grp is not None:
             from .governance_tasks import sync_status_task
-            from .status_history import log_status_change, sync_group_deleted_at
-            log_status_change(grp, old_status, new_status, request.user)
-            sync_group_deleted_at(grp, new_status)
+            from .models import StatusChangeLog
+
+            StatusChangeLog.objects.create(
+                organization=grp.organization,
+                item_group=grp,
+                group_key=grp.group_key,
+                old_status=old_status,
+                new_status=new_status,
+                changed_by=request.user,
+            )
+            grp.deleted_at = timezone.now() if new_status == 'DELETED' else None
+            grp.save(update_fields=['deleted_at'])
             sync_status_task(grp, new_status, request.user)
+        if new_status != old_status:
+            transaction.on_commit(
+                lambda item_id=instance.pk, user_id=request.user.pk,
+                old=old_status, new=new_status:
+                _send_item_alert_after_commit(item_id, user_id, 'status', old, new)
+            )
         return response
 
     def update(self, request, *args, **kwargs):
@@ -1011,7 +1176,9 @@ class CatalogPagination(PageNumberPagination):
     page_size_query_param = 'limit'
     max_page_size = 100000
 
-class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
+class ItemViewSet(
+        ActionPermissionMixin, mixins.UpdateModelMixin,
+        viewsets.ReadOnlyModelViewSet):
     # Governance now lives on item_group — select_related it (and its FKs) so
     # the serializer's group-sourced fields don't N+1.
     # NOTE: the deleted filter is applied in get_queryset so it can honour
@@ -1023,6 +1190,9 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
         'item_group__definition',
     )
     serializer_class = ItemSerializer
+    # Generic create, PUT, and destroy are intentionally absent. POST remains
+    # enabled only for the explicit ``set_primary`` detail action.
+    http_method_names = ['get', 'patch', 'post', 'head', 'options']
     pagination_class = CatalogPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = [
@@ -1040,8 +1210,22 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
         'connected_tables',
     ]
 
+    def get_permissions(self):
+        if self.action == 'set_primary':
+            return [DictionaryAccessPermission()]
+        if self.action in ('update', 'partial_update'):
+            # PUT is intentionally absent from ``http_method_names``. Let DRF
+            # reach its method handler so callers receive 405, not a misleading
+            # permission failure from the PATCH-only curation policy.
+            return (
+                [GovernanceCurationPermission()]
+                if self.request.method == 'PATCH'
+                else [IsAuthenticated()]
+            )
+        return [IsAuthenticated()]
+
     def get_queryset(self):
-        org = _get_user_organization(self.request.user)
+        org = _require_user_organization(self.request.user)
         # `?include_deleted=true` keeps soft-deleted items in the result,
         # regardless of the org's show_deleted_items toggle. The PowerBI Cleanup
         # "Deprecated" tab uses it (with status=DELETED) so the marked-to-
@@ -1051,11 +1235,12 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
             qs = self.queryset
         else:
             qs = self.queryset.filter(**_deleted_filter(org))
-        if org:
-            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
-        return qs
+        return qs.filter(organization=org).filter(
+            Q(item_group__isnull=True) | Q(item_group__organization=org)
+        )
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def set_primary(self, request, pk=None):
         """Pin this item as its ItemGroup's primary instance.
 
@@ -1064,9 +1249,23 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
         attribution). One FK on the group — no sibling bookkeeping needed.
         """
         item = self.get_object()
+        org = _require_user_organization(request.user)
         grp = item.item_group
         if grp is None:
             return Response({'detail': 'This item has no group.'}, status=400)
+        expected_group_id = grp.pk
+        grp = ItemGroup.objects.select_for_update(of=('self',)).get(
+            pk=grp.pk,
+            organization=org,
+        )
+        item = Item.objects.select_for_update(of=('self',)).get(
+            pk=item.pk,
+            organization=org,
+        )
+        if item.item_group_id != expected_group_id:
+            raise PermissionDenied(
+                'The item group changed while the primary item was being set.'
+            )
         if grp.primary_item_id != item.pk:
             grp.primary_item = item
             grp.save(update_fields=['primary_item'])
@@ -1087,14 +1286,15 @@ class ItemGroupViewSet(viewsets.ModelViewSet):
         'category', 'organization', 'primary_item',
     )
     serializer_class = ItemGroupSerializer
+    permission_classes = [GovernanceCurationPermission]
+    http_method_names = ['get', 'patch', 'head', 'options']
 
     def get_queryset(self):
         qs = self.queryset
-        org = _get_user_organization(self.request.user)
-        if org:
-            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
-        return qs
+        org = _require_user_organization(self.request.user)
+        return qs.filter(organization=org)
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         """Curate a group's governance, then cascade the result to its items.
 
@@ -1107,9 +1307,95 @@ class ItemGroupViewSet(viewsets.ModelViewSet):
         Either way we fire exactly one Slack alert / governance task per group,
         anchored to the group's primary (or first) item, and log the audit row.
         """
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {'error': 'Expected an object payload.'},
+                status=400,
+            )
         instance = self.get_object()
+        org = _require_user_organization(request.user)
+        expected_definition_id = instance.definition_id
+        # Definition membership writers share the same lock order as
+        # Definition.assign/apply/destroy: definition first, then groups. This
+        # makes the exact member-id preview claim stable through commit.
+        if 'definition' in request.data:
+            definition_ids = {instance.definition_id}
+            raw_definition_id = request.data.get('definition')
+            if (
+                not isinstance(raw_definition_id, bool)
+                and str(raw_definition_id).isdigit()
+            ):
+                definition_ids.add(int(raw_definition_id))
+            definition_ids.discard(None)
+            if definition_ids:
+                list(
+                    Definition.objects.select_for_update(of=('self',))
+                    .filter(organization=org, id__in=definition_ids)
+                    .order_by('id')
+                    .values_list('id', flat=True)
+                )
+        instance = (
+            ItemGroup.objects.select_for_update(of=('self',))
+            .select_related('primary_item')
+            .get(
+                pk=instance.pk,
+                organization=org,
+            )
+        )
+        if (
+            'definition' in request.data
+            and instance.definition_id != expected_definition_id
+        ):
+            raise ValidationError({
+                'definition': (
+                    'Definition membership changed concurrently. Reload the '
+                    'group and retry.'
+                )
+            })
+        requested_deleted = request.data.get('deleted', instance.deleted)
+        requested_status = request.data.get('status', instance.status)
+        if (
+            'deleted' in request.data
+            and not isinstance(request.data.get('deleted'), bool)
+        ):
+            raise ValidationError({'deleted': 'Expected a boolean.'})
+        if (
+            requested_deleted is True
+            and 'status' in request.data
+            and requested_status != 'DELETED'
+        ):
+            raise ValidationError({
+                'status': 'A soft-deleted group must remain To Be Deleted.'
+            })
+        if (
+            instance.deleted
+            and requested_status != 'DELETED'
+            and requested_deleted is not False
+        ):
+            raise ValidationError({
+                'deleted': (
+                    'Restore the group (`deleted: false`) in the same request '
+                    'before moving it out of To Be Deleted.'
+                )
+            })
+        if (
+            requested_deleted is False
+            and requested_status == 'DELETED'
+            and ('deleted' in request.data or instance.deleted)
+        ):
+            raise ValidationError({
+                'status': (
+                    'Restoring a soft-deleted group requires a non-DELETED '
+                    'status in the same request.'
+                )
+            })
         old_status = instance.status
         old_deleted = instance.deleted
+        old_metadata = (
+            instance.ownership_person_id,
+            instance.steward_id,
+            instance.category_id,
+        )
 
         response = super().update(request, *args, **kwargs)
         instance.refresh_from_db()
@@ -1122,6 +1408,12 @@ class ItemGroupViewSet(viewsets.ModelViewSet):
         if just_deleted and instance.status != 'DELETED':
             instance.status = 'DELETED'
             instance.save(update_fields=['status'])
+        # The exact timestamp is the provenance marker for this group-delete
+        # episode. Persist it before cascading so restore can clear only the
+        # children this episode deleted, not source-obsolete children.
+        if just_deleted:
+            instance.deleted_at = timezone.now()
+            instance.save(update_fields=['deleted_at'])
 
         new_status = instance.status
         status_changed = new_status != old_status
@@ -1135,22 +1427,55 @@ class ItemGroupViewSet(viewsets.ModelViewSet):
             cascade_delete_to_items(instance, deleted=False)
 
         if status_changed or just_deleted:
-            rep = instance.primary_item or instance.items.first()
+            rep = instance.primary_item or instance.items.order_by('pk').first()
             if rep is not None:
-                try:
-                    from etl.hooks.slack.slack_alerts import send_slack_item_alert
-                    if status_changed:
-                        send_slack_item_alert(rep, request.user, 'status', old_status, new_status)
-                    if just_deleted:
-                        send_slack_item_alert(rep, request.user, 'deleted', False, True)
-                except Exception as e:
-                    print(f'[Slack alert] notify failed: {e}')
+                if status_changed:
+                    transaction.on_commit(
+                        lambda item_id=rep.pk, user_id=request.user.pk,
+                        old=old_status, new=new_status:
+                        _send_item_alert_after_commit(
+                            item_id, user_id, 'status', old, new,
+                        )
+                    )
+                if just_deleted:
+                    transaction.on_commit(
+                        lambda item_id=rep.pk, user_id=request.user.pk:
+                        _send_item_alert_after_commit(
+                            item_id, user_id, 'deleted', False, True,
+                        )
+                    )
             from .governance_tasks import sync_status_task
-            from .status_history import log_status_change, sync_group_deleted_at
             if status_changed:
-                log_status_change(instance, old_status, new_status, request.user)
-            sync_group_deleted_at(instance, new_status)
+                from .models import StatusChangeLog
+                StatusChangeLog.objects.create(
+                    organization=instance.organization,
+                    item_group=instance,
+                    group_key=instance.group_key,
+                    old_status=old_status,
+                    new_status=new_status,
+                    changed_by=request.user,
+                )
+            instance.deleted_at = (
+                instance.deleted_at or timezone.now()
+                if new_status == 'DELETED'
+                else None
+            )
+            instance.save(update_fields=['deleted_at'])
             sync_status_task(instance, new_status, request.user)
+        new_metadata = (
+            instance.ownership_person_id,
+            instance.steward_id,
+            instance.category_id,
+        )
+        if new_metadata != old_metadata:
+            from .governance_tasks import sync_group_metadata_tasks
+            sync_group_metadata_tasks(
+                [instance.pk],
+                create_missing_category=(
+                    old_metadata[2] != instance.category_id
+                    and instance.category_id is None
+                ),
+            )
         return response
 
 
@@ -1164,41 +1489,110 @@ class DefinitionViewSet(viewsets.ModelViewSet):
     measures, and pushing ownership is a decision rather than a side effect.
     """
     serializer_class = DefinitionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [DictionaryAccessPermission]
+    pagination_class = CatalogPagination
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'updated_at']
     ordering = ['name']
+    APPLY_PREVIEW_TOKEN_SALT = 'catalog.definition-apply-preview.v1'
+    APPLY_PREVIEW_TOKEN_MAX_AGE = 600
 
     def get_queryset(self):
         from django.db.models import Count
 
-        org = _get_user_organization(self.request.user)
+        org = _require_user_organization(self.request.user)
         qs = Definition.objects.select_related('ownership_person', 'ownership_department')
-        if org:
-            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
-        return qs.annotate(group_count_annotated=Count('item_groups'))
+        return qs.filter(organization=org).annotate(
+            group_count_annotated=Count(
+                'item_groups',
+                filter=Q(
+                    item_groups__organization=org,
+                    item_groups__kind=ItemGroup.KIND_MEASURE_NAME,
+                ),
+            )
+        )
 
     def perform_create(self, serializer):
-        serializer.save(organization=_get_user_organization(self.request.user))
+        serializer.save(organization=_require_user_organization(self.request.user))
 
     def perform_update(self, serializer):
         # Keep it pinned to its org; an update must never move it.
-        serializer.save(organization=_get_user_organization(self.request.user))
+        serializer.save(organization=_require_user_organization(self.request.user))
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        """Do not let a corrupt reverse FK turn delete into a tenant mutation."""
+        org = _require_user_organization(request.user)
+        from .services.item_groups import _acquire_grouping_advisory_lock
+
+        _acquire_grouping_advisory_lock(org.pk)
+        instance = self.get_object()
+        instance = Definition.objects.select_for_update(of=('self',)).get(
+            pk=instance.pk, organization=org,
+        )
+        related = (
+            ItemGroup.objects.select_for_update(of=('self',))
+            .filter(definition=instance)
+            .order_by('id')
+        )
+        list(related.values_list('id', flat=True))
+        if related.exclude(organization=org).exists():
+            raise ValidationError({
+                'detail': (
+                    'This definition has an invalid cross-organization group '
+                    'link and cannot be deleted until it is repaired.'
+                )
+            })
+        instance.delete()
+        return Response(status=204)
 
     def _org_groups(self, ids):
         """The caller's own ItemGroups among ``ids`` — never a neighbour's."""
-        org = _get_user_organization(self.request.user)
-        qs = ItemGroup.objects.filter(id__in=ids)
-        if org:
-            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
-        return qs
+        org = _require_user_organization(self.request.user)
+        return ItemGroup.objects.filter(organization=org, id__in=ids)
+
+    def _validated_group_ids(self, raw_ids, field):
+        if raw_ids is None:
+            return []
+        if not isinstance(raw_ids, list):
+            raise ValidationError({field: 'Expected a list of group ids.'})
+        ids = []
+        for raw in raw_ids:
+            if isinstance(raw, bool) or not str(raw).isdigit():
+                raise ValidationError({field: 'Every group id must be an integer.'})
+            ids.append(int(raw))
+        ids = sorted(set(ids))
+        if ids:
+            scoped = {
+                group_id: kind
+                for group_id, kind in (
+                    self._org_groups(ids).values_list('id', 'kind')
+                )
+            }
+            visible = set(scoped)
+            if visible != set(ids):
+                raise ValidationError({
+                    field: 'Every group must exist in your organization.'
+                })
+            if any(
+                scoped[group_id] != ItemGroup.KIND_MEASURE_NAME
+                for group_id in ids
+            ):
+                raise ValidationError({
+                    field: 'Definitions may contain measure groups only.'
+                })
+        return ids
 
     @action(detail=True, methods=['get'])
     def groups(self, request, pk=None):
         """The group items assigned to this definition."""
         definition = self.get_object()
         rows = (definition.item_groups
+                .filter(
+                    organization=_require_user_organization(request.user),
+                    kind=ItemGroup.KIND_MEASURE_NAME,
+                )
                 .select_related('ownership_person', 'ownership_department', 'primary_item')
                 .order_by('group_key'))
         return Response([{
@@ -1221,21 +1615,55 @@ class DefinitionViewSet(viewsets.ModelViewSet):
         that, deliberately.
         """
         definition = self.get_object()
-        add = [int(i) for i in (request.data.get('add') or []) if str(i).isdigit()]
-        remove = [int(i) for i in (request.data.get('remove') or []) if str(i).isdigit()]
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {'error': 'Expected an object with `add` and/or `remove` lists.'},
+                status=400,
+            )
+        add = self._validated_group_ids(request.data.get('add'), 'add')
+        remove = self._validated_group_ids(request.data.get('remove'), 'remove')
+        overlap = sorted(set(add) & set(remove))
+        if overlap:
+            raise ValidationError({
+                'add': (
+                    'A group cannot be added and removed in the same request. '
+                    f'Overlapping group id(s): {", ".join(map(str, overlap))}.'
+                )
+            })
 
-        added = self._org_groups(add).exclude(definition=definition).update(
-            definition=definition) if add else 0
+        with transaction.atomic():
+            from .services.item_groups import _acquire_grouping_advisory_lock
+
+            _acquire_grouping_advisory_lock(definition.organization_id)
+            definition = (
+                Definition.objects.select_for_update(of=('self',))
+                .get(pk=definition.pk, organization=definition.organization)
+            )
+            locked_groups = (
+                ItemGroup.objects.select_for_update(of=('self',))
+                .filter(
+                    organization=definition.organization,
+                    id__in=set(add) | set(remove),
+                )
+                .order_by('id')
+            )
+            list(locked_groups.values_list('id', flat=True))
+            added = self._org_groups(add).exclude(definition=definition).update(
+                definition=definition) if add else 0
         # Only unassign from THIS definition — a stale id from another one
         # shouldn't be able to detach it.
-        removed = self._org_groups(remove).filter(definition=definition).update(
-            definition=None) if remove else 0
+            removed = self._org_groups(remove).filter(definition=definition).update(
+                definition=None) if remove else 0
         return Response({
             'status': 'ok', 'added': added, 'removed': removed,
-            'group_count': definition.item_groups.count(),
+            'group_count': definition.item_groups.filter(
+                organization=definition.organization,
+                kind=ItemGroup.KIND_MEASURE_NAME,
+            ).count(),
         })
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def apply(self, request, pk=None):
         """Push this definition's owner + department onto its group items.
 
@@ -1244,13 +1672,66 @@ class DefinitionViewSet(viewsets.ModelViewSet):
         rather than blanked — empty means "not specified", not "erase it".
         """
         definition = self.get_object()
-        fields = request.data.get('fields') or ['ownership_person', 'ownership_department']
-        allowed = {'ownership_person', 'ownership_department'}
-        unknown = [f for f in fields if f not in allowed]
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {'error': 'Expected an object.'},
+                status=400,
+            )
+        org = _require_user_organization(request.user)
+        from .services.item_groups import _acquire_grouping_advisory_lock
+
+        _acquire_grouping_advisory_lock(org.pk)
+        definition = Definition.objects.select_for_update(of=('self',)).get(
+            pk=definition.pk,
+            organization=org,
+        )
+        corrupt_fields = []
+        if (
+            definition.ownership_person_id is not None
+            and not DataPerson.objects.filter(
+                pk=definition.ownership_person_id,
+                organization=definition.organization,
+            ).exists()
+        ):
+            corrupt_fields.append('ownership_person')
+        if (
+            definition.ownership_department_id is not None
+            and not Department.objects.filter(
+                pk=definition.ownership_department_id,
+                organization=definition.organization,
+            ).exists()
+        ):
+            corrupt_fields.append('ownership_department')
+        if corrupt_fields:
+            return Response({
+                'code': 'definition_tenant_integrity',
+                'error': (
+                    'Definition governance links cross an organization boundary '
+                    'and must be repaired before apply.'
+                ),
+                'fields': corrupt_fields,
+            }, status=400)
+        raw_fields = request.data.get('fields')
+        if raw_fields is None:
+            raw_fields = ['ownership_person', 'ownership_department']
+        if not isinstance(raw_fields, list):
+            return Response({'error': '`fields` must be a list.'}, status=400)
+        if any(not isinstance(field, str) for field in raw_fields):
+            return Response(
+                {'error': 'Every entry in `fields` must be a string.'},
+                status=400,
+            )
+        allowed_order = ['ownership_person', 'ownership_department']
+        allowed = set(allowed_order)
+        unknown = [field for field in raw_fields if field not in allowed]
         if unknown:
             return Response(
                 {'error': f'Unknown field(s): {", ".join(unknown)}. '
                           f'Allowed: {", ".join(sorted(allowed))}.'}, status=400)
+        fields = [field for field in allowed_order if field in raw_fields]
+        dry_run = request.data.get('dry_run', False)
+        if not isinstance(dry_run, bool):
+            return Response({'error': '`dry_run` must be a boolean.'}, status=400)
 
         patch, skipped = {}, []
         for field in fields:
@@ -1259,27 +1740,121 @@ class DefinitionViewSet(viewsets.ModelViewSet):
                 skipped.append(field)
             else:
                 patch[f'{field}_id'] = value
-        if not patch:
-            return Response({
-                'status': 'ok', 'updated': 0, 'skipped_unset': skipped,
-                'detail': 'This definition has no owner or department set yet.',
-            })
-
-        groups = definition.item_groups.all()
+        groups = (
+            definition.item_groups.select_for_update(of=('self',))
+            .filter(
+                organization=definition.organization,
+                kind=ItemGroup.KIND_MEASURE_NAME,
+            )
+            .order_by('id')
+        )
+        selected_value_fields = [f'{field}_id' for field in fields]
+        member_state = list(
+            groups.values_list('id', *selected_value_fields)
+        )
+        member_ids = [row[0] for row in member_state]
+        member_values_digest = hashlib.sha256(
+            json.dumps(
+                member_state,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        ).hexdigest()
+        preview_claims = {
+            'version': 1,
+            'organization_id': definition.organization_id,
+            'user_id': request.user.pk,
+            'definition_id': definition.pk,
+            'ownership_person_id': definition.ownership_person_id,
+            'ownership_department_id': definition.ownership_department_id,
+            'fields': fields,
+            'member_ids': member_ids,
+            'member_values_digest': member_values_digest,
+        }
         # Count only the rows that would really change, so "updated: 0" honestly
         # means "already correct" rather than "did nothing".
-        changed = groups.exclude(**patch).count()
-        if request.data.get('dry_run'):
-            return Response({'status': 'ok', 'would_update': changed,
-                             'group_count': groups.count(), 'skipped_unset': skipped,
-                             'dry_run': True})
+        changed_ids = (
+            list(groups.exclude(**patch).values_list('id', flat=True))
+            if patch else []
+        )
+        changed = len(changed_ids)
+        if dry_run:
+            return Response({
+                'status': 'ok',
+                'would_update': changed,
+                'group_count': len(member_ids),
+                'skipped_unset': skipped,
+                'dry_run': True,
+                'preview_token': signing.dumps(
+                    preview_claims,
+                    salt=self.APPLY_PREVIEW_TOKEN_SALT,
+                    compress=True,
+                ),
+            })
 
-        groups.exclude(**patch).update(**patch)
-        return Response({'status': 'ok', 'updated': changed,
-                         'group_count': groups.count(), 'skipped_unset': skipped})
+        token = request.data.get('preview_token')
+        if not isinstance(token, str) or not token:
+            return Response({
+                'code': 'preview_required',
+                'error': 'A successful matching preview is required before apply.',
+            }, status=400)
+        try:
+            signed_claims = signing.loads(
+                token,
+                salt=self.APPLY_PREVIEW_TOKEN_SALT,
+                max_age=self.APPLY_PREVIEW_TOKEN_MAX_AGE,
+            )
+        except signing.SignatureExpired:
+            return Response({
+                'code': 'preview_expired',
+                'error': 'The apply preview expired. Preview again.',
+            }, status=400)
+        except signing.BadSignature:
+            return Response({
+                'code': 'preview_invalid',
+                'error': 'The apply preview token is invalid. Preview again.',
+            }, status=400)
+        if signed_claims != preview_claims:
+            return Response({
+                'code': 'preview_stale',
+                'error': (
+                    'The definition, selected fields, or member groups changed '
+                    'after preview. Preview again.'
+                ),
+            }, status=400)
+
+        if changed_ids:
+            ItemGroup.objects.filter(
+                id__in=changed_ids,
+                organization=definition.organization,
+            ).update(**patch)
+            from .governance_tasks import sync_group_metadata_tasks
+            sync_group_metadata_tasks(
+                changed_ids, create_missing_category=False,
+            )
+        response = {
+            'status': 'ok',
+            'updated': changed,
+            'group_count': len(member_ids),
+            'skipped_unset': skipped,
+        }
+        if not patch:
+            response['detail'] = (
+                'None of the selected definition fields is set; nothing changed.'
+            )
+        return Response(response)
 
 
-class GovernanceTaskViewSet(viewsets.ModelViewSet):
+class StableTaskOrderingFilter(filters.OrderingFilter):
+    """Append a PK tiebreaker so offset pages cannot shuffle equal timestamps."""
+
+    def get_ordering(self, request, queryset, view):
+        ordering = super().get_ordering(request, queryset, view)
+        if ordering and not any(field.lstrip('-') == 'id' for field in ordering):
+            ordering = [*ordering, '-id']
+        return ordering
+
+
+class GovernanceTaskViewSet(viewsets.ReadOnlyModelViewSet):
     """Task Manager feed.
 
     Tasks are created by the backend — on a status change, or by the sweep in
@@ -1291,24 +1866,46 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
         'assignee', 'item_group', 'item_group__primary_item', 'organization',
     )
     serializer_class = GovernanceTaskSerializer
+    permission_classes = [TaskManagerAccessPermission]
     pagination_class = CatalogPagination
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [
+        DjangoFilterBackend, filters.SearchFilter, StableTaskOrderingFilter,
+    ]
     filterset_fields = ['assignee', 'reason']
     search_fields = ['title']
     ordering_fields = ['created_at', 'completed_at', 'reason']
-    ordering = ['-created_at']
+    ordering = ['-created_at', '-id']
 
     # Ceiling on one bulk-done call. Enforced loudly (400), not by slicing.
     BULK_DONE_LIMIT = 1000
+    PREVIEW_TOKEN_SALT = 'catalog.governance-task-preview.v1'
+    PREVIEW_TOKEN_MAX_AGE = 600
 
     def _org(self):
-        return _get_user_organization(self.request.user)
+        return _require_user_organization(self.request.user)
 
     def _org_scoped(self, qs):
-        org = self._org()
-        if org:
-            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
-        return qs
+        return qs.filter(organization=self._org())
+
+    def _is_admin(self):
+        from .access import is_org_admin
+        return is_org_admin(self.request.user, self._org())
+
+    def _linked_person(self):
+        from .access import resolve_data_person
+        return resolve_data_person(self.request.user, self._org())
+
+    def _selected_admin_person(self):
+        raw = (
+            self.request.query_params.get('person')
+            or self.request.query_params.get('assignee')
+            or ''
+        )
+        if str(raw).isdigit():
+            return DataPerson.objects.filter(
+                pk=int(raw), organization=self._org(),
+            ).first()
+        return self._linked_person()
 
     def get_queryset(self):
         qs = self._org_scoped(self.queryset)
@@ -1318,36 +1915,87 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
         state = self.request.query_params.get('state', GovernanceTask.STATE_OPEN)
         if state in (GovernanceTask.STATE_OPEN, GovernanceTask.STATE_DONE):
             qs = qs.filter(state=state)
+        elif state != 'all':
+            qs = qs.filter(state=GovernanceTask.STATE_OPEN)
 
         # `scope`: 'mine' | 'unassigned' | 'all' (default). 'mine' resolves the
         # signed-in login to its DataPerson — a login with no DataPerson profile
         # gets an empty feed rather than everyone else's tasks.
-        scope = (self.request.query_params.get('scope') or '').strip()
-        if scope == 'mine':
-            from .access import resolve_data_person
-            person = resolve_data_person(self.request.user)
-            qs = qs.filter(assignee=person) if person else qs.none()
-        elif scope == 'unassigned':
-            qs = qs.filter(assignee__isnull=True)
-        return qs
+        if not self._is_admin():
+            person = self._linked_person()
+            return qs.filter(assignee=person) if person else qs.none()
+
+        scope = (self.request.query_params.get('scope') or 'mine').strip()
+        if scope == 'all':
+            return qs
+        if scope == 'unassigned':
+            return qs.filter(assignee__isnull=True)
+        person = self._selected_admin_person()
+        return qs.filter(assignee=person) if person else qs.none()
+
+    def _action_queryset(self):
+        qs = self._org_scoped(GovernanceTask.objects.all())
+        if self._is_admin():
+            return qs
+        person = self._linked_person()
+        return qs.filter(assignee=person) if person else qs.none()
 
     def _mark_done(self, tasks_qs, user):
         """Close every open task in ``tasks_qs``. Returns how many changed."""
-        from django.utils import timezone
-        now = timezone.now()
-        return tasks_qs.filter(state=GovernanceTask.STATE_OPEN).update(
-            state=GovernanceTask.STATE_DONE,
-            completed_at=now,
-            completed_by=user if getattr(user, 'is_authenticated', False) else None,
-            closed_reason=GovernanceTask.CLOSED_MANUAL,
-            updated_at=now,
-        )
+        with transaction.atomic():
+            candidates = list(
+                tasks_qs.filter(state=GovernanceTask.STATE_OPEN)
+                .values('id', 'item_group_id')
+            )
+            group_ids = sorted({
+                row['item_group_id'] for row in candidates
+                if row['item_group_id'] is not None
+            })
+            if group_ids:
+                list(
+                    ItemGroup.objects.select_for_update(of=('self',))
+                    .filter(organization=self._org(), id__in=group_ids)
+                    .order_by('id')
+                    .values_list('id', flat=True)
+                )
+            task_ids = [row['id'] for row in candidates]
+            if not task_ids:
+                return 0
+            locked = GovernanceTask.objects.select_for_update(of=('self',)).filter(
+                id__in=task_ids,
+                organization=self._org(),
+                state=GovernanceTask.STATE_OPEN,
+            )
+            if not self._is_admin():
+                person = self._linked_person()
+                locked = (
+                    locked.filter(assignee=person)
+                    if person is not None else locked.none()
+                )
+            list(locked.order_by('id').values_list('id', flat=True))
+            now = timezone.now()
+            return locked.update(
+                state=GovernanceTask.STATE_DONE,
+                completed_at=now,
+                completed_by=user,
+                closed_reason=GovernanceTask.CLOSED_MANUAL,
+                condition_cleared_at=None,
+                updated_at=now,
+            )
 
     @action(detail=True, methods=['post'])
     def done(self, request, pk=None):
         """Mark the task done (soft) — hidden from the default feed, kept for audit."""
-        task = self.get_object()
-        self._mark_done(GovernanceTask.objects.filter(pk=task.pk), request.user)
+        task = self._action_queryset().filter(pk=pk).first()
+        if task is None:
+            from rest_framework.exceptions import NotFound
+            raise NotFound()
+        updated = self._mark_done(
+            GovernanceTask.objects.filter(pk=task.pk), request.user,
+        )
+        if updated != 1:
+            from rest_framework.exceptions import NotFound
+            raise NotFound()
         task.refresh_from_db()
         return Response({'status': 'ok', 'id': task.pk, 'state': task.state})
 
@@ -1359,10 +2007,22 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
         filter spec: a mistyped filter shouldn't be able to close the whole
         board, and the ids are exactly what the user saw ticked.
         """
-        ids = request.data.get('ids') or []
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {'error': 'Expected an object payload.'},
+                status=400,
+            )
+        ids = request.data.get('ids', [])
         if not isinstance(ids, list):
             return Response({'error': '`ids` must be a list of task ids.'}, status=400)
-        ids = [int(i) for i in ids if str(i).isdigit()]
+        parsed_ids = []
+        for raw_id in ids:
+            if isinstance(raw_id, bool) or not str(raw_id).isdigit():
+                return Response({
+                    'error': 'Every task id must be an integer.'
+                }, status=400)
+            parsed_ids.append(int(raw_id))
+        ids = sorted(set(parsed_ids))
         # Reject an oversized batch rather than silently slicing it. Truncating
         # returned 200 with a smaller `updated` that nothing read, so the user
         # saw "Mark 1200 done", watched the list shrink, and 200 tasks stayed
@@ -1378,7 +2038,7 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
             return Response({'status': 'ok', 'requested': 0, 'updated': 0})
         # Scope through the same org filter as the feed so one org can never
         # close another's tasks by guessing ids.
-        qs = self._org_scoped(GovernanceTask.objects.filter(id__in=ids))
+        qs = self._action_queryset().filter(id__in=ids)
         updated = self._mark_done(qs, request.user)
         # `requested` lets the caller notice when some ids were already done, or
         # belonged to another org, instead of assuming updated == len(ids).
@@ -1390,47 +2050,48 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
         a per-reason breakdown. One cheap aggregate instead of the page pulling
         every row just to count them.
 
-        "Mine" is whichever DataPerson the caller is acting as: `?person=<id>`
-        (the name they picked in the UI) wins, falling back to the DataPerson
-        their login is actually linked to. Most accounts aren't linked yet, so
-        the explicit pick is the normal path.
+        Non-admin members are pinned to the DataPerson linked to their login.
+        Administrators may pass ``?person=<id>`` to inspect another person's
+        counts without changing their own identity.
         """
         from django.db.models import Count
-        from .access import resolve_data_person
         from .governance_tasks import REASON_ORDER, reason_label
 
         open_qs = self._org_scoped(
             GovernanceTask.objects.filter(state=GovernanceTask.STATE_OPEN)
         )
-        person = None
-        person_param = (request.query_params.get('person') or '').strip()
-        if person_param.isdigit():
-            # Org-scoped: without this, passing another tenant's DataPerson id
-            # would report their open-task counts back to you.
-            people = DataPerson.objects.filter(id=int(person_param))
-            org = self._org()
-            if org is not None:
-                people = people.filter(Q(organization=org) | Q(organization__isnull=True))
-            person = people.first()
-        if person is None:
-            person = resolve_data_person(request.user)
+        linked_person = self._linked_person()
+        admin = self._is_admin()
+        person = self._selected_admin_person() if admin else linked_person
+        visible_open = open_qs if admin else (
+            open_qs.filter(assignee=person) if person else open_qs.none()
+        )
+        visible_done = self._org_scoped(
+            GovernanceTask.objects.filter(state=GovernanceTask.STATE_DONE)
+        )
+        if not admin:
+            visible_done = (
+                visible_done.filter(assignee=person)
+                if person else visible_done.none()
+            )
         by_reason = {
             row['reason']: row['n']
-            for row in open_qs.values('reason').annotate(n=Count('id'))
+            for row in visible_open.values('reason').annotate(n=Count('id'))
         }
         mine_by_reason = {}
         if person is not None:
             mine_by_reason = {
                 row['reason']: row['n']
-                for row in open_qs.filter(assignee=person).values('reason').annotate(n=Count('id'))
+                for row in visible_open.filter(assignee=person)
+                .values('reason').annotate(n=Count('id'))
             }
         return Response({
             'total_open': sum(by_reason.values()),
             'mine_open': sum(mine_by_reason.values()),
-            'unassigned_open': open_qs.filter(assignee__isnull=True).count(),
-            'done_total': self._org_scoped(
-                GovernanceTask.objects.filter(state=GovernanceTask.STATE_DONE)
-            ).count(),
+            'unassigned_open': (
+                open_qs.filter(assignee__isnull=True).count() if admin else 0
+            ),
+            'done_total': visible_done.count(),
             'reasons': [
                 {
                     'reason': r,
@@ -1441,10 +2102,9 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
                 for r in REASON_ORDER
             ],
             'data_person': ({'id': person.id, 'name': person.name} if person else None),
-            # Whether the *login* is linked to a DataPerson, as opposed to the
-            # caller merely having picked a name. Lets the UI prompt for a pick
-            # instead of showing an empty board with no explanation.
-            'linked': resolve_data_person(request.user) is not None,
+            # Lets the UI explain why an unlinked non-admin has an empty board.
+            'linked': linked_person is not None,
+            'identity_required': not admin and linked_person is None,
         })
 
     @action(detail=False, methods=['post'])
@@ -1460,6 +2120,7 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
         from .access import is_org_admin
         from .governance_tasks import (
             generate_tasks, REASON_ORDER, KIND_SCOPES, DEFAULT_KIND_SCOPE,
+            StaleGovernancePreview,
         )
 
         org = self._org()
@@ -1467,27 +2128,112 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'No organization for this user.'}, status=400)
         if not is_org_admin(request.user, org):
             return Response({'error': 'Admin access required.'}, status=403)
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {'error': 'Expected an object payload.'},
+                status=400,
+            )
 
-        reasons = request.data.get('reasons') or None
-        if reasons is not None:
-            if not isinstance(reasons, list):
+        raw_reasons = (
+            request.data.get('reasons')
+            if 'reasons' in request.data
+            else None
+        )
+        reasons = None
+        if raw_reasons is not None:
+            if not isinstance(raw_reasons, list):
                 return Response({'error': '`reasons` must be a list.'}, status=400)
-            reasons = [r for r in reasons if r in REASON_ORDER]
-            if not reasons:
-                return Response({'error': 'No valid reasons given.'}, status=400)
-        kind_scope = request.data.get('kind_scope') or DEFAULT_KIND_SCOPE
-        if kind_scope not in KIND_SCOPES:
+            if not raw_reasons:
+                return Response(
+                    {'error': '`reasons` must contain at least one reason.'},
+                    status=400,
+                )
+            unknown_reasons = [
+                reason for reason in raw_reasons
+                if reason not in REASON_ORDER
+            ]
+            if unknown_reasons:
+                return Response({'error': 'One or more reasons are invalid.'}, status=400)
+            reasons = [reason for reason in REASON_ORDER if reason in raw_reasons]
+        raw_kind_scope = request.data.get('kind_scope', None)
+        kind_scope = (
+            DEFAULT_KIND_SCOPE
+            if raw_kind_scope is None
+            else raw_kind_scope
+        )
+        if (
+            not isinstance(kind_scope, str)
+            or kind_scope not in KIND_SCOPES
+        ):
             return Response(
                 {'error': f'`kind_scope` must be one of {sorted(KIND_SCOPES)}.'}, status=400,
             )
-        dry_run = bool(request.data.get('dry_run'))
-        require_assignee = bool(request.data.get('require_assignee'))
+        dry_run = request.data.get('dry_run', False)
+        require_assignee = request.data.get('require_assignee', False)
+        if not isinstance(dry_run, bool) or not isinstance(require_assignee, bool):
+            return Response({
+                'error': '`dry_run` and `require_assignee` must be booleans.'
+            }, status=400)
+
+        effective_reasons = reasons or list(REASON_ORDER)
+        preview_claims = {
+            'organization_id': org.id,
+            'user_id': request.user.pk,
+            'reasons': effective_reasons,
+            'kind_scope': kind_scope,
+            'require_assignee': require_assignee,
+        }
+        broad_scope = kind_scope in ('singleton', 'all')
 
         if dry_run:
             result = generate_tasks(org, reasons=reasons, dry_run=True,
                                     require_assignee=require_assignee,
                                     kind_scope=kind_scope)
+            snapshot_digest = result.pop('_snapshot_digest', None)
+            if broad_scope:
+                result['preview_token'] = signing.dumps(
+                    {
+                        **preview_claims,
+                        'snapshot_digest': snapshot_digest,
+                    },
+                    salt=self.PREVIEW_TOKEN_SALT,
+                    compress=True,
+                )
             return Response(result)
+
+        expected_snapshot = None
+        if broad_scope:
+            token = request.data.get('preview_token')
+            if not isinstance(token, str) or not token:
+                return Response({
+                    'error': 'A matching successful preview is required for this asset scope.'
+                }, status=400)
+            try:
+                signed_claims = signing.loads(
+                    token,
+                    salt=self.PREVIEW_TOKEN_SALT,
+                    max_age=self.PREVIEW_TOKEN_MAX_AGE,
+                )
+            except signing.BadSignature:
+                return Response({
+                    'error': 'The preview is invalid or expired. Preview again.'
+                }, status=400)
+            signed_options = {
+                key: signed_claims.get(key)
+                for key in preview_claims
+            } if isinstance(signed_claims, dict) else {}
+            expected_snapshot = (
+                signed_claims.get('snapshot_digest')
+                if isinstance(signed_claims, dict) else None
+            )
+            if (
+                signed_options != preview_claims
+                or not isinstance(expected_snapshot, str)
+                or not expected_snapshot
+            ):
+                return Response({
+                    'error': 'The preview does not match these generation options.'
+                }, status=400)
 
         # One sweep at a time per org: two admins pressing Generate together
         # would otherwise do the same work twice and race on the same rows.
@@ -1496,11 +2242,24 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
             return Response({'error': 'A task sweep is already running. Try again shortly.'},
                             status=409)
         try:
-            result = generate_tasks(org, reasons=reasons, dry_run=False, notify=True,
-                                    require_assignee=require_assignee,
-                                    kind_scope=kind_scope)
+            try:
+                result = generate_tasks(
+                    org, reasons=reasons, dry_run=False, notify=True,
+                    require_assignee=require_assignee,
+                    kind_scope=kind_scope,
+                    expected_snapshot=expected_snapshot,
+                )
+            except StaleGovernancePreview:
+                return Response({
+                    'code': 'preview_stale',
+                    'error': (
+                        'The catalog or task target changed after preview. '
+                        'Preview again.'
+                    ),
+                }, status=409)
         finally:
             cache.delete(lock_key)
+        result.pop('_snapshot_digest', None)
         return Response(result)
 
     @action(detail=False, methods=['get'], url_path='generate-options')
@@ -1525,7 +2284,12 @@ class GovernanceTaskViewSet(viewsets.ModelViewSet):
 
 @api_view(['GET'])
 def get_summary(request):
-    summary = Summary.objects.first()
+    org = _require_user_organization(request.user)
+    summary = (
+        Summary.objects.filter(organization=org)
+        .order_by('-id')
+        .first()
+    )
     if summary:
         serializer = SummarySerializer(summary)
         return Response(serializer.data)
@@ -1542,9 +2306,9 @@ def get_dashboard(request):
     from django.db.models import Sum, Max
     from collections import defaultdict
 
-    org = _get_user_organization(request.user)
+    org = _require_user_organization(request.user)
     del_kw = _deleted_filter(org)
-    org_q = (Q(organization=org) | Q(organization__isnull=True)) if org else None
+    org_q = Q(organization=org)
     external_re = re.compile(r'external\s*measure')
 
     def measure_is_external(rec):
@@ -1684,7 +2448,11 @@ def get_dashboard(request):
                  'departments': [d.id for d in p.departments.all()]}
                 for p in qs.prefetch_related('departments')]
 
-    summary = Summary.objects.first()
+    summary = (
+        Summary.objects.filter(organization=org)
+        .order_by('-id')
+        .first()
+    )
     total_reports = (summary.total_reports if summary
                      else sum(s['r'] for s in ws_stats.values()))
 
@@ -2024,7 +2792,7 @@ def powerbi_usage(request):
 
 
 def _column_ego(center_id, depth, direction, unified=False, full=False,
-                depth_up=None, depth_down=None):
+                depth_up=None, depth_down=None, organization_id=None):
     """Build a column-level ego graph around ``center_id``.
 
     Traverses only ``column`` edges (column<->column, measure->column, and the
@@ -2055,6 +2823,14 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
     """
     from django.db.models import Q
     chunk_size = 900
+    if (
+        isinstance(organization_id, bool)
+        or not isinstance(organization_id, int)
+        or organization_id <= 0
+    ):
+        raise ValueError('A positive organization_id is required.')
+    edge_qs = NetworkEdge.objects.filter(organization_id=organization_id)
+    node_qs = NetworkNode.objects.filter(organization_id=organization_id)
 
     # Edges persist `kind`; `_edge_is` falls back to the prefix classifier only
     # for legacy rows whose `kind` was never backfilled (so the result is exact).
@@ -2070,7 +2846,7 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
     # 1. Seed frontier: the center column(s).
     seed = set()
     if _node_type(center_id) in _CONTAINER_TYPES:
-        for e in NetworkEdge.objects.filter(_CONTAINS_Q, source=center_id):
+        for e in edge_qs.filter(_CONTAINS_Q, source=center_id):
             if _edge_is(e, 'contains'):
                 seed.add(e.target)
     if not seed:
@@ -2097,12 +2873,14 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
             for i in range(0, len(frontier_list), chunk_size):
                 chunk = frontier_list[i:i + chunk_size]
                 if walk_direction == 'downstream':
-                    layer = NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
+                    layer = edge_qs.filter(_LINEAGE_Q, source__in=chunk)
                 elif walk_direction == 'upstream':
-                    layer = NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk)
+                    layer = edge_qs.filter(_LINEAGE_Q, target__in=chunk)
                 else:
-                    layer = (NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
-                             | NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk))
+                    layer = (
+                        edge_qs.filter(_LINEAGE_Q, source__in=chunk)
+                        | edge_qs.filter(_LINEAGE_Q, target__in=chunk)
+                    )
                 for e in layer:
                     if e.source == e.target or not _edge_is(e, 'column'):
                         continue
@@ -2140,7 +2918,7 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
     member_ids = [n for n in nodes_set if _node_type(n) in _MEMBER_TYPES]
     for i in range(0, len(member_ids), chunk_size):
         chunk = member_ids[i:i + chunk_size]
-        for e in NetworkEdge.objects.filter(_CONTAINS_Q, target__in=chunk):
+        for e in edge_qs.filter(_CONTAINS_Q, target__in=chunk):
             if _edge_is(e, 'contains'):
                 contains_edges.add((e.source, e.target))
                 nodes_set.add(e.source)
@@ -2163,8 +2941,12 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
             # Both endpoints must already be present, so query one side and keep
             # only edges whose partner is also in nodes_set (no expansion).
             incident = (
-                NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), source__in=chunk)
-                | NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), target__in=chunk)
+                edge_qs.filter(
+                    Q(kind='join') | Q(kind='filter'), source__in=chunk,
+                )
+                | edge_qs.filter(
+                    Q(kind='join') | Q(kind='filter'), target__in=chunk,
+                )
             )
             for e in incident:
                 if e.kind not in ('join', 'filter'):
@@ -2204,7 +2986,7 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
             frontier_list = list(frontier.keys())
             for i in range(0, len(frontier_list), chunk_size):
                 chunk = frontier_list[i:i + chunk_size]
-                for e in NetworkEdge.objects.filter(source__in=chunk):
+                for e in edge_qs.filter(source__in=chunk):
                     if e.source == e.target:
                         continue
                     if _node_type(e.target) not in _STRUCT_DOWN:
@@ -2245,10 +3027,10 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
     frontier_members = [n for n in nodes_set if _node_type(n) in _MEMBER_TYPES]
     for i in range(0, len(frontier_members), chunk_size):
         chunk = frontier_members[i:i + chunk_size]
-        for e in NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk):
+        for e in edge_qs.filter(_LINEAGE_Q, target__in=chunk):
             if e.source != e.target and _edge_is(e, 'column') and e.source not in nodes_set:
                 more_up.add(e.target)
-        for e in NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk):
+        for e in edge_qs.filter(_LINEAGE_Q, source__in=chunk):
             if e.source != e.target and _edge_is(e, 'column') and e.target not in nodes_set:
                 more_down.add(e.source)
     # A member whose resolved consuming reports aren't (all) in the response
@@ -2273,7 +3055,9 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
     seen_ids = set()
     nodes_list = list(nodes_set)
     for i in range(0, len(nodes_list), chunk_size):
-        for n in NetworkNode.objects.filter(node_id__in=nodes_list[i:i + chunk_size]):
+        for n in node_qs.filter(
+            node_id__in=nodes_list[i:i + chunk_size],
+        ):
             if n.node_id in seen_ids:
                 continue
             seen_ids.add(n.node_id)
@@ -2282,7 +3066,7 @@ def _column_ego(center_id, depth, direction, unified=False, full=False,
         if nid not in seen_ids:
             seen_ids.add(nid)
             nodes_data.append({"id": nid, "label": nid, "group": _node_type(nid) or "UNKNOWN"})
-    _enrich_with_item_metadata(nodes_data)
+    _enrich_with_item_metadata(nodes_data, organization_id)
     for n in nodes_data:
         nid = n.get('id')
         if nid in cols_with_lineage:
@@ -2335,6 +3119,10 @@ def get_network(request):
         full (bool)        — column/unified modes only: traverse column edges to
                              their transitive ends, ignoring the depth clamp.
     """
+    org = _require_user_organization(request.user)
+    node_qs = NetworkNode.objects.filter(organization=org)
+    edge_qs = NetworkEdge.objects.filter(organization=org)
+
     node_id = request.query_params.get('node_id', None)
     try:
         depth = int(request.query_params.get('depth', 1))
@@ -2384,14 +3172,14 @@ def get_network(request):
         # graph is loaded. `list=assets`.
         if request.query_params.get('list', '').strip() == 'assets':
             asset_groups = ['DBT_MODEL', 'DBT_SOURCE', 'DBT_SEED', 'PB_TABLE']
-            rows = NetworkNode.objects.filter(group__in=asset_groups).values(
+            rows = node_qs.filter(group__in=asset_groups).values(
                 'node_id', 'name', 'group',
             )
             nodes_data = [
                 {"id": r["node_id"], "label": r["name"] or r["node_id"], "group": r["group"] or "UNKNOWN"}
                 for r in rows
             ]
-            _enrich_with_item_metadata(nodes_data)
+            _enrich_with_item_metadata(nodes_data, org.pk)
             return Response({"nodes": nodes_data, "links": []})
 
         # Lazy-load one container's members (columns / measures / fields) for the
@@ -2403,19 +3191,21 @@ def get_network(request):
             from django.db.models import Q
             parent_id = request.query_params.get('parent', '').strip()
             member_groups = ['DBT_COLUMN', 'PB_COLUMN', 'PB_MEASURE', 'PB_FIELD']
+            if not node_qs.filter(node_id=parent_id).exists():
+                return Response({"nodes": [], "links": []})
             child_ids = list(
-                NetworkEdge.objects.filter(
+                edge_qs.filter(
                     Q(kind='contains') | Q(kind__isnull=True), source=parent_id,
                 ).values_list('target', flat=True)
             )
-            rows = NetworkNode.objects.filter(
+            rows = node_qs.filter(
                 node_id__in=child_ids, group__in=member_groups,
             ).values('node_id', 'name', 'group')
             nodes_data = [
                 {"id": r["node_id"], "label": r["name"] or r["node_id"], "group": r["group"] or "UNKNOWN"}
                 for r in rows
             ]
-            _enrich_with_item_metadata(nodes_data)
+            _enrich_with_item_metadata(nodes_data, org.pk)
             nodes_data.sort(key=lambda n: (n.get("label") or "").lower())
             return Response({"nodes": nodes_data, "links": []})
 
@@ -2430,7 +3220,7 @@ def get_network(request):
             member_groups = ['DBT_COLUMN', 'PB_COLUMN', 'PB_MEASURE', 'PB_FIELD']
             container_groups = ['DBT_MODEL', 'DBT_SOURCE', 'DBT_SEED', 'PB_TABLE']
             rows = list(
-                NetworkNode.objects.filter(
+                node_qs.filter(
                     name__icontains=q_text, group__in=member_groups,
                 ).values('node_id', 'name', 'group')[:200]
             )
@@ -2442,14 +3232,14 @@ def get_network(request):
             parent_by_child = {}
             if member_ids:
                 edges = list(
-                    NetworkEdge.objects.filter(
+                    edge_qs.filter(
                         Q(kind='contains') | Q(kind__isnull=True),
                         target__in=member_ids,
                     ).values('source', 'target')
                 )
                 source_ids = {e['source'] for e in edges}
                 container_ids = set(
-                    NetworkNode.objects.filter(
+                    node_qs.filter(
                         node_id__in=source_ids, group__in=container_groups,
                     ).values_list('node_id', flat=True)
                 )
@@ -2466,17 +3256,17 @@ def get_network(request):
                 for r in rows
                 if r["node_id"] in parent_by_child
             ]
-            _enrich_with_item_metadata(nodes_data)
+            _enrich_with_item_metadata(nodes_data, org.pk)
             nodes_data.sort(key=lambda n: (n.get("label") or "").lower())
             return Response({"nodes": nodes_data, "links": []})
 
         if node_id == 'ALL':
             # Load the entire graph
-            nodes_data = [_serialize(n) for n in NetworkNode.objects.all()]
-            _enrich_with_item_metadata(nodes_data)
+            nodes_data = [_serialize(n) for n in node_qs]
+            _enrich_with_item_metadata(nodes_data, org.pk)
             edges_data = [{"source": e.source, "target": e.target,
                            "kind": _edge_kind(e.source, e.target)}
-                          for e in NetworkEdge.objects.all()]
+                          for e in edge_qs]
             return Response({"nodes": nodes_data, "links": edges_data})
 
         # Lazy search: return only nodes matching `q` (for the Select2 ajax dropdown).
@@ -2484,25 +3274,30 @@ def get_network(request):
         # Optional `group` param scopes results to a specific node type (e.g. MEASURE).
         group_filter = request.query_params.get('group', '').strip().upper()
         if q:
-            qs = NetworkNode.objects.filter(name__icontains=q)
+            qs = node_qs.filter(name__icontains=q)
             if group_filter:
                 qs = qs.filter(group=group_filter)
             qs = qs.values("node_id", "name", "group")[:50]
         else:
-            qs = NetworkNode.objects.none()
+            qs = node_qs.none()
         nodes_data = [
             {"id": n["node_id"], "label": n["name"] or n["node_id"], "group": n["group"] or "UNKNOWN"}
             for n in qs
         ]
-        _enrich_with_item_metadata(nodes_data)
+        _enrich_with_item_metadata(nodes_data, org.pk)
         return Response({"nodes": nodes_data, "links": []})
+
+    if not node_qs.filter(node_id=node_id).exists():
+        return Response({"nodes": [], "links": []})
 
     if mode == 'column':
         return _column_ego(node_id, depth, direction, full=full,
-                           depth_up=depth_up, depth_down=depth_down)
+                           depth_up=depth_up, depth_down=depth_down,
+                           organization_id=org.pk)
     if mode == 'unified':
         return _column_ego(node_id, depth, direction, unified=True, full=full,
-                           depth_up=depth_up, depth_down=depth_down)
+                           depth_up=depth_up, depth_down=depth_down,
+                           organization_id=org.pk)
 
     # Ego graph with specified depth
     # direction controls which edges are traversed at each BFS step:
@@ -2535,15 +3330,15 @@ def get_network(request):
             asset_q = Q(level='asset') | Q(level='both') | Q(level__isnull=True)
             if direction == 'downstream':
                 # Only follow edges where current nodes are sources (move toward consumers)
-                layer_edges = NetworkEdge.objects.filter(asset_q, source__in=chunk)
+                layer_edges = edge_qs.filter(asset_q, source__in=chunk)
             elif direction == 'upstream':
                 # Only follow edges where current nodes are targets (move toward producers)
-                layer_edges = NetworkEdge.objects.filter(asset_q, target__in=chunk)
+                layer_edges = edge_qs.filter(asset_q, target__in=chunk)
             else:
                 # Both directions
                 layer_edges = (
-                    NetworkEdge.objects.filter(asset_q, source__in=chunk)
-                    | NetworkEdge.objects.filter(asset_q, target__in=chunk)
+                    edge_qs.filter(asset_q, source__in=chunk)
+                    | edge_qs.filter(asset_q, target__in=chunk)
                 )
 
             for edge in layer_edges:
@@ -2575,7 +3370,7 @@ def get_network(request):
     nodes_list = list(nodes_set)
     for i in range(0, len(nodes_list), chunk_size):
         chunk = nodes_list[i:i + chunk_size]
-        for n in NetworkNode.objects.filter(node_id__in=chunk):
+        for n in node_qs.filter(node_id__in=chunk):
             if n.node_id in seen_ids:
                 continue
             seen_ids.add(n.node_id)
@@ -2590,7 +3385,7 @@ def get_network(request):
             group = nid.split("::", 1)[0] if "::" in nid else "UNKNOWN"
             nodes_data.append({"id": nid, "label": nid, "group": group})
 
-    _enrich_with_item_metadata(nodes_data)
+    _enrich_with_item_metadata(nodes_data, org.pk)
     edges_data = [{"source": s, "target": t, "kind": _edge_kind(s, t)} for s, t in edges_set]
 
     return Response({
@@ -2617,6 +3412,7 @@ def find_network_path(request):
     """
     from .services.network_path import find_shortest_path
 
+    org = _require_user_organization(request.user)
     src = (request.query_params.get('from') or '').strip()
     dst = (request.query_params.get('to') or '').strip()
     if not src or not dst:
@@ -2640,10 +3436,11 @@ def find_network_path(request):
         direction=direction,
         algorithm=algorithm,
         workspace_id=workspace_id,
+        organization_id=org.pk,
     )
 
     nodes_payload = [{"id": n.id, "label": n.label, "group": n.group} for n in result.nodes]
-    _enrich_with_item_metadata(nodes_payload)
+    _enrich_with_item_metadata(nodes_payload, org.pk)
     return Response({
         "found": result.found,
         "distance": result.distance,
@@ -2673,6 +3470,7 @@ def get_network_reachable(request):
     """
     from .services.network_path import find_reachable_nodes
 
+    org = _require_user_organization(request.user)
     end_id = (request.query_params.get('from') or '').strip()
     if not end_id:
         return Response(
@@ -2682,13 +3480,18 @@ def get_network_reachable(request):
     direction = request.query_params.get('direction', 'upstream')
     workspace_id = (request.query_params.get('workspace_id') or '').strip()
 
-    result = find_reachable_nodes(end_id, direction=direction, workspace_id=workspace_id)
+    result = find_reachable_nodes(
+        end_id,
+        direction=direction,
+        workspace_id=workspace_id,
+        organization_id=org.pk,
+    )
 
     nodes_payload = [
         {"id": n.id, "label": n.label, "group": n.group, "distance": n.distance}
         for n in result.nodes
     ]
-    _enrich_with_item_metadata(nodes_payload)
+    _enrich_with_item_metadata(nodes_payload, org.pk)
     return Response({
         "nodes": nodes_payload,
         "truncated": result.truncated,
@@ -2965,6 +3768,32 @@ def integrations_run_source_now(request, source_id):
     source = IntegrationSource.objects.filter(id=source_id, organization=org).first()
     if not source:
         return Response({'error': 'Source not found'}, status=404)
+    if not source.is_active:
+        return Response(
+            {'error': 'Activate this source before running it.'},
+            status=400,
+        )
+    sibling = (
+        IntegrationSource.objects.filter(
+            organization=org,
+            source_type=source.source_type,
+            is_active=True,
+        )
+        .exclude(pk=source.pk)
+        .order_by('pk')
+        .first()
+    )
+    if sibling is not None:
+        return Response(
+            {
+                'error': (
+                    'This organization has multiple active sources of type '
+                    f'{source.source_type!r}. Disable the duplicate source '
+                    'before running the catalog load.'
+                )
+            },
+            status=400,
+        )
 
     # Check if there is already a running task
     running_log = SourceRunLog.objects.filter(source=source, status='running').first()
@@ -3744,13 +4573,12 @@ def _gov_csv_groups(user):
     """Org-scoped ItemGroup queryset annotated with a representative item's
     name/service/type for the read-only context columns."""
     from django.db.models import OuterRef, Subquery
-    org = _get_user_organization(user)
+    org = _require_user_organization(user)
     qs = ItemGroup.objects.select_related(
         'ownership_person', 'steward', 'ownership_department', 'category',
         'primary_item',
     )
-    if org is not None:
-        qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
+    qs = qs.filter(organization=org)
     any_item = Item.objects.filter(item_group_id=OuterRef('pk')).order_by('item_name')
     qs = qs.annotate(
         _any_name=Subquery(any_item.values('item_name')[:1]),
@@ -3770,6 +4598,7 @@ class _CsvEcho:
 
 
 @api_view(['GET'])
+@permission_classes([DictionaryAccessPermission])
 def governance_export_csv(request):
     """Download every ItemGroup's governance as CSV (one row per group)."""
     if not request.user.is_authenticated:
@@ -3816,10 +4645,12 @@ def governance_export_csv(request):
 def _resolve_named(model, name, org):
     """Case-insensitive, org-scoped name lookup against EXISTING records only.
     Returns (obj, 'ok' | 'missing' | 'ambiguous')."""
-    qs = model.objects.filter(name__iexact=name.strip())
-    scoped = list((qs.filter(organization=org) if org is not None else qs)[:2])
-    if not scoped and org is not None:
-        scoped = list(qs.filter(organization__isnull=True)[:2])
+    if org is None:
+        return None, 'missing'
+    scoped = list(model.objects.filter(
+        organization=org,
+        name__iexact=name.strip(),
+    )[:2])
     if not scoped:
         return None, 'missing'
     if len(scoped) > 1:
@@ -3828,7 +4659,9 @@ def _resolve_named(model, name, org):
 
 
 @api_view(['POST'])
+@permission_classes([DictionaryAccessPermission])
 @parser_classes([MultiPartParser, FormParser])
+@transaction.atomic
 def governance_import_csv(request):
     """Upload a governance CSV (same columns as the export). Each row is
     matched to an ItemGroup by `group_pk`, falling back to `group_id`
@@ -3899,38 +4732,130 @@ def governance_import_csv(request):
             status=400,
         )
 
-    org = _get_user_organization(request.user)
-    base = ItemGroup.objects.all()
-    if org is not None:
-        base = base.filter(Q(organization=org) | Q(organization__isnull=True))
+    org = _require_user_organization(request.user)
+    base = ItemGroup.objects.filter(organization=org)
 
     report = {
         'total_rows': 0, 'updated': 0,
         'skipped_no_match': [], 'unmatched_values': [],
-        'invalid_status': [], 'ambiguous': [],
+        'invalid_status': [], 'lifecycle_conflicts': [], 'ambiguous': [],
     }
 
-    for idx, row in enumerate(reader, start=2):  # row 1 is the header
-        report['total_rows'] += 1
+    parsed_rows = list(enumerate(reader, start=2))
+    report['total_rows'] = len(parsed_rows)
+
+    # Resolve every exact-tenant target before writing, then reject duplicate
+    # rows for one group. "Last row wins" is too easy to trigger accidentally
+    # in a spreadsheet and makes task/status audit history ambiguous.
+    requested_pks = sorted({
+        int(pk)
+        for _idx, row in parsed_rows
+        for pk in [(row.get('group_pk') or '').strip()]
+        if pk.isdigit()
+    })
+    requested_keys = sorted({
+        (row.get('group_id') or '').strip()
+        for _idx, row in parsed_rows
+        if (row.get('group_id') or '').strip()
+    })
+    by_pk = {}
+    by_key = {}
+    for offset in range(0, len(requested_pks), 900):
+        for group_id, group_key in base.filter(
+                pk__in=requested_pks[offset:offset + 900]).values_list(
+                    'id', 'group_key'):
+            by_pk[group_id] = group_id
+            by_key[group_key] = group_id
+    for offset in range(0, len(requested_keys), 900):
+        for group_id, group_key in base.filter(
+                group_key__in=requested_keys[offset:offset + 900]).values_list(
+                    'id', 'group_key'):
+            by_pk[group_id] = group_id
+            by_key[group_key] = group_id
+
+    resolved_rows = []
+    first_row_by_group = {}
+    duplicate_rows = []
+    for idx, row in parsed_rows:
         key = (row.get('group_id') or '').strip()
         pk = (row.get('group_pk') or '').strip()
-
-        grp = None
-        if pk.isdigit():
-            grp = base.filter(pk=int(pk)).first()
-        if grp is None and key:
-            grp = base.filter(group_key=key).first()
-        if grp is None:
+        group_id = by_pk.get(int(pk)) if pk.isdigit() else None
+        if group_id is None and key:
+            group_id = by_key.get(key)
+        if group_id is None:
             report['skipped_no_match'].append({'row': idx, 'group_id': key or pk})
+            continue
+        if group_id in first_row_by_group:
+            duplicate_rows.append({
+                'group_id': group_id,
+                'first_row': first_row_by_group[group_id],
+                'duplicate_row': idx,
+            })
+            continue
+        first_row_by_group[group_id] = idx
+        resolved_rows.append((idx, row, group_id))
+
+    if duplicate_rows:
+        return Response({
+            'code': 'duplicate_group_rows',
+            'error': (
+                'Each ItemGroup may appear at most once in an import. '
+                'No changes were applied.'
+            ),
+            'duplicates': duplicate_rows,
+        }, status=400)
+
+    from .services.item_groups import _acquire_grouping_advisory_lock
+
+    _acquire_grouping_advisory_lock(org.pk)
+    locked_by_id = {}
+    resolved_ids = sorted(first_row_by_group)
+    for offset in range(0, len(resolved_ids), 900):
+        for group in (
+            base.select_for_update(of=('self',))
+            .filter(pk__in=resolved_ids[offset:offset + 900])
+            .order_by('pk')
+        ):
+            locked_by_id[group.pk] = group
+
+    for idx, row, group_id in resolved_rows:
+        key = (row.get('group_id') or '').strip()
+        pk = (row.get('group_pk') or '').strip()
+        grp = locked_by_id.get(group_id)
+        if grp is None:
+            # A concurrent hard delete is not silently redirected by group_key.
+            report['skipped_no_match'].append({
+                'row': idx,
+                'group_id': (
+                    (row.get('group_id') or '').strip()
+                    or (row.get('group_pk') or '').strip()
+                ),
+            })
             continue
 
         changed = False
+        old_status = grp.status
+        old_metadata = (
+            grp.ownership_person_id,
+            grp.steward_id,
+            grp.category_id,
+        )
 
         status = (row.get('status') or '').strip()
         if status:
             su = status.upper()
             if su in _GOV_STATUS_VALUES:
-                if grp.status != su:
+                if grp.deleted and su != 'DELETED':
+                    report['lifecycle_conflicts'].append({
+                        'row': idx,
+                        'group_id': key or pk,
+                        'value': status,
+                        'detail': (
+                            'Restore the group through the cleanup lifecycle '
+                            'control before changing its status.'
+                        ),
+                    })
+                elif grp.status != su:
                     grp.status = su
                     changed = True
             else:
@@ -3965,12 +4890,47 @@ def governance_import_csv(request):
         if changed:
             grp.save()
             report['updated'] += 1
+            status_changed = grp.status != old_status
+            metadata_changed = (
+                grp.ownership_person_id,
+                grp.steward_id,
+                grp.category_id,
+            ) != old_metadata
+            if status_changed:
+                from .models import StatusChangeLog
+                from .services.group_cascade import cascade_status_to_items
+                from .governance_tasks import sync_status_task
+
+                cascade_status_to_items(grp)
+                StatusChangeLog.objects.create(
+                    organization=grp.organization,
+                    item_group=grp,
+                    group_key=grp.group_key,
+                    old_status=old_status,
+                    new_status=grp.status,
+                    changed_by=request.user,
+                )
+                grp.deleted_at = (
+                    timezone.now() if grp.status == 'DELETED' else None
+                )
+                grp.save(update_fields=['deleted_at'])
+                # CSV is a bulk reconciliation path. Keep task state exact but
+                # do not emit one Slack message per imported row.
+                sync_status_task(
+                    grp, grp.status, request.user, notify=False,
+                )
+            elif metadata_changed:
+                from .governance_tasks import sync_group_metadata_tasks
+                sync_group_metadata_tasks(
+                    [grp.pk], create_missing_category=False,
+                )
 
     report['message'] = (
         f"{report['updated']} group(s) updated out of {report['total_rows']} "
         f"row(s). {len(report['skipped_no_match'])} unmatched group_id, "
         f"{len(report['unmatched_values'])} unknown name(s) skipped, "
         f"{len(report['invalid_status'])} invalid status, "
+        f"{len(report['lifecycle_conflicts'])} lifecycle conflict(s), "
         f"{len(report['ambiguous'])} ambiguous name(s)."
     )
     return Response(report)

@@ -4,8 +4,8 @@ Runs after 0056's merge, in its own transaction, so the indexes are built on a
 table with no pending trigger events and no remaining duplicates.
 
 Two rules:
-  * one DataPerson per login — the member-save upsert keys on ``user``, and a
-    second row for the same user made that upsert ambiguous;
+  * one DataPerson per login per organization — the member-save upsert keys on
+    that pair, while the same login can belong to several organizations;
   * one person per name per org, case-insensitively — the actual duplicate the
     dropdowns were showing.
 """
@@ -25,8 +25,9 @@ class Migration(migrations.Migration):
             model_name='dataperson',
             constraint=models.UniqueConstraint(
                 condition=models.Q(('user__isnull', False)),
-                fields=('user',),
-                name='uniq_dataperson_user',
+                fields=('user', 'organization'),
+                name='uniq_dataperson_user_org',
+                nulls_distinct=False,
             ),
         ),
         migrations.AddConstraint(
