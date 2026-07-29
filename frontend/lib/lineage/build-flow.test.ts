@@ -204,6 +204,41 @@ describe("buildColibriFlow — linkedColumnsOnly (Show full lineage)", () => {
   });
 });
 
+describe("buildColibriFlow — layout ignores hidden cards", () => {
+  // Two independent one-column cards, no edges between them → both land at
+  // level 0. Card b is at a lower y than card a. Hiding a must NOT leave a gap
+  // where a was: b's position must match a from-scratch layout without a.
+  const nodes: NetworkNode[] = [
+    { id: "PB_TABLE::a", group: "PB_TABLE", label: "Alpha" },
+    { id: "PB_COLUMN::ca", group: "PB_COLUMN", label: "x" },
+    { id: "PB_TABLE::b", group: "PB_TABLE", label: "Beta" },
+    { id: "PB_COLUMN::cb", group: "PB_COLUMN", label: "y" },
+  ];
+  const links: NetworkLink[] = [
+    { source: "PB_TABLE::a", target: "PB_COLUMN::ca", kind: "contains" },
+    { source: "PB_TABLE::b", target: "PB_COLUMN::cb", kind: "contains" },
+  ];
+
+  it("positions visible cards as if the hidden ones were never there", () => {
+    const withHidden = buildColibriFlow(nodes, links, null, {
+      hidden: new Set(["PB_TABLE::a"]),
+      includeReportCards: false,
+    });
+    const bHidden = withHidden.nodes.find((n) => n.id === "PB_TABLE::b")!;
+    expect(withHidden.nodes.map((n) => n.id)).toEqual(["PB_TABLE::b"]); // a not rendered
+
+    // Same graph with a absent from the raw input entirely.
+    const withoutA = buildColibriFlow(
+      [nodes[2], nodes[3]],
+      [links[1]],
+      null,
+      { includeReportCards: false },
+    );
+    const bAlone = withoutA.nodes.find((n) => n.id === "PB_TABLE::b")!;
+    expect(bHidden.position).toEqual(bAlone.position); // no ghost slot left by a
+  });
+});
+
 describe("buildAssetFlow", () => {
   // a star graph: hub with 4 leaves + the center
   const center = "DBT_MODEL::center";

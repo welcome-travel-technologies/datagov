@@ -2023,7 +2023,8 @@ def powerbi_usage(request):
     return Response({'results': data, 'months': months, 'group_by': group_by})
 
 
-def _column_ego(center_id, depth, direction, unified=False, full=False):
+def _column_ego(center_id, depth, direction, unified=False, full=False,
+                depth_up=None, depth_down=None):
     """Build a column-level ego graph around ``center_id``.
 
     Traverses only ``column`` edges (column<->column, measure->column, and the
@@ -2038,10 +2039,19 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
     frontier is dry, i.e. it follows column edges to their transitive ends (the
     "show full column lineage" action). Otherwise it is bounded to ``depth`` hops.
 
-    When ``unified`` is True we additionally pull the downstream PowerBI report
-    hierarchy (column/measure -> visual -> page -> report, all ``model``-kind
-    usage edges) so reports render as downstream consumer cards. Reports are
-    inherently downstream, so this only runs for 'both'/'downstream'.
+    When ``unified`` is True we additionally surface downstream PowerBI report
+    consumers: each member's usage chain (member -> visual -> page -> report)
+    is resolved to its terminal PB_REPORT(s), emitted as a direct
+    member -> report ``model`` edge — the unnamed visual/page intermediates are
+    never included. Reports are inherently downstream, so they are only
+    included for 'both'/'downstream' on an expanded (depth > 0 / full) load.
+
+    ``depth_up`` / ``depth_down`` (the canvas level stepper): when either is
+    given, ``depth``/``direction``/``full`` are ignored and the graph is the
+    union of a strictly-upstream walk of ``depth_up`` hops and a
+    strictly-downstream walk of ``depth_down`` hops. One response for both
+    radii keeps the frontier flags exact — two merged directional responses
+    would each flag the other direction as unloaded.
     """
     from django.db.models import Q
     chunk_size = 900
@@ -2068,47 +2078,62 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
 
     # 2. BFS over column edges only (direction-aware), same semantics as the
     #    asset ego graph: downstream follows source->target, upstream the reverse.
-    nodes_set = set(seed)
-    column_edges = set()
-    edge_meta = {}  # (source, target) -> (lineage_type, is_bridge)
-    frontier = set(seed)
     # `full` walks column edges to their transitive ends (loop until the frontier
-    # is dry); otherwise we bound to `depth` hops. The graph is finite and we only
-    # ever enqueue not-yet-seen nodes, so full traversal always halts — the large
-    # step cap below is just a backstop against pathological/cyclic data.
+    # is dry); otherwise we bound to the given hop count. The graph is finite and
+    # we only ever enqueue not-yet-seen nodes, so full traversal always halts —
+    # the large step cap below is just a backstop against pathological/cyclic data.
     _FULL_STEP_CAP = 1000
-    for _ in range(_FULL_STEP_CAP if full else depth):
-        if not frontier:
-            break
-        next_frontier = set()
-        frontier_list = list(frontier)
-        for i in range(0, len(frontier_list), chunk_size):
-            chunk = frontier_list[i:i + chunk_size]
-            if direction == 'downstream':
-                layer = NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
-            elif direction == 'upstream':
-                layer = NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk)
-            else:
-                layer = (NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
-                         | NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk))
-            for e in layer:
-                if e.source == e.target or not _edge_is(e, 'column'):
-                    continue
-                column_edges.add((e.source, e.target))
-                edge_meta[(e.source, e.target)] = (e.lineage_type, bool(e.bridge_reason))
-                if direction == 'downstream':
-                    if e.target not in nodes_set:
-                        next_frontier.add(e.target)
-                elif direction == 'upstream':
-                    if e.source not in nodes_set:
-                        next_frontier.add(e.source)
+
+    def _walk(walk_direction, steps, walk_full=False):
+        nodes_acc = set(seed)
+        edges_acc = set()
+        meta_acc = {}  # (source, target) -> (lineage_type, is_bridge)
+        frontier = set(seed)
+        for _ in range(_FULL_STEP_CAP if walk_full else steps):
+            if not frontier:
+                break
+            next_frontier = set()
+            frontier_list = list(frontier)
+            for i in range(0, len(frontier_list), chunk_size):
+                chunk = frontier_list[i:i + chunk_size]
+                if walk_direction == 'downstream':
+                    layer = NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
+                elif walk_direction == 'upstream':
+                    layer = NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk)
                 else:
-                    if e.source not in nodes_set:
-                        next_frontier.add(e.source)
-                    if e.target not in nodes_set:
-                        next_frontier.add(e.target)
-        nodes_set |= next_frontier
-        frontier = next_frontier
+                    layer = (NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk)
+                             | NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk))
+                for e in layer:
+                    if e.source == e.target or not _edge_is(e, 'column'):
+                        continue
+                    edges_acc.add((e.source, e.target))
+                    meta_acc[(e.source, e.target)] = (e.lineage_type, bool(e.bridge_reason))
+                    if walk_direction == 'downstream':
+                        if e.target not in nodes_acc:
+                            next_frontier.add(e.target)
+                    elif walk_direction == 'upstream':
+                        if e.source not in nodes_acc:
+                            next_frontier.add(e.source)
+                    else:
+                        if e.source not in nodes_acc:
+                            next_frontier.add(e.source)
+                        if e.target not in nodes_acc:
+                            next_frontier.add(e.target)
+            nodes_acc |= next_frontier
+            frontier = next_frontier
+        return nodes_acc, edges_acc, meta_acc
+
+    asymmetric = depth_up is not None or depth_down is not None
+    if asymmetric:
+        # Level-stepper load: strictly-upstream + strictly-downstream walks with
+        # independent radii, unioned into one response (exact frontier flags).
+        up_nodes, up_edges, up_meta = _walk('upstream', max(0, int(depth_up or 0)))
+        down_nodes, down_edges, down_meta = _walk('downstream', max(0, int(depth_down or 0)))
+        nodes_set = up_nodes | down_nodes
+        column_edges = up_edges | down_edges
+        edge_meta = {**up_meta, **down_meta}
+    else:
+        nodes_set, column_edges, edge_meta = _walk(direction, depth, walk_full=full)
 
     # 3. Attach the parent container of every column we collected.
     contains_edges = set()
@@ -2120,59 +2145,63 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
                 contains_edges.add((e.source, e.target))
                 nodes_set.add(e.source)
 
-    # 3b. Structural relationship edges (FK→PK 'join' / 'filter') incident to any
-    # collected column. We pull the joined column in (one hop, no transitive
-    # expansion → bounded) and attach its container so the relationship is
-    # visible from the current view without ballooning the graph. Skipped on a
-    # depth-0 focus load, which must show only the focused element + its card.
+    # 3b. Structural relationship edges (FK→PK 'join' / 'filter') between columns
+    # that are ALREADY on the canvas from the data-lineage walk. These edges are
+    # context between present nodes only — they must NOT pull new columns/tables
+    # in. A shared dimension (e.g. a Date dimension every fact table joins) is a
+    # hub: expanding through it dragged in every joined table as a stray
+    # one-column card — pure clutter, never the derivation path the user asked
+    # for. Skipped on a depth-0 focus load (just the focused element + its card).
     structural_edges = []
-    if depth > 0 or full:
+    expanded = ((max(0, int(depth_up or 0)) > 0 or max(0, int(depth_down or 0)) > 0)
+                if asymmetric else (depth > 0 or full))
+    if expanded:
         struct_seen = set()
-        member_set = set(member_ids)
-        _STRUCT_Q = Q(kind='join') | Q(kind='filter')
-        for i in range(0, len(member_ids), chunk_size):
-            chunk = member_ids[i:i + chunk_size]
+        present_members = [n for n in member_ids]  # columns already collected
+        for i in range(0, len(present_members), chunk_size):
+            chunk = present_members[i:i + chunk_size]
+            # Both endpoints must already be present, so query one side and keep
+            # only edges whose partner is also in nodes_set (no expansion).
             incident = (
-                NetworkEdge.objects.filter(_STRUCT_Q, source__in=chunk)
-                | NetworkEdge.objects.filter(_STRUCT_Q, target__in=chunk)
+                NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), source__in=chunk)
+                | NetworkEdge.objects.filter(Q(kind='join') | Q(kind='filter'), target__in=chunk)
             )
             for e in incident:
                 if e.kind not in ('join', 'filter'):
                     continue
+                if e.source not in nodes_set or e.target not in nodes_set:
+                    continue  # would pull a new node in → clutter, drop it
                 key = (e.source, e.target, e.kind)
                 if key in struct_seen:
                     continue
                 struct_seen.add(key)
                 structural_edges.append((e.source, e.target, e.kind, bool(e.bridge_reason)))
-                nodes_set.add(e.source)
-                nodes_set.add(e.target)
 
-        # Attach containers for any join-partner columns we just pulled in.
-        extra_members = [n for n in nodes_set
-                         if _node_type(n) in _MEMBER_TYPES and n not in member_set]
-        for i in range(0, len(extra_members), chunk_size):
-            chunk = extra_members[i:i + chunk_size]
-            for e in NetworkEdge.objects.filter(_CONTAINS_Q, target__in=chunk):
-                if _edge_is(e, 'contains'):
-                    contains_edges.add((e.source, e.target))
-                    nodes_set.add(e.source)
-
-    # 3d. Downstream report/usage hierarchy (unified mode only): from every
-    # member collected so far, follow model-level usage edges
-    # (column/measure -> visual -> page -> report) so PowerBI reports surface as
-    # downstream consumer cards. Bounded BFS (members -> visual -> page -> report,
-    # +1 slack hop) keeps it cheap. Skipped on a depth-0 focus load (it would pull
-    # the whole report hierarchy for a heavily-used measure — the slow path).
+    # 3d. Downstream report consumers (unified mode only). Each member's usage
+    # chain (member -> visual -> page -> report) is resolved to its terminal
+    # PB_REPORT(s) and surfaced as a DIRECT member -> report edge; the unnamed
+    # visual/page intermediates never enter the payload. (Including them dumped
+    # the whole hierarchy — a wall of "Unknown" cards — on a hub measure's first
+    # downstream expand, instead of the handful of reports the user recognizes.)
+    # The resolution walk always runs for unified requests — it also powers the
+    # downstream frontier flags — but the resolved reports are only INCLUDED in
+    # the response on an expanded load, so a depth-0 focus stays a single card
+    # with a "+" that means exactly one level: its consuming reports.
     usage_edges = []
-    if unified and direction in ('both', 'downstream') and (depth > 0 or full):
+    member_reports = {}  # member id -> set of terminal PB_REPORT ids
+    if unified:
         _STRUCT_DOWN = ('PB_VISUAL', 'PB_PAGE', 'PB_REPORT')
-        usage_seen = set()
-        frontier = {n for n in nodes_set if _node_type(n) in _MEMBER_TYPES}
+        # BFS over model-kind usage edges, carrying the set of originating
+        # members through the visual/page intermediates so each report resolves
+        # back to the member(s) that feed it. members -> visual -> page ->
+        # report is 3 hops; +1 slack matches the old traversal bound.
+        origins = {m: {m} for m in nodes_set if _node_type(m) in _MEMBER_TYPES}
+        frontier = dict(origins)
         for _ in range(4):
             if not frontier:
                 break
-            next_frontier = set()
-            frontier_list = list(frontier)
+            next_frontier = {}
+            frontier_list = list(frontier.keys())
             for i in range(0, len(frontier_list), chunk_size):
                 chunk = frontier_list[i:i + chunk_size]
                 for e in NetworkEdge.objects.filter(source__in=chunk):
@@ -2182,15 +2211,51 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
                         continue
                     if (e.kind or _edge_kind(e.source, e.target)) != 'model':
                         continue
-                    key = (e.source, e.target)
-                    if key in usage_seen:
+                    srcs = frontier.get(e.source) or set()
+                    if not srcs:
                         continue
-                    usage_seen.add(key)
-                    usage_edges.append(key)
-                    if e.target not in nodes_set:
-                        nodes_set.add(e.target)
-                        next_frontier.add(e.target)
+                    if _node_type(e.target) == 'PB_REPORT':
+                        for m in srcs:
+                            member_reports.setdefault(m, set()).add(e.target)
+                    else:
+                        known = origins.setdefault(e.target, set())
+                        fresh = srcs - known
+                        if fresh:
+                            known |= fresh
+                            next_frontier.setdefault(e.target, set()).update(fresh)
             frontier = next_frontier
+
+    dir_down_ok = (max(0, int(depth_down or 0)) > 0 if asymmetric
+                   else direction in ('both', 'downstream'))
+    want_usage = unified and dir_down_ok and expanded
+    if want_usage:
+        for m, reports in member_reports.items():
+            for r in sorted(reports):
+                usage_edges.append((m, r))
+                nodes_set.add(r)
+
+    # 3e. Frontier flags: does a member still have column-lineage beyond this
+    # response, per direction? Powers the per-card "load one more level" buttons
+    # so they only render where clicking would actually pull in something new.
+    # Computed against THIS response's node set — a client that merges several
+    # responses may briefly see a stale True, which self-heals on the (cheap,
+    # idempotent) next expand of that card.
+    more_up = set()
+    more_down = set()
+    frontier_members = [n for n in nodes_set if _node_type(n) in _MEMBER_TYPES]
+    for i in range(0, len(frontier_members), chunk_size):
+        chunk = frontier_members[i:i + chunk_size]
+        for e in NetworkEdge.objects.filter(_LINEAGE_Q, target__in=chunk):
+            if e.source != e.target and _edge_is(e, 'column') and e.source not in nodes_set:
+                more_up.add(e.target)
+        for e in NetworkEdge.objects.filter(_LINEAGE_Q, source__in=chunk):
+            if e.source != e.target and _edge_is(e, 'column') and e.target not in nodes_set:
+                more_down.add(e.source)
+    # A member whose resolved consuming reports aren't (all) in the response
+    # still has downstream to load — its card's "+" pulls those reports in.
+    for m, reports in member_reports.items():
+        if reports - nodes_set:
+            more_down.add(m)
 
     # Per-column lineage attributes for the node payload: a column that is the
     # target of a column edge carries that edge's derivation type; any column in
@@ -2224,6 +2289,10 @@ def _column_ego(center_id, depth, direction, unified=False, full=False):
             n['hasLineage'] = True
         if nid in lineage_by_target:
             n['lineageType'] = lineage_by_target[nid]
+        if nid in more_up:
+            n['hasMoreUp'] = True
+        if nid in more_down:
+            n['hasMoreDown'] = True
 
     links = []
     for s, t in column_edges:
@@ -2288,6 +2357,19 @@ def get_network(request):
     mode = request.query_params.get('mode', 'asset')
     if mode not in ('asset', 'column', 'unified'):
         mode = 'asset'
+
+    # Asymmetric radii for the canvas level stepper (column/unified modes only):
+    # depth_up / depth_down override depth+direction when either is present.
+    def _opt_depth(name):
+        raw = request.query_params.get(name, '').strip()
+        if raw == '':
+            return None
+        try:
+            return max(0, min(int(raw), 5))
+        except (TypeError, ValueError):
+            return None
+    depth_up = _opt_depth('depth_up')
+    depth_down = _opt_depth('depth_down')
 
     _serialize = _serialize_node
 
@@ -2416,9 +2498,11 @@ def get_network(request):
         return Response({"nodes": nodes_data, "links": []})
 
     if mode == 'column':
-        return _column_ego(node_id, depth, direction, full=full)
+        return _column_ego(node_id, depth, direction, full=full,
+                           depth_up=depth_up, depth_down=depth_down)
     if mode == 'unified':
-        return _column_ego(node_id, depth, direction, unified=True, full=full)
+        return _column_ego(node_id, depth, direction, unified=True, full=full,
+                           depth_up=depth_up, depth_down=depth_down)
 
     # Ego graph with specified depth
     # direction controls which edges are traversed at each BFS step:

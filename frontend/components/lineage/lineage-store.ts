@@ -58,7 +58,9 @@ export const initialLineageState: LineageState = {
   lens: "lineage-type",
   layersFilter: new Set(),
   tagsFilter: new Set(),
-  showReports: false,
+  // Report consumers arrive as one compact card per report (the hierarchy is
+  // collapsed server-side), so they're worth showing by default.
+  showReports: true,
   linkedOnly: false,
   selectedModelId: null,
   loading: false,
@@ -70,7 +72,7 @@ export type LineageAction =
   | { type: "LOAD_START"; text?: string }
   | { type: "LOAD_SUCCESS"; nodes: NetworkNode[]; links: NetworkLink[]; centerId: string; linkedOnly?: boolean }
   | { type: "LOAD_ERROR"; error: string }
-  | { type: "MERGE_GRAPH"; nodes: NetworkNode[]; links: NetworkLink[]; freeze?: Record<string, XY> }
+  | { type: "MERGE_GRAPH"; nodes: NetworkNode[]; links: NetworkLink[] }
   | { type: "SET_CENTER"; centerId: string | null }
   | { type: "SET_DIRECTION"; direction: Direction }
   | { type: "TOGGLE_COLLAPSE"; cardId: string }
@@ -132,8 +134,12 @@ export function lineageReducer(state: LineageState, action: LineageAction): Line
         ...state,
         rawNodes: merged.nodes,
         rawEdges: merged.links,
-        // Freeze existing cards' positions so only brand-new cards auto-layout.
-        positions: { ...state.positions, ...(action.freeze ?? {}) },
+        // Re-layout the whole graph. Freezing pre-merge positions while new cards
+        // take coordinates from a fresh layout mixed two coordinate systems and
+        // stacked new cards on top of frozen ones — a clean auto-layout after
+        // every merge is always readable, at the cost of cards moving.
+        positions: {},
+        layoutMode: "auto",
         loading: false,
         loadingText: "",
       };

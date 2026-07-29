@@ -47,6 +47,22 @@ describe("buildColumnModel", () => {
     expect(m.cards[0].label).toBe("Measures");
   });
 
+  it("aggregates member frontier flags onto the card", () => {
+    const nodes: NetworkNode[] = [
+      { id: "DBT_MODEL::m", label: "m", group: "DBT_MODEL" },
+      { id: "DBT_COLUMN::a", label: "a", group: "DBT_COLUMN", hasMoreUp: true },
+      { id: "DBT_COLUMN::b", label: "b", group: "DBT_COLUMN" },
+    ] as NetworkNode[];
+    const links: NetworkLink[] = [
+      { source: "DBT_MODEL::m", target: "DBT_COLUMN::a", kind: "contains" },
+      { source: "DBT_MODEL::m", target: "DBT_COLUMN::b", kind: "contains" },
+    ];
+    const m = buildColumnModel(nodes, links, null);
+    const card = m.cards.find((c) => c.id === "DBT_MODEL::m")!;
+    expect(card.hasMoreUp).toBe(true); // any flagged member flags the card
+    expect(card.hasMoreDown).toBe(false);
+  });
+
   it("tags every card with a cardKind", () => {
     expect(model.cards.every((c) => c.cardKind === "model")).toBe(true);
   });

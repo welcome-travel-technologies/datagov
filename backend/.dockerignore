@@ -5,6 +5,14 @@ venv.
 *.pyc
 __pycache__
 .pytest_cache
+**/.pytest_cache
+app/.pytest_cache
+.mypy_cache
+**/.mypy_cache
+.ruff_cache
+**/.ruff_cache
+app/.venv
+**/.venv
 node_modules
 .claude
 *.db

@@ -30,6 +30,7 @@ import { columnLineage, dbtBuildCommand } from "@/lib/lineage/column-model";
 import { getLens, cardLayer, cardAccent, type LensId } from "@/lib/lineage/lens";
 import type { ModelCard } from "@/lib/lineage/column-model";
 import { useHistory } from "@/lib/lineage/history";
+import { isMemberGroup } from "@/lib/lineage/graph-utils";
 import {
   loadViews,
   saveView as persistSaveView,
@@ -123,11 +124,19 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
   }, [undo, redo]);
 
   // ---- data loading -------------------------------------------------------
+  /** A column / measure / field center: the user cares about ONE element, so
+   *  loads auto-pin its trace and collapse cards to just the connected rows. */
+  const isMemberCenter = (id: string) => isMemberGroup(id.split("::")[0]);
+
   const loadEgo = useCallback(
     async (id: string, d: number, dir: Direction, full = false) => {
       dispatch({ type: "LOAD_START", text: "Loading lineage…" });
       try {
         const data = await api.network.ego({ node_id: id, depth: d, direction: dir, mode: "unified", full });
+        // Focusing a single column/measure pins its trace once the model is
+        // rebuilt (effect below), so its card renders as title + that column
+        // instead of the whole table.
+        if (isMemberCenter(id)) pendingFocusRef.current = id;
         // "Show full lineage" (full=true) prunes each card to the columns on the
         // lineage so one huge card can't dominate the canvas; a plain focus does not.
         dispatch({ type: "LOAD_SUCCESS", nodes: data.nodes || [], links: data.links || [], centerId: id, linkedOnly: full });
@@ -171,7 +180,7 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
     if (nid) dispatch({ type: "SET_CENTER", centerId: nid });
   }, [search]);
 
-  // Latest built flow (for freezing positions before a lazy merge).
+  // Latest built flow (handlers read the current model/cards without re-binding).
   const builtRef = useRef<ReturnType<typeof buildColibriFlow> | null>(null);
 
   const expand = useCallback(
@@ -179,10 +188,7 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
       dispatch({ type: "LOAD_START", text: "Expanding…" });
       try {
         const data = await api.network.ego({ node_id: nodeId, depth: 1, direction: dir, mode: "unified" });
-        const freeze = builtRef.current
-          ? Object.fromEntries(builtRef.current.nodes.map((n) => [n.id, n.position]))
-          : undefined;
-        commit({ type: "MERGE_GRAPH", nodes: data.nodes || [], links: data.links || [], freeze });
+        commit({ type: "MERGE_GRAPH", nodes: data.nodes || [], links: data.links || [] });
       } catch {
         dispatch({ type: "LOAD_ERROR", error: "Failed to expand." });
       }
@@ -577,7 +583,7 @@ function LineageExplorer({ onSelectModel }: { onSelectModel?: (id: string) => vo
 
             {/* focus → expand: load the full lineage around the selected element */}
             {hasGraph && (
-              <div className="absolute left-3 top-3 z-10">
+              <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
                 <button
                   type="button"
                   onClick={showFullLineage}

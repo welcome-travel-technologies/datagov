@@ -103,6 +103,14 @@ from node-id prefixes:
 `level_case_sql` (used by the COPY-based loaders) must stay in lockstep — they
 both derive from the same module constants.
 
+**Structural (`join`/`filter`) edges are context, not expansion.** In the
+column/unified ego (`_column_ego` step 3b) a FK→PK `join` or `filter` edge is
+emitted only when *both* endpoints are already on the canvas from the
+data-lineage walk. It never pulls a new column/table in. Otherwise a shared
+dimension every fact table joins (a Date dimension is the classic hub) dragged
+its entire fan-in onto the canvas as stray one-column cards — clutter that is
+never the derivation path being traced.
+
 ### Graph traversal services
 
 - [`services/network_path.py`](../backend/app/catalog/services/network_path.py) —
@@ -134,13 +142,29 @@ the derived React Flow nodes/edges are computed in `useMemo` and never stored, s
 they can't drift from the raw graph.
 
 1. **Focus** an element (sidebar tree or `?node_id=` deep link) → load just that
-   card (`api.network.ego({node_id, depth: 0, direction})`).
+   card (`api.network.ego({node_id, depth: 0, direction})`). Focusing a single
+   column/measure auto-pins its trace, so its card renders as title + that
+   column (focused collapse) instead of the whole table.
 2. **Build** — `buildColibriFlow(rawNodes, rawEdges, centerId, opts)`
    ([`build-flow.ts`](../frontend/lib/lineage/build-flow.ts)) produces the React
    Flow `{nodes, edges, model}`.
-3. **Expand** a card's +/- buttons → `ego(depth: 1)` → `mergeGraph` dedupes nodes
-   by id and edges by `(kind, source, target)` and freezes existing card
-   positions so only new cards auto-layout.
+3. **Expand one level** — the graph grows only via a card's ± buttons; there is
+   one control and it always means "one more level in this direction." The
+   buttons render only on the *frontier*: the API flags each member whose
+   lineage continues beyond the response (`hasMoreUp`/`hasMoreDown`, aggregated
+   per card), so interior cards carry no dead controls. Clicking one →
+   `ego(depth: 1)` around that card → `mergeGraph` dedupes nodes by id and edges
+   by `(kind, source, target)`; the newest payload's frontier flags win (absence
+   clears a stale flag). Every merge clears manual positions and re-lays-out the
+   whole graph — freezing old positions while new cards took fresh-layout
+   coordinates used to stack new cards on top of old ones.
+
+Downstream, PowerBI **report consumers are collapsed server-side**: the
+`member → visual → page → report` usage chain is resolved to its terminal
+`PB_REPORT`(s) and surfaced as a direct `member → report` edge, so a measure's
+downstream shows the handful of named reports it feeds — never the wall of
+unnamed visual/page cards. A depth-0 focus omits them but still flags the
+member `hasMoreDown`, so its `+` means exactly "load the consuming reports."
 
 `buildColumnModel` ([`column-model.ts`](../frontend/lib/lineage/column-model.ts))
 turns the payload into cards. Power BI **measures are re-parented** into one
@@ -154,7 +178,10 @@ downstream DFS to light up the active columns/edges/cards.
 
 - **`layoutColumnCards`** (the default column/unified view) — not dagre; a
   longest-path layering (Kahn topological sort) where level = x-coordinate and
-  cards stack vertically within a level.
+  cards stack vertically within a level. It is fed a *visible-only* model
+  (`buildColibriFlow` filters hidden/filtered/layer-toggled cards and their
+  edges before laying out), so a hidden card never reserves a ghost slot that
+  shifts its neighbours.
 - **`layoutAssetDagre`** — the asset-level (model-to-model) ego graph uses dagre
   with `rankdir: "LR"`.
 - **`layoutPathLR`** — Track-Back paths, BFS hop-distance layering.
