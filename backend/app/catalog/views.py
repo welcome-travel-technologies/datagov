@@ -38,12 +38,13 @@ from .models import (
     IntegrationDestination, DestinationRunLog, DestinationSchedule,
     IntegrationHook, Organization, OrganizationMembership,
     WorkflowRun, WorkflowSchedule, WorkflowRawExport,
-    PowerBIReportUsage, GovernanceTask, MetricsMap,
+    PowerBIReportUsage, Definition, GovernanceTask, MetricsMap,
 )
 from .services.workspaces import get_workspaces_for_source
 from .serializers import (
     SummarySerializer, ItemSerializer, ItemGroupSerializer,
     DepartmentSerializer, DataPersonSerializer, CategorySerializer,
+    DefinitionSerializer,
     GovernanceTaskSerializer, MetricsMapSerializer, PublicMetricsMapSerializer,
 )
 
@@ -803,6 +804,8 @@ def _deleted_filter(org):
 
 class DepartmentViewSet(viewsets.ModelViewSet):
     serializer_class = DepartmentSerializer
+    # Dropdown reference list — never paginate it (see DataPersonViewSet).
+    pagination_class = None
 
     def get_queryset(self):
         org = _get_user_organization(self.request.user)
@@ -812,6 +815,11 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
 class DataPersonViewSet(viewsets.ModelViewSet):
     serializer_class = DataPersonSerializer
+    # Reference list, not a feed: every caller is a dropdown that needs ALL of
+    # them. Without this it inherited the global PageNumberPagination (PAGE_SIZE
+    # 50, no page-size query param), so the Owner / Steward dropdowns silently
+    # showed only the first 50 people in the org.
+    pagination_class = None
     filter_backends = [DjangoFilterBackend]
     # Note: 'department' is the legacy single-FK filter name kept for
     # frontend compatibility. It maps to membership in the new M2M field
@@ -842,6 +850,8 @@ class DataPersonViewSet(viewsets.ModelViewSet):
 
 class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
+    # Dropdown reference list — never paginate it (see DataPersonViewSet).
+    pagination_class = None
 
     def get_queryset(self):
         org = _get_user_organization(self.request.user)
@@ -1010,6 +1020,7 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
         'organization', 'item_group',
         'item_group__ownership_department', 'item_group__ownership_person',
         'item_group__steward', 'item_group__category', 'item_group__primary_item',
+        'item_group__definition',
     )
     serializer_class = ItemSerializer
     pagination_class = CatalogPagination
@@ -1019,6 +1030,7 @@ class ItemViewSet(ActionPermissionMixin, viewsets.ModelViewSet):
         'dataset_name', 'table_name', 'database_name',
         'status', 'item_group__status', 'item_group__ownership_department',
         'item_group__ownership_person', 'item_group__category',
+        'item_group__definition',
         'integration_source',
     ]
     search_fields = ['item_name']
@@ -1142,43 +1154,373 @@ class ItemGroupViewSet(viewsets.ModelViewSet):
         return response
 
 
+class DefinitionViewSet(viewsets.ModelViewSet):
+    """Business definitions — the layer above ItemGroup.
+
+    Deliberately inert: assigning groups to a definition changes nothing about
+    their governance, and editing a definition changes nothing either. Metadata
+    moves down only when someone runs the ``apply`` action, and it reports how
+    many groups it touched. That way a definition is a safe place to organise
+    measures, and pushing ownership is a decision rather than a side effect.
+    """
+    serializer_class = DefinitionSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'updated_at']
+    ordering = ['name']
+
+    def get_queryset(self):
+        from django.db.models import Count
+
+        org = _get_user_organization(self.request.user)
+        qs = Definition.objects.select_related('ownership_person', 'ownership_department')
+        if org:
+            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
+        return qs.annotate(group_count_annotated=Count('item_groups'))
+
+    def perform_create(self, serializer):
+        serializer.save(organization=_get_user_organization(self.request.user))
+
+    def perform_update(self, serializer):
+        # Keep it pinned to its org; an update must never move it.
+        serializer.save(organization=_get_user_organization(self.request.user))
+
+    def _org_groups(self, ids):
+        """The caller's own ItemGroups among ``ids`` — never a neighbour's."""
+        org = _get_user_organization(self.request.user)
+        qs = ItemGroup.objects.filter(id__in=ids)
+        if org:
+            qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
+        return qs
+
+    @action(detail=True, methods=['get'])
+    def groups(self, request, pk=None):
+        """The group items assigned to this definition."""
+        definition = self.get_object()
+        rows = (definition.item_groups
+                .select_related('ownership_person', 'ownership_department', 'primary_item')
+                .order_by('group_key'))
+        return Response([{
+            'id': g.id,
+            'group_key': g.group_key,
+            'name': (g.primary_item.item_name if g.primary_item else None) or g.group_key,
+            'status': g.status,
+            'ownership_person': g.ownership_person_id,
+            'ownership_person_name': g.ownership_person.name if g.ownership_person else None,
+            'ownership_department': g.ownership_department_id,
+            'ownership_department_name': (
+                g.ownership_department.name if g.ownership_department else None),
+        } for g in rows])
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        """Add or remove group items. Body: ``{add: [ids], remove: [ids]}``.
+
+        Assignment is membership only — no metadata moves. Use ``apply`` for
+        that, deliberately.
+        """
+        definition = self.get_object()
+        add = [int(i) for i in (request.data.get('add') or []) if str(i).isdigit()]
+        remove = [int(i) for i in (request.data.get('remove') or []) if str(i).isdigit()]
+
+        added = self._org_groups(add).exclude(definition=definition).update(
+            definition=definition) if add else 0
+        # Only unassign from THIS definition — a stale id from another one
+        # shouldn't be able to detach it.
+        removed = self._org_groups(remove).filter(definition=definition).update(
+            definition=None) if remove else 0
+        return Response({
+            'status': 'ok', 'added': added, 'removed': removed,
+            'group_count': definition.item_groups.count(),
+        })
+
+    @action(detail=True, methods=['post'])
+    def apply(self, request, pk=None):
+        """Push this definition's owner + department onto its group items.
+
+        ``dry_run`` reports what would change without writing, so the count is
+        visible before committing. Fields the definition hasn't set are skipped
+        rather than blanked — empty means "not specified", not "erase it".
+        """
+        definition = self.get_object()
+        fields = request.data.get('fields') or ['ownership_person', 'ownership_department']
+        allowed = {'ownership_person', 'ownership_department'}
+        unknown = [f for f in fields if f not in allowed]
+        if unknown:
+            return Response(
+                {'error': f'Unknown field(s): {", ".join(unknown)}. '
+                          f'Allowed: {", ".join(sorted(allowed))}.'}, status=400)
+
+        patch, skipped = {}, []
+        for field in fields:
+            value = getattr(definition, f'{field}_id')
+            if value is None:
+                skipped.append(field)
+            else:
+                patch[f'{field}_id'] = value
+        if not patch:
+            return Response({
+                'status': 'ok', 'updated': 0, 'skipped_unset': skipped,
+                'detail': 'This definition has no owner or department set yet.',
+            })
+
+        groups = definition.item_groups.all()
+        # Count only the rows that would really change, so "updated: 0" honestly
+        # means "already correct" rather than "did nothing".
+        changed = groups.exclude(**patch).count()
+        if request.data.get('dry_run'):
+            return Response({'status': 'ok', 'would_update': changed,
+                             'group_count': groups.count(), 'skipped_unset': skipped,
+                             'dry_run': True})
+
+        groups.exclude(**patch).update(**patch)
+        return Response({'status': 'ok', 'updated': changed,
+                         'group_count': groups.count(), 'skipped_unset': skipped})
+
+
 class GovernanceTaskViewSet(viewsets.ModelViewSet):
-    """Task Manager feed. Tasks are created by the backend on status changes;
-    the client lists them (default: open, newest first) and marks them done."""
+    """Task Manager feed.
+
+    Tasks are created by the backend — on a status change, or by the sweep in
+    ``governance_tasks.generate_tasks``. The client lists them (default: open,
+    newest first, scoped to the signed-in person), marks them done one at a time
+    or in bulk, and — for admins — triggers a sweep.
+    """
     queryset = GovernanceTask.objects.select_related(
         'assignee', 'item_group', 'item_group__primary_item', 'organization',
     )
     serializer_class = GovernanceTaskSerializer
     pagination_class = CatalogPagination
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['assignee']
-    ordering_fields = ['created_at', 'completed_at']
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['assignee', 'reason']
+    search_fields = ['title']
+    ordering_fields = ['created_at', 'completed_at', 'reason']
     ordering = ['-created_at']
 
-    def get_queryset(self):
-        qs = self.queryset
-        org = _get_user_organization(self.request.user)
+    # Ceiling on one bulk-done call. Enforced loudly (400), not by slicing.
+    BULK_DONE_LIMIT = 1000
+
+    def _org(self):
+        return _get_user_organization(self.request.user)
+
+    def _org_scoped(self, qs):
+        org = self._org()
         if org:
             qs = qs.filter(Q(organization=org) | Q(organization__isnull=True))
+        return qs
+
+    def get_queryset(self):
+        qs = self._org_scoped(self.queryset)
         # `state`: 'open' (default) | 'done' | 'all'. Handled here rather than
         # via the filterset so 'all' means "no state filter" instead of an
         # exact match on the literal string.
         state = self.request.query_params.get('state', GovernanceTask.STATE_OPEN)
         if state in (GovernanceTask.STATE_OPEN, GovernanceTask.STATE_DONE):
             qs = qs.filter(state=state)
+
+        # `scope`: 'mine' | 'unassigned' | 'all' (default). 'mine' resolves the
+        # signed-in login to its DataPerson — a login with no DataPerson profile
+        # gets an empty feed rather than everyone else's tasks.
+        scope = (self.request.query_params.get('scope') or '').strip()
+        if scope == 'mine':
+            from .access import resolve_data_person
+            person = resolve_data_person(self.request.user)
+            qs = qs.filter(assignee=person) if person else qs.none()
+        elif scope == 'unassigned':
+            qs = qs.filter(assignee__isnull=True)
         return qs
+
+    def _mark_done(self, tasks_qs, user):
+        """Close every open task in ``tasks_qs``. Returns how many changed."""
+        from django.utils import timezone
+        now = timezone.now()
+        return tasks_qs.filter(state=GovernanceTask.STATE_OPEN).update(
+            state=GovernanceTask.STATE_DONE,
+            completed_at=now,
+            completed_by=user if getattr(user, 'is_authenticated', False) else None,
+            closed_reason=GovernanceTask.CLOSED_MANUAL,
+            updated_at=now,
+        )
 
     @action(detail=True, methods=['post'])
     def done(self, request, pk=None):
         """Mark the task done (soft) — hidden from the default feed, kept for audit."""
-        from django.utils import timezone
         task = self.get_object()
-        if task.state != GovernanceTask.STATE_DONE:
-            task.state = GovernanceTask.STATE_DONE
-            task.completed_at = timezone.now()
-            task.completed_by = request.user if request.user.is_authenticated else None
-            task.save(update_fields=['state', 'completed_at', 'completed_by', 'updated_at'])
+        self._mark_done(GovernanceTask.objects.filter(pk=task.pk), request.user)
+        task.refresh_from_db()
         return Response({'status': 'ok', 'id': task.pk, 'state': task.state})
+
+    @action(detail=False, methods=['post'], url_path='bulk-done')
+    def bulk_done(self, request):
+        """Close many tasks at once — the Task Manager's "Mark N done" button.
+
+        Takes explicit ids from the client's current selection rather than a
+        filter spec: a mistyped filter shouldn't be able to close the whole
+        board, and the ids are exactly what the user saw ticked.
+        """
+        ids = request.data.get('ids') or []
+        if not isinstance(ids, list):
+            return Response({'error': '`ids` must be a list of task ids.'}, status=400)
+        ids = [int(i) for i in ids if str(i).isdigit()]
+        # Reject an oversized batch rather than silently slicing it. Truncating
+        # returned 200 with a smaller `updated` that nothing read, so the user
+        # saw "Mark 1200 done", watched the list shrink, and 200 tasks stayed
+        # open with no indication. The client chunks, so this is API misuse.
+        if len(ids) > self.BULK_DONE_LIMIT:
+            return Response(
+                {'error': f'Too many ids: {len(ids)}. Send at most '
+                          f'{self.BULK_DONE_LIMIT} per request.',
+                 'limit': self.BULK_DONE_LIMIT, 'requested': len(ids)},
+                status=400,
+            )
+        if not ids:
+            return Response({'status': 'ok', 'requested': 0, 'updated': 0})
+        # Scope through the same org filter as the feed so one org can never
+        # close another's tasks by guessing ids.
+        qs = self._org_scoped(GovernanceTask.objects.filter(id__in=ids))
+        updated = self._mark_done(qs, request.user)
+        # `requested` lets the caller notice when some ids were already done, or
+        # belonged to another org, instead of assuming updated == len(ids).
+        return Response({'status': 'ok', 'requested': len(ids), 'updated': updated})
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Counts for the Task Manager header — mine / unassigned / everyone, and
+        a per-reason breakdown. One cheap aggregate instead of the page pulling
+        every row just to count them.
+
+        "Mine" is whichever DataPerson the caller is acting as: `?person=<id>`
+        (the name they picked in the UI) wins, falling back to the DataPerson
+        their login is actually linked to. Most accounts aren't linked yet, so
+        the explicit pick is the normal path.
+        """
+        from django.db.models import Count
+        from .access import resolve_data_person
+        from .governance_tasks import REASON_ORDER, reason_label
+
+        open_qs = self._org_scoped(
+            GovernanceTask.objects.filter(state=GovernanceTask.STATE_OPEN)
+        )
+        person = None
+        person_param = (request.query_params.get('person') or '').strip()
+        if person_param.isdigit():
+            # Org-scoped: without this, passing another tenant's DataPerson id
+            # would report their open-task counts back to you.
+            people = DataPerson.objects.filter(id=int(person_param))
+            org = self._org()
+            if org is not None:
+                people = people.filter(Q(organization=org) | Q(organization__isnull=True))
+            person = people.first()
+        if person is None:
+            person = resolve_data_person(request.user)
+        by_reason = {
+            row['reason']: row['n']
+            for row in open_qs.values('reason').annotate(n=Count('id'))
+        }
+        mine_by_reason = {}
+        if person is not None:
+            mine_by_reason = {
+                row['reason']: row['n']
+                for row in open_qs.filter(assignee=person).values('reason').annotate(n=Count('id'))
+            }
+        return Response({
+            'total_open': sum(by_reason.values()),
+            'mine_open': sum(mine_by_reason.values()),
+            'unassigned_open': open_qs.filter(assignee__isnull=True).count(),
+            'done_total': self._org_scoped(
+                GovernanceTask.objects.filter(state=GovernanceTask.STATE_DONE)
+            ).count(),
+            'reasons': [
+                {
+                    'reason': r,
+                    'label': reason_label(r),
+                    'total': by_reason.get(r, 0),
+                    'mine': mine_by_reason.get(r, 0),
+                }
+                for r in REASON_ORDER
+            ],
+            'data_person': ({'id': person.id, 'name': person.name} if person else None),
+            # Whether the *login* is linked to a DataPerson, as opposed to the
+            # caller merely having picked a name. Lets the UI prompt for a pick
+            # instead of showing an empty board with no explanation.
+            'linked': resolve_data_person(request.user) is not None,
+        })
+
+    @action(detail=False, methods=['post'])
+    def generate(self, request):
+        """Run the governance sweep for the caller's org.
+
+        Admin-only: every other write in this app is open to any org member, but
+        a button that can mint thousands of rows in one click earns the narrower
+        gate. `dry_run` returns the same counts having written nothing — that's
+        what the UI's Preview calls.
+        """
+        from django.core.cache import cache
+        from .access import is_org_admin
+        from .governance_tasks import (
+            generate_tasks, REASON_ORDER, KIND_SCOPES, DEFAULT_KIND_SCOPE,
+        )
+
+        org = self._org()
+        if org is None:
+            return Response({'error': 'No organization for this user.'}, status=400)
+        if not is_org_admin(request.user, org):
+            return Response({'error': 'Admin access required.'}, status=403)
+
+        reasons = request.data.get('reasons') or None
+        if reasons is not None:
+            if not isinstance(reasons, list):
+                return Response({'error': '`reasons` must be a list.'}, status=400)
+            reasons = [r for r in reasons if r in REASON_ORDER]
+            if not reasons:
+                return Response({'error': 'No valid reasons given.'}, status=400)
+        kind_scope = request.data.get('kind_scope') or DEFAULT_KIND_SCOPE
+        if kind_scope not in KIND_SCOPES:
+            return Response(
+                {'error': f'`kind_scope` must be one of {sorted(KIND_SCOPES)}.'}, status=400,
+            )
+        dry_run = bool(request.data.get('dry_run'))
+        require_assignee = bool(request.data.get('require_assignee'))
+
+        if dry_run:
+            result = generate_tasks(org, reasons=reasons, dry_run=True,
+                                    require_assignee=require_assignee,
+                                    kind_scope=kind_scope)
+            return Response(result)
+
+        # One sweep at a time per org: two admins pressing Generate together
+        # would otherwise do the same work twice and race on the same rows.
+        lock_key = f'govtasks:generate:{org.id}'
+        if not cache.add(lock_key, '1', 600):
+            return Response({'error': 'A task sweep is already running. Try again shortly.'},
+                            status=409)
+        try:
+            result = generate_tasks(org, reasons=reasons, dry_run=False, notify=True,
+                                    require_assignee=require_assignee,
+                                    kind_scope=kind_scope)
+        finally:
+            cache.delete(lock_key)
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='generate-options')
+    def generate_options(self, request):
+        """The reasons and asset scopes the Generate dialog offers, so the UI
+        never hard-codes a policy the backend owns."""
+        from .governance_tasks import (
+            REASON_ORDER, REASON_POLICY, KIND_SCOPES, DEFAULT_KIND_SCOPE,
+        )
+        return Response({
+            'reasons': [
+                {'key': r, 'label': REASON_POLICY[r]['label'], 'hint': REASON_POLICY[r]['hint']}
+                for r in REASON_ORDER
+            ],
+            'kind_scopes': [
+                {'key': k, 'label': v['label'], 'hint': v['hint']}
+                for k, v in KIND_SCOPES.items()
+            ],
+            'default_kind_scope': DEFAULT_KIND_SCOPE,
+        })
 
 
 @api_view(['GET'])
@@ -2286,6 +2628,22 @@ def _get_user_org(request):
     return org if (org and is_org_admin(request.user, org)) else None
 
 
+def _q_next_run(task_name):
+    """Real next-fire time from django-q's own schedule table.
+
+    The catalog *Schedule models have a ``next_run_at`` column but nothing
+    ever writes it — the UI showed "next run: never" for perfectly healthy
+    schedules. django-q's Schedule row (kept in sync on every save) is the
+    source of truth; ``None`` here means no schedule is actually registered.
+    """
+    try:
+        from django_q.models import Schedule
+        s = Schedule.objects.filter(name=task_name).first()
+        return s.next_run.isoformat() if s and s.next_run else None
+    except Exception:
+        return None
+
+
 @api_login_required
 @api_view(['GET'])
 def integrations_get_all(request):
@@ -2306,7 +2664,7 @@ def integrations_get_all(request):
                 'cron_expression': sch.cron_expression,
                 'is_enabled': sch.is_enabled,
                 'last_run_at': sch.last_run_at.isoformat() if sch.last_run_at else None,
-                'next_run_at': sch.next_run_at.isoformat() if sch.next_run_at else None,
+                'next_run_at': _q_next_run(f'source_run_{s.id}'),
             }
         except Exception:
             pass
@@ -2349,7 +2707,7 @@ def integrations_get_all(request):
                 'cron_expression': sch.cron_expression,
                 'is_enabled': sch.is_enabled,
                 'last_run_at': sch.last_run_at.isoformat() if sch.last_run_at else None,
-                'next_run_at': sch.next_run_at.isoformat() if sch.next_run_at else None,
+                'next_run_at': _q_next_run(f'dest_run_{d.id}'),
             }
         except Exception:
             pass
@@ -2931,7 +3289,7 @@ def workflow_get_status(request):
             'cron_expression': sched.cron_expression,
             'is_enabled': sched.is_enabled,
             'last_run_at': sched.last_run_at.isoformat() if sched.last_run_at else None,
-            'next_run_at': sched.next_run_at.isoformat() if sched.next_run_at else None,
+            'next_run_at': _q_next_run(f'workflow_run_{org.id}'),
         }
     except WorkflowSchedule.DoesNotExist:
         pass

@@ -55,14 +55,11 @@ hidden from views unless the org's `show_deleted_items` flag is on.
 
 ## Tasks & audit trail
 
-Two things happen automatically on a status change:
-
-- **`GovernanceTask`** — when a group flips to `ATTENTION` or `DELETED`, a task is
-  created and routed to the asset's steward (or left unassigned and shown in the
-  Task Manager's total view). The dedup rule is **at most one open task per
-  group**. `assignee_role` records why the person was picked, so the routing
-  policy (`catalog/governance_tasks.py`) can grow to owners/others without a
-  schema change. Tasks are completed on the **Task Manager** page (`/tasks`).
+- **`GovernanceTask`** — a follow-up for a data person. `reason` is the task
+  *kind* and decides who it routes to; the dedup rule is **at most one open task
+  per `(item_group, reason)`**, enforced by a partial unique constraint rather
+  than convention. `assignee_role` records which role matched. See
+  [Task Manager](#task-manager) below.
 - **`StatusChangeLog`** — an append-only row per transition (`old_status` →
   `new_status`, who, when), giving full history beyond the single `deleted_at`
   stamp. `group_key` is denormalized so the log outlives its group.
@@ -70,6 +67,129 @@ Two things happen automatically on a status change:
 Both are written from the same two sites in `views.py` that also fire
 [Slack alerts](etl.md#slack-alerts) — `send_slack_item_alert` (🔔 status / 🗑️
 delete) and `send_slack_task_alert` (📋, tagging the assignee's `slack_handle`).
+
+---
+
+## Definitions
+
+`Definition` is the layer above `ItemGroup`: the business concept ("Revenue")
+that several measure groups express. A group belongs to at most one definition.
+
+**A definition does nothing on its own.** Assigning groups to it changes no
+governance, and editing it changes none either — metadata moves down only when
+someone runs an action. That is deliberate: a definition is a safe place to
+organise measures, and pushing ownership across a hundred groups should be a
+decision, not a side effect of a typo.
+
+Today there is one action, `POST /api/definitions/<id>/apply/`, which writes the
+definition's **owner and department** onto its member groups. It supports
+`dry_run` (the UI's Preview) and reports how many groups actually changed.
+Fields the definition hasn't set are **skipped, not blanked** — empty means "not
+specified", so assigning groups to a fresh definition can never wipe curation.
+
+Managed at `/definitions`. Groups can also be assigned straight from the Data
+Dictionary's **Definition** column (a PATCH on the ItemGroup), and the grid has a
+matching Definition filter; `?item_group__definition=<id>` narrows the item API
+the same way `item_group__category` does.
+
+Definition names are unique per organization, case-insensitively
+(`uniq_definition_name_org`). That constraint is expression-based, which DRF's
+automatic uniqueness validation does not cover, so the serializer checks it too —
+otherwise a duplicate name surfaces as a 500 instead of a 400.
+
+### Renaming a measure no longer costs its curation
+
+The ETL derives an `ItemGroup` for measures from the measure *name*, so renaming
+one in Power BI moves it to a different group. `_detach_renamed_measures`
+([services/item_groups.py](../backend/app/catalog/services/item_groups.py)) used
+to unlink the item and reset its status, landing it in a blank group — owner,
+steward, category, definition and status all gone.
+
+Now the metadata travels with it. The item is still attached to its old group at
+the moment of detachment, which is the only moment that metadata is reachable,
+so it is read there and carried forward:
+
+* the destination group **has to be created** → the incoming item seeds it with
+  everything it carried (including its definition) and becomes its primary item;
+* the destination group **already exists** → that group keeps its own values and
+  the item adopts them, because one renamed instance must not rewrite a group
+  somebody else curated;
+* several renamed items land in the same new group → the lowest `item_id` seeds
+  it, so the outcome doesn't depend on row order;
+* the emptied group is **kept**, which is what lets a rename-back recover.
+
+The detach and the re-link run in one transaction — the carry lives in memory
+between them, so a crash can't strand an item with its curation unrecoverable.
+
+Scenario coverage is in
+[tests/test_definitions.py](../backend/app/catalog/tests/test_definitions.py).
+
+---
+
+## Task Manager
+
+`catalog/governance_tasks.py` is the single place that decides who gets a task
+and why. Tasks arrive two ways:
+
+| | trigger | scope | Slack |
+|---|---|---|---|
+| **event** | `sync_status_task` on a status flip to `ATTENTION` / `DELETED` | any asset kind | one message per task |
+| **sweep** | `generate_tasks()` — the "Generate tasks" button, or `manage.py generate_governance_tasks` | `kind_scope`, default PowerBI measures | one digest per run |
+
+### Reasons and routing (`REASON_POLICY`)
+
+| reason | applies to | routes to |
+|---|---|---|
+| `UNVERIFIED` | measure groups with `status='UNVERIFIED'` | Owner → Steward |
+| `NO_CATEGORY` | measure groups with no `category` | Owner → Steward |
+| `ATTENTION` | groups with `status='ATTENTION'` | Steward → Owner |
+| `DELETED` | groups with `status='DELETED'` | Steward → Owner |
+
+Roles are an *ordered* tuple: the first one set on the group wins, so a measure
+with no owner still reaches its steward instead of sitting unassigned.
+
+### The sweep is a reconciler, not an appender
+
+Rules like "is still unverified" have no status *transition* to hook onto, so
+they can't be event-driven. Reconciling instead buys three things: re-running is
+idempotent (the partial unique constraint enforces it), **assignees are
+re-resolved every run** so tasks pick up an owner as ownership gets filled in,
+and tasks whose gap has been fixed are auto-closed with
+`closed_reason='resolved'` — distinct from `'manual'` when a human pressed Done.
+
+`dry_run=True` returns the same counts having written nothing; that is what the
+UI's **Preview** shows before anyone commits to thousands of rows.
+
+### Why the default scope is measures
+
+`kind_scope` defaults to `measure_name`. Every non-measure item has its own
+singleton group, so on the production data the wider scopes are the difference
+between ~4,100 tasks and ~130,000. `KIND_SCOPES` exposes the alternatives
+(`singleton`, `all`) through the Generate dialog's dropdown and the command's
+`--kind-scope`, so widening it is a choice rather than a code change.
+
+### Page behaviour (`/tasks`)
+
+Tabs are **Mine / Unassigned / Everyone / Completed**; the default fetch is
+`state=open`, so Done tasks are out of the way but still auditable. Tasks are
+grouped by reason, selectable per group, and closable in bulk.
+
+"Mine" needs to know which `DataPerson` you are. `DataPerson.user` is the only
+link between governance identity and a login, and most rows don't have it set,
+so the page lets a person **pick their name** (remembered per browser) and falls
+back to the linked profile when there is one. `manage.py dedupe_data_persons`
+reports the gap both ways — people with no login, and logins with no person —
+and `manage.py link_data_persons` fills it in.
+
+### Duplicate people
+
+`DataPerson` had no uniqueness rule, and the member-save upsert matched on
+`user` alone, so a login-less row for someone was never found when they later
+got an account — producing two identical names in every Owner / Steward
+dropdown. Migrations `0056`–`0057` merge the duplicates (repointing governance
+FKs, including the deprecated `catalog_item` person columns) and add the two
+constraints that make it impossible. `access.upsert_data_person` now adopts a
+login-less namesake instead of creating a twin.
 
 ---
 

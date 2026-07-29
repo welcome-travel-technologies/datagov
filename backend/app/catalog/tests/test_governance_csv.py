@@ -232,8 +232,14 @@ def test_invalid_status_reported(client, group):
 
 
 def test_ambiguous_name_reported(client, group, org):
-    DataPerson.objects.create(name='Twin', is_owner=True, organization=org)
-    DataPerson.objects.create(name='Twin', is_owner=True, organization=org)
+    # Two same-name people in the SAME org are now impossible — that's exactly
+    # what uniq_dataperson_name_org exists to prevent (it was the duplicate
+    # Owner/Steward dropdown bug). The ambiguity branch is still reachable for
+    # unattributed rows, though: Postgres treats NULLs as distinct, so two
+    # org-less namesakes can coexist and `_resolve_named` falls back to them
+    # when the org has no match. That's the case this guards.
+    DataPerson.objects.create(name='Twin', is_owner=True, organization=None)
+    DataPerson.objects.create(name='Twin', is_owner=True, organization=None)
     resp = _upload(client, [{'group_pk': str(group.id), 'owner': 'Twin'}])
     data = resp.json()
     assert data['updated'] == 0

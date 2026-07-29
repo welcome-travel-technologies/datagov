@@ -11,7 +11,7 @@ import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
 import { SimpleSelect } from "@/components/ui/simple-select";
 import { NodeDetailPanel } from "@/components/lineage/node-detail-panel";
-import { api, type Item } from "@/lib/api";
+import { api, STATUS_LABELS, type Item } from "@/lib/api";
 import { fmtInt } from "@/lib/utils";
 import { GROUP_LABELS, colorFor } from "@/lib/lineage/graph-utils";
 import { useDebounced } from "@/lib/use-debounced";
@@ -25,10 +25,10 @@ export interface CatalogColumn {
 const FILTER_TRIGGER_CLS = "w-auto min-w-[150px]";
 
 const STATUS_FILTER_OPTIONS = [
-  { value: "UNVERIFIED", label: "Unverified" },
-  { value: "VERIFIED", label: "Verified" },
-  { value: "ATTENTION", label: "Attention" },
-  { value: "DELETED", label: "Deleted" },
+  { value: "UNVERIFIED", label: STATUS_LABELS.UNVERIFIED },
+  { value: "VERIFIED", label: STATUS_LABELS.VERIFIED },
+  { value: "ATTENTION", label: STATUS_LABELS.ATTENTION },
+  { value: "DELETED", label: STATUS_LABELS.DELETED },
 ];
 
 export function CatalogView({

@@ -2,10 +2,9 @@ from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from catalog.access import COMPANY
+from catalog.access import COMPANY, upsert_data_person
 from catalog.models import (
     CustomUser,
-    DataPerson,
     Organization,
     OrganizationMembership,
 )
@@ -132,14 +131,9 @@ class Command(BaseCommand):
                     user=user, organization=org,
                 )
 
-                DataPerson.objects.update_or_create(
-                    user=user,
-                    defaults={
-                        "name": name,
-                        "organization": org,
-                        **flags,
-                    },
-                )
+                # Adopts a login-less namesake rather than creating a second row
+                # with the same name (see access.upsert_data_person).
+                upsert_data_person(user, org, name, **flags)
 
             if existing:
                 updated += 1

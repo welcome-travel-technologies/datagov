@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import Summary, Item, ItemGroup, Department, DataPerson, Category, GovernanceTask, MetricsMap
+from .models import (
+    Summary, Item, ItemGroup, Department, DataPerson, Category, Definition,
+    GovernanceTask, MetricsMap,
+)
 
 class SummarySerializer(serializers.ModelSerializer):
     class Meta:
@@ -86,6 +89,7 @@ class ItemGroupSerializer(serializers.ModelSerializer):
     steward_name = serializers.CharField(source='steward.name', read_only=True, default=None)
     steward_slack = serializers.CharField(source='steward.slack_handle', read_only=True, default=None)
     category_name = serializers.CharField(source='category.name', read_only=True, default=None)
+    definition_name = serializers.CharField(source='definition.name', read_only=True, default=None)
 
     class Meta:
         model = ItemGroup
@@ -104,6 +108,8 @@ class ItemSerializer(serializers.ModelSerializer):
     ownership_person = serializers.IntegerField(source='item_group.ownership_person_id', read_only=True, default=None)
     steward = serializers.IntegerField(source='item_group.steward_id', read_only=True, default=None)
     category = serializers.IntegerField(source='item_group.category_id', read_only=True, default=None)
+    definition = serializers.IntegerField(source='item_group.definition_id', read_only=True, default=None)
+    definition_name = serializers.CharField(source='item_group.definition.name', read_only=True, default=None)
     # `status` is a real (denormalized) column, exposed as a writable field
     # (validated against Item.STATUS_CHOICES by ModelSerializer). A write here
     # is ROUTED to the item's ItemGroup by ItemViewSet (the group stays the
@@ -139,22 +145,89 @@ class ItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class DefinitionSerializer(serializers.ModelSerializer):
+    """A business definition plus the names needed to render it without extra
+    round trips. ``organization`` is stamped server-side, never from the body."""
+    ownership_person_name = serializers.CharField(
+        source='ownership_person.name', read_only=True, default=None)
+    ownership_department_name = serializers.CharField(
+        source='ownership_department.name', read_only=True, default=None)
+    group_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Definition
+        fields = (
+            'id', 'name', 'description',
+            'ownership_department', 'ownership_department_name',
+            'ownership_person', 'ownership_person_name',
+            'group_count', 'created_at', 'updated_at',
+        )
+        read_only_fields = ('created_at', 'updated_at')
+
+    def get_group_count(self, obj):
+        # Annotated by the viewset; fall back to a query for single-object reads.
+        cached = getattr(obj, 'group_count_annotated', None)
+        return cached if cached is not None else obj.item_groups.count()
+
+    def validate_name(self, value):
+        """Reject a duplicate name with a readable 400.
+
+        ``uniq_definition_name_org`` is an *expression* constraint
+        (``Lower('name')``), and DRF's automatic uniqueness validation only
+        covers ``unique_together`` — so without this the clash surfaces as an
+        IntegrityError, i.e. a 500.
+        """
+        from .models import Definition
+        from .access import resolve_org
+
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('A name is required.')
+
+        request = self.context.get('request')
+        org = resolve_org(request.user) if request else None
+        clash = Definition.objects.filter(organization=org, name__iexact=name)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                f'A definition named "{name}" already exists in this organization.')
+        return name
+
+
 class GovernanceTaskSerializer(serializers.ModelSerializer):
     """Read-mostly task feed for the Task Manager page. Tasks are created by the
-    backend on status changes; the only client write is the `done` action."""
+    backend (status change, or the governance sweep); the only client writes are
+    the `done` / `bulk-done` actions."""
     assignee_name = serializers.CharField(source='assignee.name', read_only=True, default=None)
     assignee_slack = serializers.CharField(source='assignee.slack_handle', read_only=True, default=None)
+    reason_label = serializers.SerializerMethodField()
     item_name = serializers.SerializerMethodField()
     asset_context = serializers.SerializerMethodField()
     web_url = serializers.SerializerMethodField()
+    age_days = serializers.SerializerMethodField()
 
     class Meta:
         model = GovernanceTask
         fields = (
-            'id', 'title', 'state', 'trigger_status', 'created_at', 'completed_at',
+            'id', 'title', 'state', 'reason', 'reason_label', 'trigger_status',
+            'created_at', 'completed_at', 'closed_reason',
             'item_group', 'assignee', 'assignee_name', 'assignee_slack', 'assignee_role',
-            'item_name', 'asset_context', 'web_url',
+            'item_name', 'asset_context', 'web_url', 'age_days',
         )
+
+    def get_reason_label(self, obj):
+        from .governance_tasks import reason_label
+        return reason_label(obj.reason)
+
+    def get_age_days(self, obj):
+        """Whole days since the task opened — drives the ageing badge. No due
+        date field: age answers "is this rotting" without anyone having to
+        define what a deadline means for governance work."""
+        if not obj.created_at:
+            return None
+        from django.utils import timezone
+        return max(0, (timezone.now() - obj.created_at).days)
 
     def _rep(self, obj):
         grp = obj.item_group

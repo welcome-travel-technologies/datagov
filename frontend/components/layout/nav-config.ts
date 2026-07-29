@@ -14,6 +14,7 @@ import {
   Building2,
   Zap,
   Sigma,
+  Layers,
   ListChecks,
   type LucideIcon,
 } from "lucide-react";
@@ -43,6 +44,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Company",
     items: [
       { href: "/dictionary", label: "Data Dictionary", icon: BookOpen, perm: "can_view_dictionary" },
+      { href: "/definitions", label: "Definitions", icon: Layers, perm: "can_view_dictionary" },
       { href: "/tasks", label: "Task Manager", icon: ClipboardCheck, perm: "can_view_tasks" },
       { href: "/champions", label: "Data Champions", icon: Trophy, perm: "can_view_champions" },
       { href: "/chat", label: "AI Assistant", icon: MessageSquare, perm: "can_view_chat" },

@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { LoadingState, EmptyState, Stat } from "@/components/ui/misc";
 import { SimpleSelect } from "@/components/ui/simple-select";
-import { api, type FiltersResponse, type ItemStatus } from "@/lib/api";
+import { api, statusLabel, STATUS_LABELS, type FiltersResponse, type ItemStatus } from "@/lib/api";
 import { GROUP_LABELS, colorFor } from "@/lib/lineage/graph-utils";
 import { fmtInt } from "@/lib/utils";
 
@@ -221,7 +221,11 @@ function CleanupTabPanel({
 
   function markRow(g: number | null | undefined) {
     if (g == null) return;
-    if (!window.confirm("Mark this asset to delete? It'll move to the Deleted tab where you can undo."))
+    if (
+      !window.confirm(
+        `Mark this asset to delete? It'll move to the ${STATUS_LABELS.DELETED} tab where you can undo.`,
+      )
+    )
       return;
     markMut.mutate(g);
   }
@@ -329,7 +333,7 @@ function CleanupTabPanel({
                         )
                       ) : isDeleted ? (
                         <span className="rounded-md border border-line-strong bg-panel2 px-2 py-1 text-[12px] text-faint">
-                          Deleted
+                          {STATUS_LABELS.DELETED}
                         </span>
                       ) : g != null ? (
                         <Button
@@ -432,7 +436,7 @@ function StatusBadge({ status }: { status?: ItemStatus | string | null }) {
         : s === "DELETED"
           ? "outline"
           : "warning";
-  return <Badge variant={variant}>{s}</Badge>;
+  return <Badge variant={variant}>{statusLabel(s)}</Badge>;
 }
 
 function accentCls(accent?: CleanupStat["accent"]): string {

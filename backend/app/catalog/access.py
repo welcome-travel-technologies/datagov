@@ -131,6 +131,123 @@ def resolve_org(user):
     return None
 
 
+def resolve_data_person(user):
+    """The ``DataPerson`` this login *is*, or None.
+
+    The catalog deliberately keeps governance identity (DataPerson — can be a
+    stakeholder with no account) separate from authentication identity
+    (CustomUser). ``DataPerson.user`` is the ONLY join between them, and this is
+    the one place it's read. It's what makes the Task Manager's "my tasks"
+    possible: without the link the app knows who you are but not which assets
+    you own, so a person would see an empty board while tasks sit against their
+    name.
+
+    Read-only on purpose — no name-guessing, no writing a link as a side effect
+    of a page load. Most accounts are not linked yet, so the Task Manager does
+    NOT depend on this: it falls back to letting a person pick their own name
+    (``?assignee=<id>``), and this function just supplies the default when the
+    link does happen to exist. Linking properly is a separate, deliberate step
+    (Org Settings member save, or ``link_data_persons``).
+
+    Returns None for a login with no DataPerson profile — a common, valid state,
+    so callers must treat it as "no default identity" rather than an error.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return None
+    from .models import DataPerson
+
+    return DataPerson.objects.filter(user=user).first()
+
+
+def unlinked_people_report(org):
+    """Who can't get a personal task feed yet, and who has no governance identity.
+
+    Two gaps, both invisible until you look for them:
+
+    * ``unlinked_people`` — DataPersons with no ``user``. They can be assigned
+      tasks (governance references them by row, not by login), but nobody can
+      ever *see* those tasks under "My Tasks", because no account maps to them.
+    * ``members_without_person`` — org logins with no DataPerson. They sign in
+      fine and simply own nothing.
+
+    Both are fixable by editing the member in Org Settings, which adopts a
+    login-less namesake instead of creating a twin.
+    """
+    from .models import DataPerson, OrganizationMembership
+
+    people = DataPerson.objects.filter(organization=org, user__isnull=True)
+    linked_user_ids = set(
+        DataPerson.objects.filter(organization=org, user__isnull=False)
+        .values_list("user_id", flat=True)
+    )
+    members = (
+        OrganizationMembership.objects.filter(organization=org)
+        .exclude(user_id__in=linked_user_ids)
+        .select_related("user")
+    )
+    return {
+        "unlinked_people": [
+            {"id": p.id, "name": p.name, "is_owner": p.is_owner, "is_steward": p.is_steward}
+            for p in people.order_by("name")
+        ],
+        "members_without_person": [
+            {"user_id": m.user_id, "email": m.user.email} for m in members.order_by("user__email")
+        ],
+    }
+
+
+class DuplicateDataPersonName(Exception):
+    """Raised when a member save would collide with another person's name.
+
+    ``uniq_dataperson_name_org`` makes that a database error, which would
+    surface as a 500. Callers catch this and return a plain message instead.
+    """
+
+
+def upsert_data_person(user, org, name, **fields):
+    """Create or update the ``DataPerson`` for ``user`` — without minting a twin.
+
+    The obvious ``update_or_create(user=user, ...)`` is what produced the
+    duplicate Owner / Steward dropdown entries: it matches on ``user`` alone, so
+    a login-less row for the same human (added via the Django admin or a bulk
+    import before that person had an account) was never found and a SECOND row
+    with the identical name appeared. Both were `is_owner`, both in the same org
+    — hence the same name twice in every dropdown, while Org Settings looked
+    clean because it indexes members by user id.
+
+    So: match on ``user`` first, then *adopt* a login-less namesake in the same
+    org, and only create when neither exists.
+    """
+    from .models import DataPerson
+
+    clean_name = (name or "").strip()
+    dp = DataPerson.objects.filter(user=user).first()
+    if dp is None and clean_name:
+        dp = DataPerson.objects.filter(
+            user__isnull=True, organization=org, name__iexact=clean_name,
+        ).first()
+    if dp is None:
+        dp = DataPerson()
+
+    # A namesake belonging to someone ELSE would violate uniq_dataperson_name_org
+    # on save. Detect it here so the caller can say so in plain words rather than
+    # letting an IntegrityError become a 500 (and, without a transaction, a
+    # half-written member).
+    if clean_name:
+        clash = DataPerson.objects.filter(organization=org, name__iexact=clean_name)
+        if dp.pk:
+            clash = clash.exclude(pk=dp.pk)
+        if clash.exists():
+            raise DuplicateDataPersonName(clean_name)
+    dp.user = user
+    dp.name = clean_name
+    dp.organization = org
+    for key, value in fields.items():
+        setattr(dp, key, value)
+    dp.save()
+    return dp
+
+
 def is_org_admin(user, org=None) -> bool:
     """True if the user is an admin of ``org`` (or of ANY org when ``org`` is
     None). Superusers are always admins. This is THE admin predicate."""

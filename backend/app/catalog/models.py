@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 from django.contrib.auth.models import AbstractUser, Group
 from django.utils.translation import gettext_lazy as _
 
@@ -64,6 +65,28 @@ class DataPerson(models.Model):
 
     class Meta:
         ordering = ['name']
+        # Uniqueness is what keeps the Owner / Steward dropdowns free of
+        # duplicates. Two rules, both learned from real duplicate rows:
+        #   * one DataPerson per login — the member-save upsert keys on `user`,
+        #     so a second row for the same user made that upsert ambiguous;
+        #   * one person per name per org (case-insensitively) — a login-less
+        #     row created by the admin / bulk import used to sit alongside the
+        #     one created when that person later got an account.
+        # Both are enforced only where the column is set: rows with user=NULL
+        # are legitimate (stakeholders without a login), and Postgres treats
+        # NULLs as distinct anyway, so the second constraint additionally
+        # scopes on organization which may itself be NULL — hence the explicit
+        # condition on the first and a plain Lower() index on the second.
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'], condition=models.Q(user__isnull=False),
+                name='uniq_dataperson_user',
+            ),
+            models.UniqueConstraint(
+                Lower('name'), 'organization',
+                name='uniq_dataperson_name_org',
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -175,10 +198,14 @@ class Item(models.Model):
             models.Index(fields=['group_id'], name='cat_item_group_idx'),
         ]
         
+    # NOTE: 'DELETED' is the stored value and is load-bearing far outside this
+    # model (the deleted filter, the PowerBI/dbt Cleanup pages, the BigQuery
+    # export). Only the human LABEL changed to "To Be Deleted" — renaming the
+    # value would silently break every one of those readers.
     STATUS_CHOICES = [
         ('UNVERIFIED', 'Unverified'),
         ('VERIFIED', 'Verified'),
-        ('DELETED', 'Deleted'),
+        ('DELETED', 'To Be Deleted'),
         ('ATTENTION', 'Attention'),
     ]
     # Core Data
@@ -371,6 +398,14 @@ class ItemGroup(models.Model):
         on_delete=models.SET_NULL, related_name='item_groups',
     )
 
+    # The business definition this group belongs to, when one has been assigned.
+    # SET_NULL: deleting a definition must not take its groups (or their
+    # curation) with it — the groups simply become unassigned.
+    definition = models.ForeignKey(
+        'Definition', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='item_groups',
+    )
+
     # Governance — single source of truth (moved off Item).
     ownership_department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name='owned_groups')
     ownership_person = models.ForeignKey(DataPerson, null=True, blank=True, on_delete=models.SET_NULL, related_name='owned_groups')
@@ -414,20 +449,102 @@ class ItemGroup(models.Model):
         return f'{self.group_key} ({self.kind})'
 
 
+class Definition(models.Model):
+    """A business definition that several ItemGroups belong to.
+
+    The layer above ItemGroup: "Revenue" as a concept, versus the individual
+    measure groups (``net revenue``, ``gross revenue``, ``arr``) that express
+    it. Membership is curated by hand — a group belongs to at most one
+    definition — and nothing propagates on its own.
+
+    Metadata here is applied to the member groups only by an explicit **action**
+    (see ``DefinitionViewSet.apply``), never as a side effect of editing. That
+    keeps a typo in a definition from silently rewriting the governance of every
+    group beneath it: you choose when it lands, and you're told how many groups
+    changed.
+    """
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    organization = models.ForeignKey(
+        'Organization', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='definitions',
+    )
+
+    # The metadata a definition can push down. Deliberately just these two for
+    # now — each field earns its place by having an action that applies it.
+    ownership_department = models.ForeignKey(
+        Department, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='definitions',
+    )
+    ownership_person = models.ForeignKey(
+        DataPerson, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='owned_definitions',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                Lower('name'), 'organization', name='uniq_definition_name_org',
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class GovernanceTask(models.Model):
     """A small actionable task for a data person.
 
-    Created automatically when an ``ItemGroup`` status flips to ``ATTENTION``
-    or ``DELETED`` (the latter also fires when an item is marked for
-    deletion, which auto-DEPRECATEs its group). Assigned to the asset's
-    steward when one exists; otherwise left unassigned and shown in the
-    Task Manager's total view. Dedupe rule: at most one *open* task per group.
+    Two ways a task comes into being, both funnelling through
+    ``catalog/governance_tasks.py``:
+
+      * **event** — an ``ItemGroup`` status flips to ``ATTENTION`` / ``DELETED``
+        (the latter also fires when an item is marked for deletion, which
+        auto-DEPRECATEs its group), so the assignee hears about it immediately;
+      * **sweep** — ``generate_tasks()`` reconciles the whole catalog against
+        the governance rules (unverified measures, uncategorised measures, ...),
+        creating what's missing, re-resolving assignees, and auto-closing tasks
+        whose condition no longer holds.
+
+    ``reason`` is the task *kind* and decides who it routes to (see
+    ``REASON_POLICY``). Dedupe rule: at most one *open* task per
+    ``(item_group, reason)`` — enforced by a DB constraint, not convention, so
+    a sweep can be re-run any number of times without duplicating work.
     """
     STATE_OPEN = 'open'
     STATE_DONE = 'done'
     STATE_CHOICES = [
         (STATE_OPEN, 'Open'),
         (STATE_DONE, 'Done'),
+    ]
+
+    # Task kinds. The first three mirror a governance status; NO_CATEGORY has no
+    # status behind it at all, which is precisely why `reason` had to exist
+    # separately from `trigger_status`.
+    REASON_UNVERIFIED = 'UNVERIFIED'
+    REASON_ATTENTION = 'ATTENTION'
+    REASON_DELETED = 'DELETED'
+    REASON_NO_CATEGORY = 'NO_CATEGORY'
+    REASON_CHOICES = [
+        (REASON_UNVERIFIED, 'Verify'),
+        (REASON_ATTENTION, 'Attention'),
+        (REASON_DELETED, 'To Be Deleted'),
+        (REASON_NO_CATEGORY, 'Category'),
+    ]
+
+    # How an open task ended up done. 'manual' = a human pressed Done;
+    # 'resolved' = the sweep found the underlying gap had been fixed and closed
+    # it automatically. Keeping them apart is what makes "who actually did the
+    # work" answerable later.
+    CLOSED_MANUAL = 'manual'
+    CLOSED_RESOLVED = 'resolved'
+    CLOSED_REASON_CHOICES = [
+        (CLOSED_MANUAL, 'Marked done'),
+        (CLOSED_RESOLVED, 'Auto-resolved'),
     ]
 
     organization = models.ForeignKey(
@@ -448,12 +565,23 @@ class GovernanceTask(models.Model):
     )
     # Which governance role the assignee was resolved from ('steward', 'owner',
     # 'other', ...). Drives display and lets the routing policy grow over time.
-    # See catalog/governance_tasks.py ASSIGNEE_ROLES for the active policy.
+    # See catalog/governance_tasks.py REASON_POLICY for the active policy.
     assignee_role = models.CharField(max_length=20, blank=True, null=True)
-    # The status that triggered / last refreshed this task ('ATTENTION' | 'DELETED').
-    trigger_status = models.CharField(max_length=20, choices=Item.STATUS_CHOICES)
+    # Why this task exists — the dedupe key alongside item_group, and what
+    # decides who it routes to. See REASON_CHOICES / REASON_POLICY.
+    reason = models.CharField(
+        max_length=32, choices=REASON_CHOICES, default=REASON_ATTENTION, db_index=True,
+    )
+    # The status that triggered / last refreshed this task ('ATTENTION' |
+    # 'DELETED'). Null for reasons that aren't status-derived (NO_CATEGORY).
+    trigger_status = models.CharField(
+        max_length=20, choices=Item.STATUS_CHOICES, blank=True, null=True,
+    )
     title = models.CharField(max_length=512)
     state = models.CharField(max_length=10, choices=STATE_CHOICES, default=STATE_OPEN)
+    closed_reason = models.CharField(
+        max_length=32, choices=CLOSED_REASON_CHOICES, blank=True, null=True,
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -468,6 +596,20 @@ class GovernanceTask(models.Model):
         indexes = [
             models.Index(fields=['state', 'created_at'], name='cat_task_state_created_idx'),
             models.Index(fields=['organization'], name='cat_task_org_idx'),
+            # The personalized feed ("my open tasks") reads on exactly this pair.
+            models.Index(fields=['assignee', 'state'], name='cat_task_assignee_state_idx'),
+            models.Index(fields=['reason', 'state'], name='cat_task_reason_state_idx'),
+        ]
+        constraints = [
+            # The dedupe rule as a DB invariant: at most one OPEN task per
+            # (group, reason). This is what lets the sweep be re-run freely —
+            # bulk_create(ignore_conflicts=True) leans on it directly instead of
+            # racing a read-then-write check.
+            models.UniqueConstraint(
+                fields=['item_group', 'reason'],
+                condition=models.Q(state='open'),
+                name='uniq_open_task_per_group_reason',
+            ),
         ]
 
     def __str__(self):

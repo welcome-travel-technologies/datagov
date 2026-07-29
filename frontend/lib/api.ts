@@ -177,6 +177,25 @@ export interface RelationshipRef {
 /** Governance status as stored on the ItemGroup / denormalised onto Item. */
 export type ItemStatus = "UNVERIFIED" | "VERIFIED" | "DELETED" | "ATTENTION";
 
+/**
+ * Display labels for `ItemStatus`. The STORED value stays "DELETED" — it is
+ * load-bearing for the deleted filter, both Cleanup pages and the BigQuery
+ * export — so only the label reads "To Be Deleted". Import this everywhere
+ * instead of hand-writing the strings, so the next rename is one line.
+ */
+export const STATUS_LABELS: Record<ItemStatus, string> = {
+  UNVERIFIED: "Unverified",
+  VERIFIED: "Verified",
+  DELETED: "To Be Deleted",
+  ATTENTION: "Attention",
+};
+
+/** Label for a status value, tolerant of unknown/legacy strings. */
+export function statusLabel(s: string | null | undefined): string {
+  if (!s) return "—";
+  return STATUS_LABELS[s as ItemStatus] ?? s;
+}
+
 export interface Item {
   item_id: string;
   item_name: string;
@@ -227,6 +246,9 @@ export interface Item {
   ownership_person?: number | null;
   ownership_person_name?: string | null;
   ownership_person_slack?: string | null;
+  /** The business definition of this item's group, when one is assigned. */
+  definition?: number | null;
+  definition_name?: string | null;
   steward?: number | null;
   steward_name?: string | null;
   steward_slack?: string | null;
@@ -266,13 +288,59 @@ export interface DataPerson {
   user_email?: string | null;
 }
 
+/** A business definition — the layer above ItemGroup. Inert by design: it holds
+ *  measures together and carries an owner/department, but nothing propagates
+ *  until someone runs the apply action. */
+export interface Definition {
+  id: number;
+  name: string;
+  description?: string | null;
+  ownership_department?: number | null;
+  ownership_department_name?: string | null;
+  ownership_person?: number | null;
+  ownership_person_name?: string | null;
+  group_count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** A group item as listed under its definition. */
+export interface DefinitionGroup {
+  id: number;
+  group_key: string;
+  name: string;
+  status: string;
+  ownership_person: number | null;
+  ownership_person_name: string | null;
+  ownership_department: number | null;
+  ownership_department_name: string | null;
+}
+
+export interface DefinitionApplyResult {
+  status: string;
+  updated?: number;
+  would_update?: number;
+  group_count: number;
+  skipped_unset: string[];
+  dry_run?: boolean;
+  detail?: string;
+}
+
+/** Why a task exists — also the routing key (owner vs steward) and, with the
+ *  item group, the uniqueness key for open tasks. */
+export type TaskReason = "UNVERIFIED" | "ATTENTION" | "DELETED" | "NO_CATEGORY";
+
 export interface GovernanceTask {
   id: number;
   title: string;
   state: "open" | "done";
+  reason: TaskReason | string;
+  reason_label: string;
   trigger_status: "ATTENTION" | "DELETED" | string | null;
   created_at: string;
   completed_at: string | null;
+  /** 'manual' when a human pressed Done, 'resolved' when the sweep auto-closed it. */
+  closed_reason: "manual" | "resolved" | null;
   item_group: number | null;
   assignee: number | null;
   assignee_name: string | null;
@@ -281,6 +349,50 @@ export interface GovernanceTask {
   item_name: string | null;
   asset_context: string | null;
   web_url: string | null;
+  age_days: number | null;
+}
+
+export interface TaskReasonSummary {
+  reason: TaskReason | string;
+  label: string;
+  total: number;
+  mine: number;
+}
+
+export interface TaskSummary {
+  total_open: number;
+  mine_open: number;
+  unassigned_open: number;
+  done_total: number;
+  reasons: TaskReasonSummary[];
+  data_person: { id: number; name: string } | null;
+  /** True when the signed-in LOGIN is linked to a DataPerson (as opposed to the
+   *  caller merely having picked a name in the UI). */
+  linked: boolean;
+}
+
+/** Per-reason counts from a sweep (or its dry-run preview). */
+export interface TaskSweepCounts {
+  created: number;
+  reassigned: number;
+  closed: number;
+  unassigned: number;
+  target: number;
+}
+
+export interface TaskSweepResult {
+  reasons: Record<string, TaskSweepCounts>;
+  totals: TaskSweepCounts;
+  dry_run: boolean;
+  kind_scope?: string;
+}
+
+export interface TaskGenerateOptions {
+  reasons: { key: string; label: string; hint: string }[];
+  /** Which asset kinds the sweep may target. Defaults to PowerBI measures;
+   *  anything wider is orders of magnitude more tasks. */
+  kind_scopes: { key: string; label: string; hint: string }[];
+  default_kind_scope: string;
 }
 
 export interface FiltersResponse {
@@ -445,6 +557,16 @@ export interface User {
   is_authenticated: boolean;
   perms: MePerms;
   organization?: { name?: string | null; primary_color?: string | null; icon?: string | null } | null;
+  /** The governance identity behind this login, when the two are linked.
+   *  Usually null today — most accounts aren't linked yet, so the Task Manager
+   *  lets a person pick their own name instead. */
+  data_person?: {
+    id: number;
+    name: string;
+    is_owner: boolean;
+    is_steward: boolean;
+    is_other: boolean;
+  } | null;
 }
 
 /** Public (no-auth) org branding — name, accent colour, logo icon. Drives the
@@ -1045,6 +1167,31 @@ export const api = {
   powerbiUsage: (params: UsageParams = {}) =>
     request<UsageResponse>(`/powerbi-usage/${qs(params as Record<string, string | number | undefined>)}`),
 
+  definitions: {
+    list: (params: Record<string, string | number | undefined> = {}) =>
+      request<Paginated<Definition> | Definition[]>(`/definitions/${qs(params)}`),
+    create: (body: Partial<Definition>) =>
+      request<Definition>(`/definitions/`, { method: "POST", body: JSON.stringify(body) }),
+    update: (id: number, body: Partial<Definition>) =>
+      request<Definition>(`/definitions/${id}/`, { method: "PATCH", body: JSON.stringify(body) }),
+    remove: (id: number) =>
+      request<void>(`/definitions/${id}/`, { method: "DELETE" }),
+    /** The group items assigned to this definition. */
+    groups: (id: number) => request<DefinitionGroup[]>(`/definitions/${id}/groups/`),
+    /** Membership only — assigning moves no metadata. */
+    assign: (id: number, body: { add?: number[]; remove?: number[] }) =>
+      request<{ status: string; added: number; removed: number; group_count: number }>(
+        `/definitions/${id}/assign/`,
+        { method: "POST", body: JSON.stringify(body) },
+      ),
+    /** Push owner + department onto the member groups. `dry_run` previews. */
+    apply: (id: number, body: { dry_run?: boolean; fields?: string[] } = {}) =>
+      request<DefinitionApplyResult>(`/definitions/${id}/apply/`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  },
+
   tasks: {
     list: (params: Record<string, string | number | undefined> = {}) =>
       request<Paginated<GovernanceTask>>(`/tasks/${qs(params)}`),
@@ -1052,6 +1199,40 @@ export const api = {
       request<{ status: string; id: number; state: string }>(`/tasks/${id}/done/`, {
         method: "POST",
       }),
+    /** Close many at once — takes the ids the user actually ticked.
+     *  The server rejects batches over 1000, so chunk rather than let a big
+     *  selection fail (or, worse, half-succeed). */
+    bulkDone: async (ids: number[]) => {
+      const CHUNK = 500;
+      let updated = 0;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const res = await request<{ status: string; requested: number; updated: number }>(
+          `/tasks/bulk-done/`,
+          { method: "POST", body: JSON.stringify({ ids: ids.slice(i, i + CHUNK) }) },
+        );
+        updated += res.updated;
+      }
+      return { status: "ok", requested: ids.length, updated };
+    },
+    summary: (params: { person?: number | string } = {}) =>
+      request<TaskSummary>(`/tasks/summary/${qs(params)}`),
+    /** Run the governance sweep. `dry_run` writes nothing and returns the same
+     *  counts — that's the Preview. Admin only. */
+    generate: (
+      body: {
+        reasons?: string[];
+        dry_run?: boolean;
+        require_assignee?: boolean;
+        kind_scope?: string;
+      } = {},
+    ) =>
+      request<TaskSweepResult>(`/tasks/generate/`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    /** Reasons + asset scopes the sweep offers. Server-owned policy, so the UI
+     *  never keeps a second copy that can drift. */
+    generateOptions: () => request<TaskGenerateOptions>(`/tasks/generate-options/`),
   },
 
   dataPersons: {

@@ -73,6 +73,24 @@ def _me_payload(user):
         }
 
     role = "admin" if (perms_out["is_admin"] or user.is_superuser) else "member"
+
+    # The governance identity behind this login, when there is one. This is what
+    # lets the Task Manager open on "my tasks" — the app otherwise knows who you
+    # are but not which assets you own. None is a real state (an admin who owns
+    # nothing), not an error.
+    from .access import resolve_data_person
+
+    dp = resolve_data_person(user)
+    data_person = None
+    if dp is not None:
+        data_person = {
+            "id": dp.id,
+            "name": dp.name,
+            "is_owner": dp.is_owner,
+            "is_steward": dp.is_steward,
+            "is_other": dp.is_other,
+        }
+
     return {
         "id": user.id,
         "email": getattr(user, "email", "") or "",
@@ -81,6 +99,7 @@ def _me_payload(user):
         "is_authenticated": True,
         "perms": perms_out,
         "organization": org,
+        "data_person": data_person,
     }
 
 
@@ -347,6 +366,33 @@ def org_members_save_view(request):
     if errors:
         return JsonResponse({"error": " ".join(errors)}, status=400)
 
+    # A name clash raises mid-way through creating the user, the membership and
+    # the groups. Without a transaction that leaves a half-built member behind
+    # for the admin to trip over on the retry.
+    from django.db import transaction
+
+    from .access import DuplicateDataPersonName
+
+    try:
+        with transaction.atomic():
+            return _save_member(request, org, data, edit_user, is_edit, email, password,
+                                name, slack_handle, is_owner, is_steward, is_other,
+                                department_ids, group_ids)
+    except DuplicateDataPersonName as exc:
+        return JsonResponse(
+            {"error": f'Another member in this organization is already named "{exc}". '
+                      'Use a distinguishing name (e.g. add a surname or team).'},
+            status=400,
+        )
+
+
+def _save_member(request, org, data, edit_user, is_edit, email, password, name,
+                 slack_handle, is_owner, is_steward, is_other, department_ids, group_ids):
+    """The member upsert itself — see ``org_members_save_view`` for the contract.
+    Split out so the whole thing runs inside one transaction."""
+    from .models import CustomUser, Department
+    from .access import upsert_data_person
+
     available_groups = get_access_groups_qs()
     departments = Department.objects.filter(organization=org)
 
@@ -376,16 +422,16 @@ def org_members_save_view(request):
     chosen = list(available_groups.filter(id__in=group_ids)) if group_ids else []
     target_user.groups.set(chosen + other_groups)
 
-    dp, _ = DataPerson.objects.update_or_create(
-        user=target_user,
-        defaults={
-            "name": name,
-            "organization": org,
-            "is_owner": is_owner,
-            "is_steward": is_steward,
-            "is_other": is_other,
-            "slack_handle": slack_handle or None,
-        },
+    # Adopts a login-less namesake instead of creating a duplicate — see
+    # access.upsert_data_person for why that mattered. Raises
+    # DuplicateDataPersonName when the name belongs to somebody else; the caller
+    # turns that into a 400 and this transaction rolls back.
+    dp = upsert_data_person(
+        target_user, org, name,
+        is_owner=is_owner,
+        is_steward=is_steward,
+        is_other=is_other,
+        slack_handle=slack_handle or None,
     )
     dp.departments.set(departments.filter(id__in=department_ids))
 

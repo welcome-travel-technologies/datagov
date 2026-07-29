@@ -9,7 +9,7 @@ import {
   type CleanupStat,
   type CleanupTab,
 } from "@/components/cleanup/cleanup-view";
-import { api } from "@/lib/api";
+import { api, STATUS_LABELS } from "@/lib/api";
 
 /** Shape of /api/dbt-insights/?section=cleanup (only the bits we use). */
 interface DbtCleanupInsights {
@@ -56,7 +56,7 @@ export default function DbtCleanupPage() {
     { key: "undocumented_models", label: "Undocumented Models", value: t.undocumented_models ?? 0, accent: "warning" },
     { key: "untested_models", label: "Untested Models", value: t.untested_models ?? 0, accent: "warning" },
     { key: "attention", label: "Needs Attention", value: t.attention ?? 0, accent: "warning" },
-    { key: "deprecated", label: "Deleted", value: t.deprecated ?? 0, accent: "muted" },
+    { key: "deprecated", label: STATUS_LABELS.DELETED, value: t.deprecated ?? 0, accent: "muted" },
   ];
 
   const tabs: CleanupTab[] = [
@@ -98,7 +98,7 @@ export default function DbtCleanupPage() {
     {
       kind: "query",
       key: "deprecated",
-      label: "Deleted",
+      label: STATUS_LABELS.DELETED,
       count: t.deprecated,
       deletedTab: true,
       params: { status: "DELETED", include_deleted: "true" },
@@ -109,7 +109,7 @@ export default function DbtCleanupPage() {
     <div>
       <PageHeader
         title="dbt Cleanup Opportunities"
-        description="dbt models and sources nobody reads, models without tests or docs. Select rows and mark a group to delete — it moves to the Deleted tab where you can undo (restoring it and resetting status to Unverified)."
+        description={`dbt models and sources nobody reads, models without tests or docs. Select rows and mark a group to delete — it moves to the ${STATUS_LABELS.DELETED} tab where you can undo (restoring it and resetting status to Unverified).`}
       />
       <CleanupView
         service="dbt"

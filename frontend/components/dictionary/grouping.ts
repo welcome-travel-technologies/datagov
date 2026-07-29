@@ -57,6 +57,8 @@ export function pickRepresentative(instances: Item[]): Item {
 const SURFACED_FIELDS: (keyof Item)[] = [
   "category",
   "category_name",
+  "definition",
+  "definition_name",
   "ownership_department",
   "ownership_department_name",
   "ownership_person",

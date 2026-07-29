@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingState } from "@/components/ui/misc";
 import { CodeBlock, type CodeLang } from "@/components/ui/code-block";
 import { DaxModal } from "@/components/items/dax-modal";
-import { api, type ConnectedReport, type Item, type ItemStatus } from "@/lib/api";
+import { api, statusLabel, type ConnectedReport, type Item, type ItemStatus } from "@/lib/api";
 import { cn, fmtInt } from "@/lib/utils";
 import { isExternalMeasure, sortInstances } from "@/lib/items";
 import { detectModelType, MODEL_TYPE_META } from "@/lib/lineage/colibri";
@@ -180,7 +180,7 @@ export function ItemDetailModal({
           {item && (
             <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
               {item.item_type && <Badge variant={badgeVariant(item.item_type)}>{item.item_type}</Badge>}
-              <Badge variant={statusVariant(item.status)}>{item.status || "UNVERIFIED"}</Badge>
+              <Badge variant={statusVariant(item.status)}>{statusLabel(item.status || "UNVERIFIED")}</Badge>
             </div>
           )}
         </DialogHeader>
@@ -242,7 +242,7 @@ function GovChips({ item }: { item: Item }) {
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      <Chip k="Status" v={item.status || "UNVERIFIED"} valueClass={statusTextClass(item.status)} />
+      <Chip k="Status" v={statusLabel(item.status || "UNVERIFIED")} valueClass={statusTextClass(item.status)} />
       {owner && <Chip k="Owner" v={owner} />}
       {steward && <Chip k="Steward" v={steward} />}
       {item.category_name && <Chip k="Category" v={item.category_name} />}

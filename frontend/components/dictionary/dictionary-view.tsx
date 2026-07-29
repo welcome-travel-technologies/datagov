@@ -20,8 +20,10 @@ import { SimpleSelect } from "@/components/ui/simple-select";
 import {
   api,
   unwrapResults,
+  STATUS_LABELS,
   type Category,
   type DataPerson,
+  type Definition,
   type Department,
   type Item,
   type ItemStatus,
@@ -57,13 +59,6 @@ const TYPE_OPTIONS: { label: string; options: { value: string; label: string }[]
     ],
   },
 ];
-
-const STATUS_LABELS: Record<ItemStatus, string> = {
-  UNVERIFIED: "Unverified",
-  VERIFIED: "Verified",
-  DELETED: "Deleted",
-  ATTENTION: "Attention",
-};
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
@@ -165,6 +160,7 @@ export function DictionaryView() {
   const [owner, setOwner] = useState("");
   const [steward, setSteward] = useState("");
   const [category, setCategory] = useState("");
+  const [definition, setDefinition] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [detail, setDetail] = useState<GroupedItem | null>(null);
@@ -197,17 +193,19 @@ export function DictionaryView() {
   const metaQ = useQuery({
     queryKey: ["dict-meta"],
     queryFn: async () => {
-      const [d, o, s, c] = await Promise.all([
+      const [d, o, s, c, defs] = await Promise.all([
         api.departments.list(),
         api.dataPersons.list({ is_owner: true }),
         api.dataPersons.list({ is_steward: true }),
         api.categories.list(),
+        api.definitions.list({ limit: 1000 }),
       ]);
       return {
         departments: unwrapResults<Department>(d),
         owners: unwrapResults<DataPerson>(o),
         stewards: unwrapResults<DataPerson>(s),
         categories: unwrapResults<Category>(c),
+        definitions: unwrapResults<Definition>(defs),
       };
     },
     staleTime: 5 * 60_000,
@@ -217,6 +215,7 @@ export function DictionaryView() {
   const owners = metaQ.data?.owners ?? [];
   const stewards = metaQ.data?.stewards ?? [];
   const categories = metaQ.data?.categories ?? [];
+  const definitions = metaQ.data?.definitions ?? [];
 
   // Local working copy so inline edits update without refetching 100k rows.
   const [rawRows, setRawRows] = useState<Item[]>([]);
@@ -279,6 +278,7 @@ export function DictionaryView() {
       if (!govIdMatch(owner, row.ownership_person)) return false;
       if (!govIdMatch(steward, row.steward)) return false;
       if (!govIdMatch(category, row.category)) return false;
+      if (!govIdMatch(definition, row.definition)) return false;
 
       // Sharing — only meaningful for measure_name groups
       if (sharing && row.group_kind === "measure_name") {
@@ -299,6 +299,7 @@ export function DictionaryView() {
     owner,
     steward,
     category,
+    definition,
     sharing,
   ]);
 
@@ -341,6 +342,16 @@ export function DictionaryView() {
   }
   function editStatus(row: GroupedItem, value: ItemStatus) {
     patchGroup(row.group, { status: value }, { status: value });
+  }
+  /** Assign this measure group to a business definition.
+   *  Membership only — a definition never pushes its owner/department down on
+   *  its own; that's the explicit action on the Definitions page. */
+  function editDefinition(row: GroupedItem, value: string) {
+    const def = definitions.find((d) => String(d.id) === value);
+    patchGroup(row.group, { definition: value }, {
+      definition: value ? Number(value) : null,
+      definition_name: def?.name ?? null,
+    });
   }
   function editOwner(row: GroupedItem, value: string) {
     const p = owners.find((o) => String(o.id) === value);
@@ -559,10 +570,12 @@ export function DictionaryView() {
                 onValueChange={(v) => { setStatusF(v); resetPage(); }}
                 options={[
                   { value: "", label: "All Statuses" },
-                  { value: "UNVERIFIED", label: "Unverified" },
-                  { value: "VERIFIED", label: "Verified" },
-                  { value: "DELETED", label: "Deleted" },
-                  { value: "ATTENTION", label: "Attention" },
+                  // Values are the STORED codes the API filters on; only the
+                  // labels come from STATUS_LABELS.
+                  ...(Object.keys(STATUS_LABELS) as ItemStatus[]).map((s) => ({
+                    value: s,
+                    label: STATUS_LABELS[s],
+                  })),
                 ]}
               />
             </Field>
@@ -586,6 +599,17 @@ export function DictionaryView() {
                   { value: "", label: "All Categories" },
                   { value: "none", label: "No Category" },
                   ...categories.map((c) => ({ value: String(c.id), label: c.name })),
+                ]}
+              />
+            </Field>
+            <Field label="Definition">
+              <SimpleSelect
+                value={definition}
+                onValueChange={(v) => { setDefinition(v); resetPage(); }}
+                options={[
+                  { value: "", label: "All Definitions" },
+                  { value: "none", label: "No Definition" },
+                  ...definitions.map((d) => ({ value: String(d.id), label: d.name })),
                 ]}
               />
             </Field>
@@ -650,6 +674,7 @@ export function DictionaryView() {
                   <TH className="min-w-[260px]">Name / Description</TH>
                   <TH>Type</TH>
                   <TH>Category</TH>
+                  <TH>Definition</TH>
                   <TH>In Use</TH>
                   <TH className="min-w-[160px]">Ownership</TH>
                   <TH>Status</TH>
@@ -667,8 +692,10 @@ export function DictionaryView() {
                     owners={owners}
                     stewards={stewards}
                     categories={categories}
+                    definitions={definitions}
                     onOpenDetails={() => setDetail(row)}
                     onEditCategory={(v) => editCategory(row, v)}
+                    onEditDefinition={(v) => editDefinition(row, v)}
                     onEditStatus={(v) => editStatus(row, v)}
                     onEditDept={(v) => editDept(row, v)}
                     onEditOwner={(v) => editOwner(row, v)}
@@ -751,8 +778,10 @@ function DictRow({
   owners,
   stewards,
   categories,
+  definitions,
   onOpenDetails,
   onEditCategory,
+  onEditDefinition,
   onEditStatus,
   onEditDept,
   onEditOwner,
@@ -764,8 +793,10 @@ function DictRow({
   owners: DataPerson[];
   stewards: DataPerson[];
   categories: Category[];
+  definitions: Definition[];
   onOpenDetails: () => void;
   onEditCategory: (v: string) => void;
+  onEditDefinition: (v: string) => void;
   onEditStatus: (v: ItemStatus) => void;
   onEditDept: (v: string) => void;
   onEditOwner: (v: string) => void;
@@ -882,6 +913,25 @@ function DictRow({
             options={[
               { value: "", label: "-- Select --" },
               ...categories.map((c) => ({ value: String(c.id), label: c.name })),
+            ]}
+          />
+        ) : (
+          <span className="text-faint">—</span>
+        )}
+      </TD>
+
+      {/* Definition (PB_MEASURE only). Assignment is membership only — the
+          definition's owner/department reach this group only when someone runs
+          the action on the Definitions page. */}
+      <TD className="align-top">
+        {isMeasure ? (
+          <SimpleSelect
+            value={row.definition ? String(row.definition) : ""}
+            onValueChange={onEditDefinition}
+            className={CELL_SELECT_CLS}
+            options={[
+              { value: "", label: "-- None --" },
+              ...definitions.map((d) => ({ value: String(d.id), label: d.name })),
             ]}
           />
         ) : (

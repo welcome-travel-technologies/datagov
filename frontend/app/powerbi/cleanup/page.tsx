@@ -8,7 +8,7 @@ import {
   type CleanupStat,
   type CleanupTab,
 } from "@/components/cleanup/cleanup-view";
-import { api } from "@/lib/api";
+import { api, STATUS_LABELS } from "@/lib/api";
 
 export default function PowerBiCleanupPage() {
   const [filters, setFilters] = useState({ workspace_name: "", dataset_name: "" });
@@ -31,7 +31,7 @@ export default function PowerBiCleanupPage() {
     { key: "unused_columns", label: "Unused Columns", value: c.unused_columns ?? 0, accent: "danger" },
     { key: "missing_descriptions", label: "Missing Docs", value: c.missing_descriptions ?? 0, accent: "warning" },
     { key: "attention", label: "Needs Attention", value: c.attention ?? 0, accent: "warning" },
-    { key: "deprecated", label: "Deleted", value: c.deprecated ?? 0, accent: "muted" },
+    { key: "deprecated", label: STATUS_LABELS.DELETED, value: c.deprecated ?? 0, accent: "muted" },
   ];
 
   const tabs: CleanupTab[] = [
@@ -59,7 +59,7 @@ export default function PowerBiCleanupPage() {
     {
       kind: "query",
       key: "deprecated",
-      label: "Deleted",
+      label: STATUS_LABELS.DELETED,
       count: c.deprecated,
       deletedTab: true,
       params: { status: "DELETED", include_deleted: "true" },
@@ -70,7 +70,7 @@ export default function PowerBiCleanupPage() {
     <div>
       <PageHeader
         title="PowerBI Cleanup Opportunities"
-        description="Unused measures and columns, assets flagged for attention, and deleted assets. Select rows and mark a group to delete — it moves to the Deleted tab where you can undo. Missing-docs is summarised in the KPI card."
+        description={`Unused measures and columns, assets flagged for attention, and deleted assets. Select rows and mark a group to delete — it moves to the ${STATUS_LABELS.DELETED} tab where you can undo. Missing-docs is summarised in the KPI card.`}
       />
       <CleanupView
         service="powerbi"

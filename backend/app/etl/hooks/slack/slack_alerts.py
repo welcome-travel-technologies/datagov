@@ -169,3 +169,48 @@ def send_slack_task_alert(task):
         client.chat_postMessage(channel=channel, text="\n".join(lines))
     except Exception as e:
         print(f'[Slack alert] Failed to send task alert: {e}')
+
+
+def send_slack_task_digest(org, per_reason, totals):
+    """ONE message summarising a governance sweep.
+
+    Deliberately not per-task: a first sweep over a few thousand measures would
+    post a few thousand messages and get the workspace rate-limited. Per-task
+    pings stay on the interactive ``send_slack_task_alert`` path, where a human
+    action bounds the volume.
+    """
+    try:
+        if org is None or not getattr(org, 'id', None):
+            return
+        from catalog.models import IntegrationHook
+        hook = IntegrationHook.objects.filter(
+            organization_id=org.id, hook_type='slack_alerts', is_active=True,
+        ).first()
+        if not hook or not hook.slack_bot_token:
+            return
+        channel = hook.slack_alerts_channel or hook.slack_channel
+        if not channel:
+            return
+
+        from slack_sdk import WebClient
+        from catalog.governance_tasks import reason_label
+        client = WebClient(token=hook.slack_bot_token)
+
+        detail = ', '.join(
+            f"{c['created']} {reason_label(r)}"
+            for r, c in per_reason.items() if c.get('created')
+        )
+        lines = [
+            '🧹 *Governance task sweep*',
+            f"Created *{totals['created']}* new task(s)"
+            + (f" — {detail}" if detail else ''),
+            f"Resolved *{totals['closed']}* · reassigned *{totals['reassigned']}*",
+        ]
+        if totals.get('unassigned'):
+            lines.append(
+                f"⚠️ *{totals['unassigned']}* asset(s) have no Owner or Steward — "
+                'those tasks are unassigned.'
+            )
+        client.chat_postMessage(channel=channel, text='\n'.join(lines))
+    except Exception as e:
+        print(f'[Slack alert] Failed to send task digest: {e}')

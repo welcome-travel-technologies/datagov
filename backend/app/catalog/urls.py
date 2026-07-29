@@ -2,7 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     ItemViewSet, ItemGroupViewSet, DepartmentViewSet, DataPersonViewSet, CategoryViewSet,
-    GovernanceTaskViewSet, MetricsMapViewSet, metrics_map_public,
+    DefinitionViewSet, GovernanceTaskViewSet, MetricsMapViewSet, metrics_map_public,
     get_summary, get_dashboard, get_network, find_network_path, get_network_reachable,
     get_chat_sessions, get_chat_messages,
     delete_chat_session, chat_api_view, get_chat_task_status, get_filters, pb_cleanup_counts, dbt_insights,
@@ -42,6 +42,7 @@ router.register(r'data-persons', DataPersonViewSet, basename='data-person')
 # template/JS deploy. New callers should use /api/data-persons/.
 router.register(r'owners', DataPersonViewSet, basename='owner')
 router.register(r'categories', CategoryViewSet, basename='category')
+router.register(r'definitions', DefinitionViewSet, basename='definition')
 router.register(r'tasks', GovernanceTaskViewSet, basename='task')
 router.register(r'metrics-maps', MetricsMapViewSet, basename='metrics-map')
 
