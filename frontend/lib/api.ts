@@ -819,7 +819,10 @@ export interface QueuedTask {
   task_id: string | null;
   name: string | null;
   func: string | null;
+  /** Raw broker lock — for a running task this is a FUTURE time (reserved_at + retry). */
   locked: string | null;
+  /** When a worker actually picked the task up. Null while waiting. */
+  reserved_at: string | null;
   /** "waiting" = available to be picked up; "running" = reserved by a worker. */
   state: "waiting" | "running";
 }

@@ -906,9 +906,19 @@ def org_queues_view(request):
     # Waiting in the broker (queued, not yet picked up / finished). A row whose
     # lock is in the future has been reserved by a worker and is running; one
     # whose lock is now/past is still waiting to be picked up.
+    # ``lock`` is NOT the reservation time: the ORM broker sets it to
+    # ``now + Conf.RETRY`` when a worker picks the row up, so for a running task
+    # it is a FUTURE timestamp. Rendering it as "x ago" always clamped to
+    # "0s ago", which made a task that had been running for 50 minutes look like
+    # it had just started. Derive the real reserved-at here so the client never
+    # has to know about RETRY.
+    from django_q.conf import Conf
+
+    retry_seconds = Conf.RETRY or 0
     queued = []
     for q in OrmQ.objects.all().order_by("id")[:100]:
         running = bool(q.lock and q.lock > now)
+        reserved_at = q.lock - timedelta(seconds=retry_seconds) if running else None
         queued.append(
             {
                 "id": q.id,
@@ -917,6 +927,7 @@ def org_queues_view(request):
                 "name": _safe(q.name),
                 "func": _safe(q.func),
                 "locked": q.lock.isoformat() if q.lock else None,
+                "reserved_at": reserved_at.isoformat() if reserved_at else None,
                 "state": "running" if running else "waiting",
             }
         )

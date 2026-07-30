@@ -48,7 +48,7 @@ tree mounted; point `DEBUG` at the catalog you want as context.
 docker compose run --rm -v "$PWD/backend/app:/app" -v "$PWD/_out:/out" web \
   python manage.py replay_chat \
     --questions-file catalog/tests/fixtures/problematic_chat_questions.json \
-    --model google:gemini-3.5-flash --max 74 --out /out
+    --model google:gemini-3.6-flash --max 74 --out /out
 ```
 
 Outputs per run: wall-clock, loops (model round-trips), tool-call sequence +

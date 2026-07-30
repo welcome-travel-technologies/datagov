@@ -181,7 +181,7 @@ export function OrgQueuesPanel() {
                   <TD>
                     {q.state === "running" ? (
                       <Badge variant="info" dot>
-                        Running {q.locked ? `· reserved ${fmtAgo(q.locked)}` : ""}
+                        Running {q.reserved_at ? `· started ${fmtAgo(q.reserved_at)}` : ""}
                       </Badge>
                     ) : (
                       <Badge variant="warning">Waiting</Badge>

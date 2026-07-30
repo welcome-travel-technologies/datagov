@@ -6,7 +6,7 @@ Django-Q2 worker**, and — when enabled — it can run live read-only queries
 against BigQuery and Power BI.
 
 > **Provider:** the default model is **Google Gemini**
-> (`google:gemini-3.5-flash`), set by `DEFAULT_CHATBOT_MODEL` in
+> (`google:gemini-3.6-flash`), set by `DEFAULT_CHATBOT_MODEL` in
 > [`tools/agent.py`](../backend/app/catalog/tools/agent.py). Anthropic Claude is
 > still supported. The model is org-configurable via the `ChatbotModel` table —
 > its `identifier` is passed verbatim to `Agent(model=...)`. Set
@@ -184,4 +184,8 @@ against the same `get_agent` the web view uses, printing each tool call. The
 
 The assistant is also reachable from **Slack** via
 [`slack_views.py`](../backend/app/catalog/slack_views.py), which drives the same
-agent on an async path.
+agent on an async path, with the same `chat_timeout_seconds` wall-clock timeout
+and per-run `UsageLimits` cap as the web chat — plus, on failure, a message
+posted back into the thread so a broken turn is never silent. The Slack thread
+itself is the conversation memory (there is no `ChatSession`), so prior turns
+arrive via `conversations_replies`.

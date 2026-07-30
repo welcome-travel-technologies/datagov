@@ -106,9 +106,11 @@ Anything slow runs off the request thread on the `worker` process. The cluster i
 configured in [`settings.py`](../backend/app/config/settings.py) `Q_CLUSTER`:
 
 - `workers: 4`, `timeout: 3600` (heavy Fabric extractions can take ~30 min),
-  `retry: 3700` (deliberately greater than `timeout` so a still-running task is
-  never re-queued as a duplicate), `orm: 'default'` (the queue is stored in
-  Postgres — no Redis/broker needed).
+  `retry: 7200` (far greater than `timeout`, not just past it — a task killed at
+  `timeout` never gets its broker row acknowledged, so a narrow margin made it
+  silently re-run once the lock expired instead of staying visible in the Queues
+  page to be killed), `orm: 'default'` (the queue is stored in Postgres — no
+  Redis/broker needed).
 
 Used by:
 

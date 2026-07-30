@@ -127,7 +127,14 @@ Q_CLUSTER = {
     'workers': 4,
     'recycle': 500,
     'timeout': 3600, # Large timeout to allow heavy Fabric API extractions (30m)
-    'retry': 3700,   # Must be > timeout to prevent duplicate runs
+    # Must be > timeout to prevent duplicate runs. Kept far above it, not just
+    # past it: when a task hits `timeout` the sentinel terminates the worker
+    # WITHOUT acknowledging the broker row, so the row survives and is
+    # re-dequeued the moment its lock (reserved_at + retry) expires. At
+    # retry=3700 that meant a timed-out task silently re-ran ~100s later, again
+    # and again — an invisible hourly loop. With 7200 it stays visible in
+    # Settings → Queues long enough for an admin to kill it instead.
+    'retry': 7200,
     'compress': True,
     'save_limit': 250,
     'queue_limit': 500,

@@ -28,7 +28,34 @@ def run_slack_event_sync(event_data, bot_token):
     except Exception as e:
         import traceback
         traceback.print_exception(type(e), e, e.__traceback__, file=sys.stderr)
-        return f"⚠️ Slack reply failed: {e}"
+        # Name the exception CLASS, not just its message: the failures that
+        # actually happen here — httpx.ReadTimeout / ConnectTimeout /
+        # RemoteProtocolError, asyncio.CancelledError, TimeoutError — all carry
+        # an EMPTY str(), which rendered in the Queues panel as a bare
+        # "⚠️ Slack reply failed:" with nothing after the colon and no way to
+        # tell a network timeout from an application bug.
+        detail = str(e).strip() or '(no message — typically a network timeout)'
+        message = f"⚠️ Slack reply failed: {type(e).__name__}: {detail}"
+        _post_failure_to_thread(event_data, bot_token, message)
+        return message
+
+
+def _post_failure_to_thread(event_data, bot_token, message):
+    """Best-effort: tell the Slack thread that the turn failed.
+
+    Without this the only trace of a failure is ``Task.result`` in the Queues
+    panel — the person who asked in Slack just sees silence and re-asks. Never
+    raises: a failure to report a failure must not mask the original error.
+    """
+    try:
+        WebClient(token=bot_token).chat_postMessage(
+            channel=event_data.get('channel'),
+            thread_ts=event_data.get('thread_ts') or event_data.get('ts'),
+            text=message,
+        )
+    except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
 
 def process_slack_event(event_data, bot_token):
     client = WebClient(token=bot_token)
@@ -84,11 +111,72 @@ def process_slack_event(event_data, bot_token):
         surface='slack',
         chat_session=None,
     )
-    from .views import retry_transient_llm_errors
-    result = retry_transient_llm_errors(
-        lambda: agent.run_sync(user_prompt=new_message, message_history=formatted_history)
+
+    # Same guardrails as the web chat (``run_chat_event_sync``). Without them a
+    # single stalled model round-trip or tool HTTP call pinned this turn for up
+    # to Q_CLUSTER['timeout'] (1h): the broker row sat "Running" in the Queues
+    # panel, the Slack thread got nothing, and because a timeout-killed worker
+    # never acknowledges its row, the same message was silently re-dequeued and
+    # re-run once the lock expired. A wall-clock timeout plus a per-run
+    # UsageLimits cap means the thread always gets an answer instead.
+    from pydantic_ai import capture_run_messages
+    from pydantic_ai.exceptions import UsageLimitExceeded
+
+    from .views import (
+        AGENT_TIMEOUT_SECONDS,
+        _agent_usage_limits,
+        _finalize_partial_answer,
+        _get_chatbot_model_for_org,
+        _run_with_timeout,
+        retry_transient_llm_errors,
     )
-    output_text = result.output
+
+    chatbot_model_id = _get_chatbot_model_for_org(org)
+    budget_hit = {'value': False, 'text': ''}
+    # Shared out of the worker thread so a wall-clock timeout (which abandons
+    # that thread mid-run) can still synthesise a partial answer.
+    captured = {'messages': None}
+
+    def _run_agent():
+        with capture_run_messages() as run_messages:
+            captured['messages'] = run_messages
+            try:
+                return retry_transient_llm_errors(
+                    lambda: agent.run_sync(
+                        user_prompt=new_message,
+                        message_history=formatted_history,
+                        usage_limits=_agent_usage_limits(),
+                    )
+                )
+            except UsageLimitExceeded:
+                budget_hit['value'] = True
+                budget_hit['text'] = _finalize_partial_answer(
+                    chatbot_model_id, run_messages,
+                )
+                return None
+
+    timeout_seconds = getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS
+    try:
+        result = _run_with_timeout(_run_agent, timeout_seconds)
+    except TimeoutError:
+        snapshot = list(captured['messages'] or [])
+        print(
+            f'Slack agent run hit the {timeout_seconds}s wall-clock timeout; '
+            f'finalising a partial answer from {len(snapshot)} captured messages.',
+            file=sys.stderr,
+        )
+        budget_hit['value'] = True
+        budget_hit['text'] = _finalize_partial_answer(chatbot_model_id, snapshot)
+        result = None
+
+    if budget_hit['value']:
+        output_text = budget_hit['text'] or (
+            "I gathered a lot but couldn't fully finish this question within "
+            "its time and tool budget. Please narrow it — e.g. name a specific "
+            "report, measure, or workspace — and I'll answer precisely."
+        )
+    else:
+        output_text = result.output
 
     if org and org.debug_responses_enabled:
         from .services.debug_render import build_debug_payload, render_debug_section

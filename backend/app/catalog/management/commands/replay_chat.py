@@ -24,7 +24,7 @@ to ``<out>/replay_runs.jsonl`` and a human summary is written to
 
 Usage (run with the working tree mounted, prod DB for faithful context):
 
-    python manage.py replay_chat --org-id 1 --model google:gemini-3.5-flash \
+    python manage.py replay_chat --org-id 1 --model google:gemini-3.6-flash \
         --min-tool-calls 15 --max 50 --out /out
 """
 from __future__ import annotations

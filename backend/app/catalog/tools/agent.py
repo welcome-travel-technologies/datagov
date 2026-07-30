@@ -44,7 +44,7 @@ from .prompts import (
 from .safe_wrapper import make_safe_tool
 
 
-DEFAULT_CHATBOT_MODEL = 'google:gemini-3.5-flash'
+DEFAULT_CHATBOT_MODEL = 'google:gemini-3.6-flash'
 
 # Newer Anthropic models (Opus 4.7+, Fable, Mythos) no longer accept sampling
 # parameters — sending `temperature` (even 0.0) returns a 400. Older Anthropic
