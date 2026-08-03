@@ -37,6 +37,8 @@ GRAPH_HEADERS = [
     'source_id', 'source', 'source_type',
     'target_id', 'target', 'target_type', 'workspace_id',
 ]
+# The transforms also emit these two; they are optional so older CSVs load.
+GRAPH_HEADERS_FULL = GRAPH_HEADERS + ['edge_kind', 'lineage_type']
 
 
 def _source(org, source_type, name):
@@ -473,3 +475,131 @@ def test_dbt_loader_scopes_lifecycle_and_graph_replacement(tmp_path):
     assert not NetworkNode.objects.filter(pk=own_dbt.pk).exists()
     assert NetworkNode.objects.filter(pk=own_pb.pk).exists()
     assert NetworkNode.objects.filter(pk=foreign_dbt.pk).exists()
+
+
+def _graph_row(source_id, source, target_id, target, **overrides):
+    row = {
+        'source_id': source_id, 'source': source, 'source_type': 'PB_MEASURE',
+        'target_id': target_id, 'target': target, 'target_type': 'PB_VISUAL',
+        'workspace_id': 'ws-1', 'edge_kind': '', 'lineage_type': '',
+    }
+    row.update(overrides)
+    return row
+
+
+# One node_id carrying several display names is normal, not corrupt input: the
+# item_id hash for tables/columns/measures is built from (dataset_id,
+# lineage_tag), so differently-named items that share a lineage_tag collapse
+# onto one id — the transform logs this as "Found N duplicated item_ids".
+# The loader must therefore de-duplicate on the ON CONFLICT key alone; when it
+# de-duplicated whole rows instead, Postgres aborted the whole run with
+# "ON CONFLICT DO UPDATE command cannot affect row a second time".
+COLLIDING_GRAPH_ROWS = [
+    # Same node_id + same edge pair, different name AND different lineage_type.
+    _graph_row(
+        'PB_MEASURE::dup', 'Revenue', 'PB_VISUAL::v1', 'Visual 1',
+        lineage_type='transformation',
+    ),
+    _graph_row('PB_MEASURE::dup', 'Revenue Alias', 'PB_VISUAL::v1', 'Visual 1'),
+    # Third name for the same node_id, this time on the target side.
+    _graph_row(
+        'PB_TABLE::t1', 'Fact', 'PB_MEASURE::dup', 'Revenue Third Name',
+        source_type='PB_TABLE', target_type='PB_MEASURE',
+    ),
+]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fabric_loader_collapses_colliding_node_ids_and_edge_pairs(tmp_path):
+    org = Organization.objects.create(name='Org')
+    source = _source(org, 'powerbi_fabric', 'Fabric')
+
+    data = tmp_path / 'etl' / 'sources' / 'fabric' / 'data'
+    _write_csv(
+        data / 'fabric_info_items.csv',
+        ITEM_HEADERS,
+        [
+            _item_row('dup-measure', 'Revenue', 'PB_MEASURE', 'powerbi'),
+            # Same id once trimmed — the transform's de-dup runs on the raw
+            # value and would let this through to the upsert.
+            _item_row('dup-measure ', 'Revenue Renamed', 'PB_MEASURE', 'powerbi'),
+        ],
+    )
+    _write_csv(
+        data / 'fabric_info_graph.csv', GRAPH_HEADERS_FULL, COLLIDING_GRAPH_ROWS,
+    )
+
+    with override_settings(BASE_DIR=tmp_path):
+        call_command(
+            'load_data',
+            organization_id=org.pk,
+            source_id=source.pk,
+            stdout=StringIO(),
+        )
+
+    items = Item.objects.filter(organization=org, item_id='dup-measure')
+    assert items.count() == 1
+    # Last CSV occurrence wins, matching the transform's keep='last'.
+    assert items.get().item_name == 'Revenue Renamed'
+
+    nodes = NetworkNode.objects.filter(organization=org)
+    assert nodes.count() == 3
+    dup = nodes.get(node_id='PB_MEASURE::dup')
+    # Deterministic winner: alphabetically first name, so re-runs are stable.
+    assert dup.name == 'Revenue'
+    assert dup.group == 'PB_MEASURE'
+
+    edges = NetworkEdge.objects.filter(
+        organization=org, source='PB_MEASURE::dup', target='PB_VISUAL::v1',
+    )
+    assert edges.count() == 1
+    # A row carrying lineage provenance wins over a bare duplicate.
+    assert edges.get().lineage_type == 'transformation'
+
+    # Re-running is idempotent (and still lands on the same name).
+    with override_settings(BASE_DIR=tmp_path):
+        call_command(
+            'load_data',
+            organization_id=org.pk,
+            source_id=source.pk,
+            stdout=StringIO(),
+        )
+    assert NetworkNode.objects.filter(organization=org).count() == 3
+    assert NetworkNode.objects.get(node_id='PB_MEASURE::dup').name == 'Revenue'
+
+
+@pytest.mark.django_db(transaction=True)
+def test_dbt_loader_collapses_colliding_node_ids_and_edge_pairs(tmp_path):
+    org = Organization.objects.create(name='Org')
+    source = _source(org, 'dbt', 'dbt')
+
+    data = tmp_path / 'etl' / 'sources' / 'dbt' / 'data'
+    _write_csv(
+        data / 'dbt_info_items.csv',
+        ITEM_HEADERS,
+        [
+            _item_row('dup-model', 'model', 'DBT_MODEL', 'dbt'),
+            _item_row('dup-model ', 'model_renamed', 'DBT_MODEL', 'dbt'),
+        ],
+    )
+    _write_csv(
+        data / 'dbt_info_graph.csv', GRAPH_HEADERS_FULL, COLLIDING_GRAPH_ROWS,
+    )
+
+    with override_settings(BASE_DIR=tmp_path):
+        call_command(
+            'load_dbt_data',
+            organization_id=org.pk,
+            source_id=source.pk,
+            stdout=StringIO(),
+        )
+
+    items = Item.objects.filter(organization=org, item_id='dup-model')
+    assert items.count() == 1
+    assert items.get().item_name == 'model_renamed'
+    assert NetworkNode.objects.filter(
+        organization=org, node_id='PB_MEASURE::dup',
+    ).count() == 1
+    assert NetworkEdge.objects.filter(
+        organization=org, source='PB_MEASURE::dup', target='PB_VISUAL::v1',
+    ).count() == 1

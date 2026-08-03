@@ -137,16 +137,36 @@ class Command(BaseCommand):
                             while data := f.read(8192):
                                 copy.write(data)
 
-                # Insert unique nodes using UNION. node_id is the composite id
-                # (TYPE::hash) so duplicates across SOURCE/TARCode are collapsed
-                # by the primary-key conflict handler.
+                # Insert unique nodes. node_id is the composite id (TYPE::hash)
+                # and the SAME id can appear on many CSV rows — as a source, as
+                # a target, and (crucially) with DIFFERENT names: the item_id
+                # hash for tables/columns/measures is built from
+                # (dataset_id, lineage_tag), so two differently-named items
+                # sharing a lineage_tag collapse onto one node_id. See the
+                # transform's "[WARNING] Found N duplicated item_ids".
+                #
+                # Therefore we must de-duplicate on the CONFLICT KEY (node_id)
+                # alone — a plain UNION de-duplicates whole rows, which lets two
+                # rows with the same node_id but different name/group through and
+                # makes ON CONFLICT DO UPDATE hit the same row twice
+                # ("ON CONFLICT DO UPDATE command cannot affect row a second
+                # time"). DISTINCT ON + ORDER BY picks one deterministic winner
+                # (alphabetically-first name), so the load is reproducible.
                 cursor.execute(f"""
                     INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                    SELECT TRIM(source_id), source, source_type, {org_id_literal} FROM temp_nodes
-                    WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
-                    UNION
-                    SELECT TRIM(target_id), target, target_type, {org_id_literal} FROM temp_nodes
-                    WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
+                    SELECT DISTINCT ON (node_id) node_id, name, "group", organization_id
+                    FROM (
+                        SELECT TRIM(source_id) AS node_id, source AS name,
+                               source_type AS "group",
+                               {org_id_literal}::integer AS organization_id
+                        FROM temp_nodes
+                        WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
+                        UNION ALL
+                        SELECT TRIM(target_id), target, target_type, {org_id_literal}::integer
+                        FROM temp_nodes
+                        WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
+                    ) n
+                    ORDER BY node_id, name NULLS LAST, "group" NULLS LAST
                     ON CONFLICT (node_id) DO UPDATE SET
                         name = EXCLUDED.name,
                         "group" = EXCLUDED."group"
@@ -165,13 +185,28 @@ class Command(BaseCommand):
                 if 'edge_kind' in g_cols:
                     kind_expr = f"COALESCE(NULLIF(TRIM(edge_kind), ''), {kind_expr})"
                 lineage_type_expr = "NULLIF(TRIM(lineage_type), '')" if 'lineage_type' in g_cols else "NULL"
+                #
+                # Same conflict-key rule as the nodes above: de-duplicate on
+                # (source, target) only. A plain SELECT DISTINCT would keep two
+                # rows for one pair whenever kind/level/lineage_type differ,
+                # which ON CONFLICT DO UPDATE cannot apply. The transforms
+                # already de-duplicate edges on the pair, so this is defensive —
+                # but it is the difference between a bad CSV row and a failed run.
                 cursor.execute(f"""
                     INSERT INTO catalog_networkedge (source, target, organization_id, kind, level, lineage_type)
-                    SELECT DISTINCT TRIM(source_id), TRIM(target_id), {org_id_literal},
-                           {kind_expr}, {level_case_sql()}, {lineage_type_expr}
-                    FROM temp_nodes
-                    WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
-                      AND target_id IS NOT NULL AND TRIM(target_id) != ''
+                    SELECT DISTINCT ON (source, target)
+                           source, target, organization_id, kind, level, lineage_type
+                    FROM (
+                        SELECT TRIM(source_id) AS source, TRIM(target_id) AS target,
+                               {org_id_literal}::integer AS organization_id,
+                               {kind_expr} AS kind, {level_case_sql()} AS level,
+                               ({lineage_type_expr})::text AS lineage_type
+                        FROM temp_nodes
+                        WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
+                          AND target_id IS NOT NULL AND TRIM(target_id) != ''
+                    ) e
+                    -- Prefer a row that carries lineage provenance over a bare one.
+                    ORDER BY source, target, lineage_type NULLS LAST, kind, level
                     ON CONFLICT (source, target) DO UPDATE SET
                         kind = EXCLUDED.kind,
                         level = EXCLUDED.level,
@@ -279,7 +314,12 @@ class Command(BaseCommand):
                         is_related, relationships_json,
                         group_id
                     )
-                    SELECT 
+                    -- One row per TRIMMED item_id, matching the ON CONFLICT key.
+                    -- The transform de-duplicates on the raw value, so a pair of
+                    -- ids differing only in whitespace still reaches us — and the
+                    -- upsert would abort the whole load. ctid DESC keeps the last
+                    -- CSV occurrence, the same winner the transform picks.
+                    SELECT DISTINCT ON (NULLIF(TRIM(item_id), ''))
                         NULLIF(TRIM(item_id), ''),
                         NULLIF(TRIM(lineage_tag), ''),
                         NULLIF(TRIM(item_name), ''),
@@ -331,6 +371,7 @@ class Command(BaseCommand):
                         END
                     FROM temp_items
                     WHERE NULLIF(TRIM(item_id), '') IS NOT NULL
+                    ORDER BY NULLIF(TRIM(item_id), ''), ctid DESC
                     ON CONFLICT(item_id) DO UPDATE SET
                         -- Source-managed fields: always refresh from CSV
                         lineage_tag = EXCLUDED.lineage_tag,
