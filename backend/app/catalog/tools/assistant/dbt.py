@@ -25,25 +25,46 @@ def scope_options(org) -> list[dict]:
 
 def build_context(org, *, client=None, scope_ids=None) -> str:
     """Front-loaded dbt catalog: every model with its materialization, FQN,
-    description, and columns (name + datatype + description). Cached per org."""
+    owner, category, description, and columns (name + datatype + description).
+    Cached per org."""
     org_id = getattr(org, 'pk', None)
     if org_id is None:
         return ''
     return cached_context(
-        f'asst_ctx_dbt_v2_{org_id}',
+        f'asst_ctx_dbt_v3_{org_id}',
         lambda: _build(org_id),
     )
 
 
 def _build(organization_id) -> str:
+    from django.db.models import Q
+
     from ...models import Item
 
+    # Governance lives on the ItemGroup; join it here so ownership questions
+    # ("who owns model X", "which models are in the Finance category") are
+    # answerable straight from this listing with NO tool call — the same way
+    # the PowerBI context surfaces group-level owner/category. Cross-org FKs
+    # are filtered out rather than leaking another tenant's taxonomy.
+    # dbt models are singleton groups, which the
+    # ``itemgroup_definition_measure_only`` constraint forbids from carrying a
+    # business Definition — so there is nothing to show for that field here.
     models = list(
         Item.objects.filter(
             organization_id=organization_id,
             deleted=False,
             service='dbt',
             item_type__in=_MODEL_TYPES,
+        ).filter(
+            Q(item_group__organization_id=organization_id) |
+            Q(item_group__isnull=True)
+        ).filter(
+            Q(item_group__ownership_person__organization_id=organization_id) |
+            Q(item_group__ownership_person__isnull=True),
+            Q(item_group__category__organization_id=organization_id) |
+            Q(item_group__category__isnull=True),
+        ).select_related(
+            'item_group', 'item_group__ownership_person', 'item_group__category',
         ).order_by('database_name', 'schema_name', 'item_name')
     )
     if not models:
@@ -65,15 +86,28 @@ def _build(organization_id) -> str:
         '\n\n## dbt catalog (authoritative — the full model & column list is '
         'here; do NOT search the catalog)\n'
     ]
-    lines.append(f'### Models ({len(models)})')
+    lines.append(
+        f'### Models ({len(models)}) — `owner:` and `category:` are group-level '
+        'governance (answer "who owns model X" / "which models are in category Y" '
+        'straight from here, no tool call).')
     for mdl in models:
         fqn = '.'.join(
             p for p in [mdl.database_name, mdl.schema_name, mdl.alias or mdl.table_name] if p
         ) or '(no FQN)'
         mat = mdl.column_type or 'model'
         desc = (mdl.description or '').strip().replace('\n', ' ')
+        group = mdl.item_group if mdl.item_group_id else None
+        owner = getattr(getattr(group, 'ownership_person', None), 'name', None)
+        category = getattr(getattr(group, 'category', None), 'name', None)
+        meta = []
+        if owner:
+            meta.append(f'owner: {owner}')
+        if category:
+            meta.append(f'category: {category}')
         lines.append(
-            f'- **{mdl.item_name}** ({mat}, `{fqn}`)' + (f' — {desc}' if desc else '')
+            f'- **{mdl.item_name}** ({mat}, `{fqn}`)'
+            + (f' — {desc}' if desc else '')
+            + ('  ·  ' + ' · '.join(meta) if meta else '')
         )
         for c in sorted(by_dataset.get(mdl.dataset_id, []), key=lambda x: x['item_name'] or ''):
             cdesc = (c['description'] or '').strip().replace('\n', ' ')

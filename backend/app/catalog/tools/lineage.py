@@ -6,7 +6,9 @@ relationships. Pure read-only catalog operations.
 from django.db.models import Q
 
 from ..models import (
+    Category,
     DataPerson,
+    Definition,
     Department,
     Item,
     ItemGroup,
@@ -261,6 +263,8 @@ def _governance_and_usage_block(
                 'ownership_person_id',
                 'steward_id',
                 'ownership_department_id',
+                'category_id',
+                'definition_id',
                 'custom_description',
             )
             .first()
@@ -268,6 +272,8 @@ def _governance_and_usage_block(
     owner_person = None
     steward_person = None
     department = None
+    category = None
+    definition = None
     if group is not None:
         if group.ownership_person_id:
             owner_person = DataPerson.objects.filter(
@@ -284,11 +290,33 @@ def _governance_and_usage_block(
                 pk=group.ownership_department_id,
                 organization_id=organization_id,
             ).first()
+        # Same org-scoped hydration as the people/department FKs above.
+        if group.category_id:
+            category = Category.objects.filter(
+                pk=group.category_id,
+                organization_id=organization_id,
+            ).first()
+        if group.definition_id:
+            definition = Definition.objects.filter(
+                pk=group.definition_id,
+                organization_id=organization_id,
+            ).first()
     owner = _person_name(owner_person)
     steward = _person_name(steward_person)
     dept = getattr(department, 'name', None)
+    cat = getattr(category, 'name', None)
     lines.append(f"- **Owner:** {owner or '—'} &nbsp; **Steward:** {steward or '—'} "
-                 f"&nbsp; **Department:** {dept or '—'}")
+                 f"&nbsp; **Department:** {dept or '—'} &nbsp; **Category:** {cat or '—'}")
+
+    # The business definition this item's group belongs to — the concept layer
+    # above the measure group ("Revenue" vs. `net revenue` / `gross revenue`).
+    # Only measure groups can carry one (itemgroup_definition_measure_only).
+    if definition is not None:
+        defn_desc = (definition.description or '').strip()
+        lines.append(
+            f"- **Business definition:** {definition.name}"
+            + (f" — {defn_desc[:600]}" if defn_desc else '')
+        )
 
     desc = (getattr(group, 'custom_description', None) or item.description or '').strip()
     if desc:
@@ -381,16 +409,19 @@ def _workspace_profile(name, organization_id):
         lines.append(f"\n**Datasets ({len(datasets)}):** " + ', '.join(datasets[:50]))
 
     owners = Counter()
+    categories = Counter()
     group_ids = list(
         items.exclude(item_group_id=None)
         .values_list('item_group_id', flat=True)[:1500]
     )
-    group_owner_ids = dict(
-        ItemGroup.objects.filter(
+    group_governance = {
+        pk: (owner_id, category_id)
+        for pk, owner_id, category_id in ItemGroup.objects.filter(
             organization_id=organization_id,
             pk__in=group_ids,
-        ).values_list('pk', 'ownership_person_id')
-    )
+        ).values_list('pk', 'ownership_person_id', 'category_id')
+    }
+    group_owner_ids = {pk: gov[0] for pk, gov in group_governance.items()}
     people = {
         person.pk: person
         for person in DataPerson.objects.filter(
@@ -402,13 +433,30 @@ def _workspace_profile(name, organization_id):
             ],
         )
     }
+    category_names = dict(
+        Category.objects.filter(
+            organization_id=organization_id,
+            pk__in=[
+                category_id
+                for _, category_id in group_governance.values()
+                if category_id is not None
+            ],
+        ).values_list('pk', 'name')
+    )
     for group_id in group_ids:
-        person = people.get(group_owner_ids.get(group_id))
+        owner_id, category_id = group_governance.get(group_id, (None, None))
+        cat = category_names.get(category_id)
+        if cat:
+            categories[cat] += 1
+        person = people.get(owner_id)
         if person is None:
             continue
         o = _person_name(person)
         if o:
             owners[o] += 1
+    if categories:
+        lines.append('\n**Categories:** ' + ', '.join(
+            f"{c} ({n})" for c, n in categories.most_common(10)))
     if owners:
         lines.append('\n**Owners:** ' + ', '.join(f"{o} ({c})" for o, c in owners.most_common(10)))
     return '\n'.join(lines)
@@ -425,7 +473,8 @@ def get_pb_item_details(name: str, workspace_id: str = '', dataset_id: str = '')
         tables + columns + relationships + dataset/workspace ids (everything you
         need to then WRITE a live DAX query); a table's columns; a dbt model's
         SQL / YAML.
-      • Ownership & description — owner, steward, department, description, tags.
+      • Governance & description — owner, steward, department, category, the
+        business definition the item belongs to, description, tags.
       • Usage statistics — precomputed counts of connected reports / visuals /
         measures / columns / tables (instant; flags UNUSED items).
       • Uses (upstream sources) — what the item is built FROM. For a REPORT this
@@ -615,7 +664,8 @@ def get_dbt_item_details(name: str) -> str:
     """THE dbt item profiler — call this for ANY dbt model / seed / snapshot
     to get one complete profile in ONE call: its materialization + BigQuery FQN,
     description, columns (with tests), the SQL definition, the upstream lineage
-    tree, the downstream consumers, plus owner / steward / usage statistics.
+    tree, the downstream consumers, plus owner / steward / department /
+    category / business definition and usage statistics.
 
     Pass the model name straight from the listing; ambiguous names return the
     candidates to disambiguate. Use the BigQuery FQN verbatim if you go on to

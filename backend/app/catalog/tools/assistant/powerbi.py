@@ -47,7 +47,7 @@ def build_context(org, *, client=None, scope_ids=None) -> str:
     org_id = getattr(org, 'pk', None)
     if org_id is None:
         return ''
-    key = f'asst_ctx_pb_v2_{org_id}_{scope_key(scope_ids)}'
+    key = f'asst_ctx_pb_v3_{org_id}_{scope_key(scope_ids)}'
     return cached_context(key, lambda: _build(org_id, scope_ids))
 
 
@@ -67,6 +67,13 @@ def _build(organization_id, scope_ids) -> str:
     ).filter(
         Q(item_group__ownership_person__organization_id=organization_id) |
         Q(item_group__ownership_person__isnull=True)
+    ).filter(
+        # Category / definition are org-scoped too — never surface another
+        # tenant's taxonomy through a corrupt cross-org FK.
+        Q(item_group__category__organization_id=organization_id) |
+        Q(item_group__category__isnull=True),
+        Q(item_group__definition__organization_id=organization_id) |
+        Q(item_group__definition__isnull=True),
     )
     if scope_ids:
         m_qs = m_qs.filter(workspace_id__in=list(scope_ids))
@@ -82,7 +89,9 @@ def _build(organization_id, scope_ids) -> str:
     seen: set = set()
     measures: list[dict] = []
     for m in m_qs.values('item_name', 'description', 'item_group_id', 'status',
-                         'item_group__ownership_person__name'):
+                         'item_group__ownership_person__name',
+                         'item_group__category__name',
+                         'item_group__definition__name'):
         name = m['item_name']
         gkey = m['item_group_id'] or f'name::{name}'
         if not name or gkey in seen:
@@ -92,6 +101,8 @@ def _build(organization_id, scope_ids) -> str:
             'item_name': name,
             'description': m['description'],
             'owner': m['item_group__ownership_person__name'],
+            'category': m['item_group__category__name'],
+            'definition': m['item_group__definition__name'],
             'status': m['status'],
         })
 
@@ -134,9 +145,13 @@ def _build(organization_id, scope_ids) -> str:
     ]
     lines.append(
         f'### Measures ({len(measures)}) — one row per measure GROUP; '
-        '`owner:` and status are group-level governance (answer "who owns X" / '
-        '"which KPIs have an owner / need attention" straight from here, no tool '
-        'call). Each name is ONE governed measure even if it spans datasets.')
+        '`owner:`, `category:`, `definition:` and status are group-level '
+        'governance (answer "who owns X" / "what category is X in" / "which '
+        'measures belong to the Revenue definition" / "which KPIs have an owner '
+        '/ need attention" straight from here, no tool call). `definition:` is '
+        'the BUSINESS definition the measure belongs to — the concept layer '
+        'above the measure, not its DAX. Each name is ONE governed measure even '
+        'if it spans datasets.')
     # Descriptions are ~68% of the whole context; a one-line gloss is enough to
     # recognise a measure here — full detail comes from get_pb_item_details. Cap
     # each so the front-loaded catalog stays small (faster round-trips, so the
@@ -151,6 +166,10 @@ def _build(organization_id, scope_ids) -> str:
         meta = []
         if m['owner']:
             meta.append(f'owner: {m["owner"]}')
+        if m['category']:
+            meta.append(f'category: {m["category"]}')
+        if m['definition']:
+            meta.append(f'definition: {m["definition"]}')
         if m['status'] in _NOTABLE_STATUS:
             meta.append(m['status'].lower())
         if meta:

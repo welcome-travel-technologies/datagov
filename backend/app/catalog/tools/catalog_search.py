@@ -21,10 +21,11 @@ def _person_label(p):
 
 
 def _governance_lines(item) -> list[str]:
-    """Owner / steward / department lines for chatbot output. Governance
-    lives on the ItemGroup, so callers should have used
+    """Category / definition / owner / steward / department lines for chatbot
+    output. Governance lives on the ItemGroup, so callers should have used
     select_related('item_group__ownership_department',
-    'item_group__ownership_person', 'item_group__steward') to keep this
+    'item_group__ownership_person', 'item_group__steward',
+    'item_group__category', 'item_group__definition') to keep this
     read-cheap."""
     organization_id = require_bound_organization_id()
     group = item.item_group if item.item_group_id else None
@@ -48,8 +49,21 @@ def _governance_lines(item) -> list[str]:
         and steward_person.organization_id != organization_id
     ):
         steward_person = None
+    # Category and Definition are org-scoped the same way as the people/
+    # department FKs above: a cross-org row is treated as absent rather than
+    # leaking another tenant's taxonomy.
+    category = group.category
+    if category is not None and category.organization_id != organization_id:
+        category = None
+    definition = group.definition
+    if definition is not None and definition.organization_id != organization_id:
+        definition = None
 
     lines: list[str] = []
+    if category:
+        lines.append(f'Category: {category.name}')
+    if definition:
+        lines.append(f'Definition: {definition.name}')
     if department:
         lines.append(f'Department: {department.name}')
     owner = _person_label(owner_person)
@@ -111,7 +125,8 @@ def search_pb_columns(
               Q(item_group__ownership_department__isnull=True),
           )
           .select_related('item_group', 'item_group__ownership_department',
-                          'item_group__ownership_person', 'item_group__steward'))
+                          'item_group__ownership_person', 'item_group__steward',
+                          'item_group__category', 'item_group__definition'))
     if dataset_id:
         qs = qs.filter(dataset_id=dataset_id)
     if workspace_id:

@@ -51,7 +51,8 @@ def search_dbt_models(query: str = '', limit: int = 10) -> str:
     qs = (_item_objects()
           .filter(deleted=False, service='dbt', item_type__in=['DBT_MODEL', 'DBT_SEED'])
           .select_related('item_group', 'item_group__ownership_department',
-                          'item_group__ownership_person', 'item_group__steward'))
+                          'item_group__ownership_person', 'item_group__steward',
+                          'item_group__category', 'item_group__definition'))
     if query:
         qs = qs.filter(
             Q(item_name__icontains=query) |

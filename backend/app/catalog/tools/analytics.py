@@ -126,6 +126,7 @@ def _report_mode(report_name, ws, measures_qs, organization_id) -> str:
     reports = list(rqs.values(
         'item_id', 'item_name', 'workspace_name', 'connected_report_pages',
         'connected_visuals', 'description', 'item_group__ownership_person__name',
+        'item_group__category__name',
     )[:25])
     if not reports:
         return (f"No PowerBI report matches '{report_name}'"
@@ -172,6 +173,9 @@ def _report_mode(report_name, ws, measures_qs, organization_id) -> str:
     owner = report['item_group__ownership_person__name']
     if owner:
         meta.append(f"owner: {owner}")
+    category = report['item_group__category__name']
+    if category:
+        meta.append(f"category: {category}")
     lines.append('- ' + '  ·  '.join(meta))
     desc = _norm(report['description'])
     if desc:
@@ -212,10 +216,13 @@ def _measure_mode(measure_name, ws, measures_qs) -> str:
     insts = list(measures_qs().filter(item_name=target).values(
         'dataset_name', 'workspace_name', 'status', 'connected_visuals',
         'connected_reports_json', 'is_unused', 'item_group__ownership_person__name',
+        'item_group__category__name', 'item_group__definition__name',
     ))
     reports: dict = {}            # report name (lower) -> display name
     datasets: set = set()
     owner = None
+    category = None
+    definition = None
     statuses: set = set()
     visuals = 0
     any_unused = True
@@ -225,6 +232,10 @@ def _measure_mode(measure_name, ws, measures_qs) -> str:
         if m['dataset_name']:
             datasets.add(m['dataset_name'])
         owner = owner or m['item_group__ownership_person__name']
+        # Category/definition are group-level, so every instance agrees — take
+        # the first non-null the same way owner does.
+        category = category or m['item_group__category__name']
+        definition = definition or m['item_group__definition__name']
         if m['status']:
             statuses.add(m['status'])
         visuals = max(visuals, m['connected_visuals'] or 0)
@@ -235,6 +246,10 @@ def _measure_mode(measure_name, ws, measures_qs) -> str:
     meta = [f"used in {len(report_list)} report(s)", f"{visuals} visuals (max)"]
     if owner:
         meta.append(f"owner: {owner}")
+    if category:
+        meta.append(f"category: {category}")
+    if definition:
+        meta.append(f"definition: {definition}")
     if statuses:
         meta.append('status: ' + '/'.join(sorted(s.lower() for s in statuses)))
     if any_unused:
