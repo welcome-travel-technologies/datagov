@@ -147,7 +147,10 @@ class Command(BaseCommand):
                     integration_source_id,
                     is_related, relationships_json
                 )
-                SELECT
+                -- One row per TRIMMED item_id, matching the ON CONFLICT key —
+                -- see load_data.py for why the transform's own de-dup isn't
+                -- enough. ctid DESC keeps the last CSV occurrence.
+                SELECT DISTINCT ON (NULLIF(TRIM(item_id), ''))
                     NULLIF(TRIM(item_id), ''),
                     NULLIF(TRIM(lineage_tag), ''),
                     NULLIF(TRIM(item_name), ''),
@@ -186,6 +189,7 @@ class Command(BaseCommand):
                     '[]'::jsonb
                 FROM temp_dbt_items
                 WHERE NULLIF(TRIM(item_id), '') IS NOT NULL
+                ORDER BY NULLIF(TRIM(item_id), ''), ctid DESC
                 ON CONFLICT(item_id) DO UPDATE SET
                     lineage_tag = EXCLUDED.lineage_tag,
                     -- Preserve existing item_name/expression if the new run provides nothing
@@ -269,13 +273,27 @@ class Command(BaseCommand):
                             while data := f.read(8192):
                                 copy.write(data)
 
+                # De-duplicate on the CONFLICT KEY (node_id) alone, not on whole
+                # rows: two rows sharing a node_id but differing in name/group
+                # would make ON CONFLICT DO UPDATE touch the same row twice and
+                # abort the load. dbt node ids embed the model's unique_id so
+                # name/group can't diverge today, but the PowerBI loader hit
+                # exactly this — keep both commands on the same safe shape.
                 cursor.execute(f"""
                     INSERT INTO catalog_networknode (node_id, name, "group", organization_id)
-                    SELECT TRIM(source_id), source, source_type, {org_id_literal} FROM temp_dbt_nodes
-                    WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
-                    UNION
-                    SELECT TRIM(target_id), target, target_type, {org_id_literal} FROM temp_dbt_nodes
-                    WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
+                    SELECT DISTINCT ON (node_id) node_id, name, "group", organization_id
+                    FROM (
+                        SELECT TRIM(source_id) AS node_id, source AS name,
+                               source_type AS "group",
+                               {org_id_literal}::integer AS organization_id
+                        FROM temp_dbt_nodes
+                        WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
+                        UNION ALL
+                        SELECT TRIM(target_id), target, target_type, {org_id_literal}::integer
+                        FROM temp_dbt_nodes
+                        WHERE target_id IS NOT NULL AND TRIM(target_id) != ''
+                    ) n
+                    ORDER BY node_id, name NULLS LAST, "group" NULLS LAST
                     ON CONFLICT (node_id) DO UPDATE SET
                         name = EXCLUDED.name,
                         "group" = EXCLUDED."group"
@@ -294,13 +312,25 @@ class Command(BaseCommand):
                 if 'edge_kind' in g_cols:
                     kind_expr = f"COALESCE(NULLIF(TRIM(edge_kind), ''), {kind_expr})"
                 lineage_type_expr = "NULLIF(TRIM(lineage_type), '')" if 'lineage_type' in g_cols else "NULL"
+                # De-duplicate on (source, target) only — see the nodes insert
+                # above. Plain SELECT DISTINCT keeps one row per distinct
+                # (pair + kind + level + lineage_type), which is one row too
+                # many for ON CONFLICT DO UPDATE.
                 cursor.execute(f"""
                     INSERT INTO catalog_networkedge (source, target, organization_id, kind, level, lineage_type)
-                    SELECT DISTINCT TRIM(source_id), TRIM(target_id), {org_id_literal},
-                           {kind_expr}, {level_case_sql()}, {lineage_type_expr}
-                    FROM temp_dbt_nodes
-                    WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
-                      AND target_id IS NOT NULL AND TRIM(target_id) != ''
+                    SELECT DISTINCT ON (source, target)
+                           source, target, organization_id, kind, level, lineage_type
+                    FROM (
+                        SELECT TRIM(source_id) AS source, TRIM(target_id) AS target,
+                               {org_id_literal}::integer AS organization_id,
+                               {kind_expr} AS kind, {level_case_sql()} AS level,
+                               ({lineage_type_expr})::text AS lineage_type
+                        FROM temp_dbt_nodes
+                        WHERE source_id IS NOT NULL AND TRIM(source_id) != ''
+                          AND target_id IS NOT NULL AND TRIM(target_id) != ''
+                    ) e
+                    -- Prefer a row that carries lineage provenance over a bare one.
+                    ORDER BY source, target, lineage_type NULLS LAST, kind, level
                     ON CONFLICT (source, target) DO UPDATE SET
                         kind = EXCLUDED.kind,
                         level = EXCLUDED.level,
