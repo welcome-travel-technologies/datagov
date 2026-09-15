@@ -4,7 +4,7 @@ django-oauth-toolkit==3.4.0  # OAuth 2.1 AS+RS for the MCP server; see docs/mcp-
 django-cors-headers==4.9.0
 django-filter==25.2
 gunicorn==21.2.0
-google-auth[requests]==2.53.0  # Verify Google sign-in ID tokens on the server
+google-auth[requests]==2.56.0  # Verify Google sign-in ID tokens on the server
 google-genai==2.14.0
 python-dotenv==1.2.2
 pydantic-ai-slim[google,anthropic]==2.20.0
