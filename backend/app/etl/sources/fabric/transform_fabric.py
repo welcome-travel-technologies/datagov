@@ -14,7 +14,7 @@ _RE_PROPERTY = re.compile(r'"Property"\s*:\s*"([^"]+)"')
 _RE_NAME_FIELD = re.compile(r'"Name"\s*:\s*"([^"]+)"')
 _RE_VISUAL_NAME = re.compile(r'"name"\s*:\s*"([^"]+)"')
 _RE_DAX_BRACKET = re.compile(r'\[([^\]]+)\]')
-_RE_DAX_TABLE_COL = re.compile(r"'([^']+)'\[([^\]]+)\]")
+_RE_DAX_TABLE_COL = re.compile(r"'((?:[^']|'')+)'\[([^\]]+)\]")
 _RE_DAX_WORD = re.compile(r'\b[a-zA-Z0-9_]+\b')
 _RE_SQL_FROM = re.compile(r'FROM\s+`?([\w-]+)`?\.`?([\w-]+)`?\.`?([\w-]+)`?', re.IGNORECASE)
 _RE_BQ_PROJECT = re.compile(r'\[Name\s*=\s*"?([^",\]]+)"?')
@@ -308,6 +308,7 @@ def calculate_dependencies(measures, columns, tables, table_definitions):
 
         # 'TableName'[ColumnName] — producer's table is the captured `tbl_match`
         for tbl_match, col_match in _RE_DAX_TABLE_COL.findall(dax):
+            tbl_match = tbl_match.replace("''", "'")
             dependencies.append({"Object": obj_name, "ObjectType": obj_type, "ObjectTable": obj_table, "ReferencedObject": tbl_match, "ReferencedObjectType": "PB_TABLE", "ReferencedTable": None})
             dependencies.append({"Object": obj_name, "ObjectType": obj_type, "ObjectTable": obj_table, "ReferencedObject": col_match, "ReferencedObjectType": "PB_COLUMN", "ReferencedTable": tbl_match})
 
@@ -341,11 +342,26 @@ def calculate_dependencies(measures, columns, tables, table_definitions):
             unique_deps.append(d)
     return unique_deps
 
-# Regex for opening a column / measure / partition TMDL block.
-# Captures: (1) object name, (2) optional inline DAX after `=`.
-TMDL_BLOCK_HEADER_RE = re.compile(
-    r"^\s*(?P<kind>column|measure|partition)\s+[']?(?P<name>[^=']+?)[']?\s*(?:=\s*(?P<dax>.*))?$"
+# TMDL encloses names containing special characters in single quotes and
+# escapes an apostrophe inside a name by doubling it (e.g. 'Partner''s Visits').
+_TMDL_QUOTED_NAME = r"'(?:[^']|'')*'"
+TMDL_TABLE_HEADER_RE = re.compile(
+    rf"^table\s+(?P<name>{_TMDL_QUOTED_NAME}|[^']+?)\s*$"
 )
+# Keep the complete quoted name so delimiters such as `=` inside it cannot
+# be mistaken for the optional inline DAX expression.
+TMDL_BLOCK_HEADER_RE = re.compile(
+    rf"^\s*(?P<kind>column|measure|partition)\s+"
+    rf"(?P<name>{_TMDL_QUOTED_NAME}|[^=']+?)\s*(?:=\s*(?P<dax>.*))?$"
+)
+
+
+def _unquote_tmdl_name(name):
+    name = name.strip()
+    if name.startswith("'") and name.endswith("'"):
+        return name[1:-1].replace("''", "'")
+    return name
+
 
 def _partition_type_from_dax(dax_str):
     """Classifies a partition body as 'calculated' (DAX) or 'm' (M query)."""
@@ -435,10 +451,9 @@ def parse_tmdl_table(tmdl_path):
         if stripped.startswith("//"):
             continue
 
-        if line.startswith("table ") or line.startswith("table '"):
-            tbl_match = re.match(r"table\s+[']?([^']+)[']?", line)
-            if tbl_match:
-                tbl_name = tbl_match.group(1)
+        tbl_match = TMDL_TABLE_HEADER_RE.match(line)
+        if tbl_match:
+            tbl_name = _unquote_tmdl_name(tbl_match.group("name"))
             continue
 
         # New block opener: `column X`, `measure X`, or `partition X`, optionally
@@ -449,7 +464,7 @@ def parse_tmdl_table(tmdl_path):
             kind = header.group("kind")
             inline_dax = header.group("dax")
             current_block = kind
-            current_obj = header.group("name").strip()
+            current_obj = _unquote_tmdl_name(header.group("name"))
             current_dax = [inline_dax] if inline_dax else []
             current_is_calculated = bool(inline_dax) if kind in ("column", "measure") else False
             if kind in ("column", "measure") and pending_desc:
@@ -527,7 +542,10 @@ def parse_tmdl_table(tmdl_path):
 #     relationship 43810166-de61-4850-9dd5-78141ad701f6
 TMDL_RELATIONSHIP_HEADER_RE = re.compile(r"^\s*relationship\s+(?P<guid>\S+)\s*$")
 # A column reference inside a relationship: `Views.Date` or `'My Table'.Date`.
-TMDL_REL_COL_RE = re.compile(r"^\s*(?:'([^']+)'|([^.\s]+))\.(.+?)\s*$")
+TMDL_REL_COL_RE = re.compile(
+    rf"^\s*(?P<table>{_TMDL_QUOTED_NAME}|[^.'\s]+)\."
+    rf"(?P<column>{_TMDL_QUOTED_NAME}|[^']+?)\s*$"
+)
 
 
 def parse_tmdl_relationships(tmdl_path):
@@ -568,8 +586,8 @@ def parse_tmdl_relationships(tmdl_path):
         m = TMDL_REL_COL_RE.match(ref)
         if not m:
             return None, None
-        table = m.group(1) or m.group(2)
-        col = m.group(3).strip().strip("'")
+        table = _unquote_tmdl_name(m.group("table"))
+        col = _unquote_tmdl_name(m.group("column"))
         return table, col
 
     for raw_line in content.splitlines():

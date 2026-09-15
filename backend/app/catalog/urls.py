@@ -23,6 +23,7 @@ from .views import (
 from .slack_views import slack_events, slack_oauth, slack_alerts_oauth
 from .mcp.views import mcp_endpoint
 from .mcp.oauth import OrgAdminAuthorizationView
+from .google_auth import google_config_view, google_start_view, google_callback_view, google_link_view
 from .spa_auth import (
     me_view, branding_view, login_view, logout_view, change_password_view, me_workspaces_view,
     org_members_view, org_members_save_view, org_members_remove_view,
@@ -59,6 +60,10 @@ urlpatterns = [
     path('me/workspaces/', me_workspaces_view, name='api-me-workspaces'),
     path('auth/login/', login_view, name='api-auth-login'),
     path('auth/logout/', logout_view, name='api-auth-logout'),
+    path('auth/google/config/', google_config_view, name='api-google-config'),
+    path('auth/google/start/', google_start_view, name='api-google-start'),
+    path('auth/google/callback/', google_callback_view, name='api-google-callback'),
+    path('auth/google/link/', google_link_view, name='api-google-link'),
     # SPA org-admin management (member CRUD + settings)
     path('org/members/', org_members_view, name='api-org-members'),
     path('org/members/save/', org_members_save_view, name='api-org-members-save'),

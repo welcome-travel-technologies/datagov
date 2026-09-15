@@ -63,6 +63,13 @@ if os.getenv('DJANGO_ALLOWED_HOSTS'):
 SLACK_CLIENT_ID = os.getenv('SLACK_CLIENT_ID', '')
 SLACK_CLIENT_SECRET = os.getenv('SLACK_CLIENT_SECRET', '')
 
+# Google sign-in uses a web OAuth client and the public (browser-facing) callback.
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_OAUTH_REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', '')
+# Required only when there is more than one organization in the database.
+GOOGLE_SIGNUP_ORGANIZATION_ID = os.getenv('GOOGLE_SIGNUP_ORGANIZATION_ID', '')
+
 # Application definition
 
 INSTALLED_APPS = [

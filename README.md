@@ -108,6 +108,42 @@ npm run dev          # http://localhost:3000, proxies /api -> :8000
 
 Auth uses the Django session: the SPA calls `GET /api/me/`, `POST /api/auth/login/`, and `POST /api/auth/logout/`. Because Next proxies `/api/*`, the session and CSRF cookies flow on one origin — no CORS setup needed.
 
+### Google login and signup
+
+The initial login page includes **Continue with Google** for both sign-in and
+registration. First-time users get the **Company** access group and a non-admin
+organization membership. Their username is the email prefix before `@`; when it
+is already used, a suffix is added (`alex`, `alex_1`, ...). Google-only accounts
+have no password; existing password login stays available.
+
+To enable it:
+
+1. Create a **Web application** OAuth client in Google Cloud and configure its
+   consent screen following [Google's setup guide](https://developers.google.com/identity/openid-connect/openid-connect#settingup).
+2. Set `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and
+   `GOOGLE_OAUTH_REDIRECT_URI` in `backend/.env`. Register that exact callback URL
+   in the OAuth client's authorized redirect URIs. Examples:
+   `http://localhost:3000/api/auth/google/callback/` for Next development,
+   `http://localhost/api/auth/google/callback/` for local Docker, or
+   `https://your-host/api/auth/google/callback/` in production.
+3. If the database has multiple organizations, set `GOOGLE_SIGNUP_ORGANIZATION_ID`
+   to the organization new users should join. A single organization is selected
+   automatically; no organization or an ambiguous choice blocks signup.
+4. Install the backend requirements, run `python manage.py migrate`, and restart
+   the backend. The button is disabled until the three OAuth settings are present.
+
+Enabling signup lets verified Google accounts join the configured organization
+with Company access. When the Google email matches an existing email
+(case-insensitively), Google is added as a second login method on that account.
+The existing password, username, permissions, and organization membership remain
+available; no duplicate user is created. Verified Gmail and Workspace addresses
+link automatically. Other Google-account email addresses require the existing
+password once on the login page, then either login method works. The confirmation
+is bound to that browser session and expires after ten minutes. This follows [Google's account-linking guidance](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token)
+for externally hosted email addresses. Google identities are stored by their
+stable subject ID. Inactive accounts and conflicting Google identities cannot be
+linked. No Google API access or refresh tokens are stored.
+
 ### Frontend scripts
 
 | Script | Description |

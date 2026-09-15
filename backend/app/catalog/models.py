@@ -120,6 +120,8 @@ class Category(models.Model):
 
 class CustomUser(AbstractUser):
     email = models.EmailField(_('email address'), unique=True)
+    # Google's stable subject is the login identity; email addresses can change.
+    google_subject = models.CharField(max_length=255, unique=True, null=True, blank=True, editable=False)
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL)
     # Per-source default workspace: {str(integration_source_id): workspace_id}.
     # Used by the chatbot to scope PowerBI queries and by the lineage UI to

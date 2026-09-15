@@ -1090,6 +1090,17 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ username, password }),
       }),
+    googleConfig: () => request<{ enabled: boolean; pending_link?: { email: string } | null }>("/auth/google/config/"),
+    googleStart: (next: string) =>
+      request<{ url: string }>("/auth/google/start/", {
+        method: "POST",
+        body: JSON.stringify({ next }),
+      }),
+    googleLink: (password: string) =>
+      request<{ url: string }>("/auth/google/link/", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      }),
     logout: () => request<void>("/auth/logout/", { method: "POST" }),
     /** Change the current user's password. On invalid input the backend returns
      * 400 with `{ errors }`, surfaced via `ApiError.body.errors`. */
