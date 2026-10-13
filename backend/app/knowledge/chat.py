@@ -6,6 +6,8 @@ from rest_framework.exceptions import PermissionDenied
 
 from .permissions import can_read, filter_citations, visible_documents
 
+MAX_SEARCH_VERSIONS = 100000
+
 
 def _history(org, user, session, question, allowed_versions):
     if session is None or session.user_id != user.pk or session.organization_id != org.pk or session.mode != 'documents':
@@ -35,11 +37,11 @@ def answer_document_question(org, user, question, session=None):
     question = str(question).strip()
     if not question or len(question) > 10000:
         raise ValueError('Use a question between 1 and 10000 characters.')
-    versions = list(visible_documents(org, user).exclude(current_version=None).filter(current_version__status='ready').values_list('current_version_id', flat=True)[:5001])
+    versions = list(visible_documents(org, user).exclude(current_version=None).filter(current_version__status='ready').values_list('current_version_id', flat=True)[:MAX_SEARCH_VERSIONS + 1])
     if not versions:
         return {'answer': 'No indexed documents are available to you yet. Add documents to Document Explorer or ask an administrator for access.', 'citations': [], 'abstained': True, 'gaps': ['No accessible indexed documents.']}
-    if len(versions) > 5000:
-        raise ValueError('This document scope exceeds the current 5000-document search limit. Ask an administrator to reduce the active sources.')
+    if len(versions) > MAX_SEARCH_VERSIONS:
+        raise ValueError('This document scope exceeds the current search capacity. Ask an administrator to review the active sources.')
     base = settings.DOCUMENT_EXPLORER_API_URL.rstrip('/')
     allowed = {str(v) for v in versions}
     history = _history(org, user, session, question, allowed)
