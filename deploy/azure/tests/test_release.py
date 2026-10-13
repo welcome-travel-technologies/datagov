@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 FOLDER = Path(__file__).resolve().parents[1]
@@ -119,6 +120,7 @@ class StateTests(unittest.TestCase):
             current = deploy.next_state(None, manifest(), config(), root / "releases/app-1")
             (root / "state.json").write_text(json.dumps(current))
             with patch.object(deploy, "validate_secrets"), patch.object(deploy, "release_lock", return_value=contextlib.nullcontext()), \
+                 patch.object(deploy, "verify_public_routes", return_value=[]), \
                  patch.object(deploy.subprocess, "check_output", return_value="2.33.1"), \
                  patch.object(deploy.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
                 deploy.apply(root, manifest("engine", 2, "c"))
@@ -133,6 +135,7 @@ class StateTests(unittest.TestCase):
             (root / "shared").mkdir()
             (root / "shared/deployment.json").write_text(json.dumps(config()))
             with patch.object(deploy, "validate_secrets"), patch.object(deploy, "release_lock", return_value=contextlib.nullcontext()), \
+                 patch.object(deploy, "verify_public_routes", return_value=[]), \
                  patch.object(deploy.subprocess, "check_output", return_value="2.33.1"), \
                  patch.object(deploy.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
                 deploy.apply(root, manifest(), FOLDER)
@@ -173,6 +176,80 @@ class StateTests(unittest.TestCase):
             (shared / "engine.env").write_text(values["engine.env"].replace("a" * 24, "b" * 24))
             with self.assertRaisesRegex(ValueError, "mismatched"):
                 deploy.validate_secrets(shared, config())
+
+
+class PublicReadinessTests(unittest.TestCase):
+    @staticmethod
+    def response(status=200, body=b'<html>Ready</html>', content_type='text/html'):
+        result = io.BytesIO(body)
+        result.code = status
+        result.headers = {'Content-Type': content_type}
+        return result
+
+    def healthy_response(self, request, timeout):
+        if request.full_url.endswith('/api/branding/'):
+            return self.response(body=b'{"name":"DataGov"}', content_type='application/json')
+        if request.full_url.endswith('/api/knowledge/documents/'):
+            raise urllib.error.HTTPError(request.full_url, 403, 'Forbidden', {'Content-Type': 'application/json'}, io.BytesIO(b'{"detail":"Forbidden"}'))
+        if request.full_url.endswith('/api/knowledge/internal/jobs/claim/'):
+            raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, io.BytesIO(b'Not Found'))
+        return self.response()
+
+    def test_public_pages_and_private_routes_are_checked_without_credentials(self):
+        calls = []
+        def open_url(request, timeout):
+            calls.append(request)
+            return self.healthy_response(request, timeout)
+        result = deploy.verify_public_routes('datagov.example.com', open_url=open_url)
+        self.assertEqual([r['status'] for r in result], [200, 200, 200, 403, 404])
+        self.assertTrue(all(r.full_url.startswith('https://datagov.example.com/') for r in calls))
+        self.assertTrue(all('Authorization' not in r.headers and 'Cookie' not in r.headers for r in calls))
+
+    def test_redirects_are_not_followed_or_accepted_as_readiness(self):
+        self.assertIsNone(deploy.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://elsewhere.example'))
+        with self.assertRaisesRegex(RuntimeError, 'expected 200, got 302'):
+            deploy.verify_public_routes('datagov.example.com', open_url=lambda *a, **k: self.response(302))
+
+    def test_public_exposure_or_non_json_branding_fails(self):
+        for bad_path in ('/api/knowledge/documents/', '/api/knowledge/internal/jobs/claim/', '/api/branding/'):
+            def open_url(request, timeout):
+                return self.response() if request.full_url.endswith(bad_path) else self.healthy_response(request, timeout)
+            with self.subTest(path=bad_path), self.assertRaises(RuntimeError):
+                deploy.verify_public_routes('datagov.example.com', open_url=open_url)
+
+    def test_transient_read_failure_retries_but_permanent_failure_is_bounded(self):
+        failures = [urllib.error.URLError('temporary'), None]
+        sleeps = []
+        def open_url(request, timeout):
+            if failures:
+                error = failures.pop(0)
+                if error:
+                    raise error
+                return self.response(503)
+            return self.healthy_response(request, timeout)
+        deploy.verify_public_routes('datagov.example.com', open_url=open_url, sleep=sleeps.append)
+        self.assertEqual(sleeps, [5, 5])
+        sleeps.clear()
+        with self.assertRaisesRegex(RuntimeError, 'expected 200, got 503'):
+            deploy.verify_public_routes('datagov.example.com', open_url=lambda *a, **k: self.response(503), sleep=sleeps.append)
+        self.assertEqual(sleeps, [5, 5, 5])
+
+    def test_failed_public_check_preserves_last_success_and_pending_release(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / 'shared').mkdir()
+            (root / 'shared/deployment.json').write_text(json.dumps(config()))
+            current = deploy.next_state(None, manifest(), config(), root / 'releases/app-1')
+            (root / 'state.json').write_text(json.dumps(current))
+            with patch.object(deploy, 'validate_secrets'), patch.object(deploy, 'release_lock', return_value=contextlib.nullcontext()), \
+                 patch.object(deploy.subprocess, 'check_output', return_value='2.35.1'), \
+                 patch.object(deploy.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                 patch.object(deploy, 'verify_public_routes', side_effect=RuntimeError('Public HTTPS failed')):
+                with self.assertRaisesRegex(RuntimeError, 'Public HTTPS failed'):
+                    deploy.apply(root, manifest('engine', 2, 'c'))
+            self.assertEqual(json.loads((root / 'state.json').read_text()), current)
+            self.assertTrue((root / 'pending.json').exists())
+            self.assertFalse((root / 'previous.json').exists())
 
 
 class TransportTests(unittest.TestCase):

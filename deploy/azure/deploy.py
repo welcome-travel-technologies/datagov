@@ -13,6 +13,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.request
 
 BUNDLE_FILES = ("deploy.py", "compose.yml", "compose.qdrant.yml")
 APP_KEYS = {"backend", "frontend", "gateway"}
@@ -185,6 +188,62 @@ def rollout(compose, component, local_qdrant, run):
                        "document-api", "document-worker"])
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_public_routes(host, open_url=None, sleep=time.sleep):
+    """Read-only HTTPS checks before either component can promote its release.
+
+    Never follow a redirect to a login/error page and mistake it for readiness.
+    Public checks use no session, service token, document text or model calls.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+        raise ValueError("Invalid public host")
+    open_url = open_url or urllib.request.build_opener(NoRedirect()).open
+    checks = (("/login", 200, "html"), ("/knowledge", 200, "html"),
+              ("/api/branding/", 200, "json"),
+              ("/api/knowledge/documents/", 403, "json"),
+              ("/api/knowledge/internal/jobs/claim/", 404, None))
+    results = []
+    for path, expected, body_type in checks:
+        for attempt in range(4):
+            request = urllib.request.Request("https://" + host + path, headers={
+                "User-Agent": "DataGov-Deployment-Check/1.0", "Cache-Control": "no-cache"})
+            try:
+                try:
+                    response = open_url(request, timeout=10)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    status = response.code
+                    body = response.read(131073)
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            except (urllib.error.URLError, TimeoutError, OSError):
+                if attempt < 3:
+                    sleep(5)
+                    continue
+                raise RuntimeError(f"Public HTTPS check could not reach {path}") from None
+            if (status >= 500 or status == 429) and attempt < 3:
+                sleep(5)
+                continue
+            if status != expected:
+                raise RuntimeError(f"Public HTTPS check failed for {path}: expected {expected}, got {status}")
+            if body_type == "json":
+                try:
+                    valid = content_type == "application/json" and len(body) <= 131072 and isinstance(json.loads(body), dict)
+                except (ValueError, UnicodeError):
+                    valid = False
+                if not valid:
+                    raise RuntimeError(f"Public HTTPS check expected JSON for {path}")
+            if body_type == "html" and (content_type != "text/html" or b"<html" not in body.lower()):
+                raise RuntimeError(f"Public HTTPS check expected HTML for {path}")
+            results.append({"path": path, "status": status})
+            break
+    return results
+
+
 def registry_login(config, env, log, run, token_file=None):
     if token_file is None:
         run(["az", "login", "--identity", "--allow-no-subscriptions", "--output", "none"])
@@ -273,6 +332,8 @@ def apply(root, manifest, bundle=None, registry_token_file=None):
             run(compose + ["pull", *services])
             atomic_json(pending_path, manifest)
             rollout(compose, manifest["component"], config["local_qdrant"], run)
+            log.write("Public HTTPS checks: " + json.dumps(verify_public_routes(config["public_host"])) + "\n")
+            log.flush()
             if current:
                 atomic_json(root / "previous.json", current)
             atomic_json(release_dir / "state.json", state)
