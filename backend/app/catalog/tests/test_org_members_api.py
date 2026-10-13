@@ -325,3 +325,163 @@ def test_update_settings_toggles_flags_and_model(admin_client, org):
     assert org.dbt_tools_enabled is True
     assert org.show_deleted_items is True
     assert org.chatbot_model_id == model.id
+
+
+# Slack IDs authorize private document answers; handles remain display-only.
+
+def _save_slack_member(client, **overrides):
+    payload = {
+        "email": "slack-member@example.com", "password": "original-password",
+        "name": "Slack Member", "is_owner": True, "slack_handle": "@display-name",
+        "slack_user_id": "U0123456789", "group_ids": [], "department_ids": [],
+    }
+    payload.update(overrides)
+    return client.post("/api/org/members/save/", data=json.dumps(payload),
+                       content_type="application/json")
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_create_and_list(admin_client, admin_user, org):
+    response = _save_slack_member(admin_client)
+    assert response.status_code == 200, response.content
+    profile = DataPerson.objects.get(user_id=response.json()["user_id"], organization=org)
+    assert profile.slack_user_id == "U0123456789"
+    assert profile.slack_handle == "@display-name"
+    members = admin_client.get("/api/org/members/").json()["members"]
+    assert next(m for m in members if m["user_id"] == profile.user_id)["slack_user_id"] == "U0123456789"
+    assert next(m for m in members if m["user_id"] == admin_user.pk)["slack_user_id"] == ""
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_edit_uses_linked_profile_in_current_org(admin_client, org):
+    user_id = _save_slack_member(admin_client).json()["user_id"]
+    other_org = Organization.objects.create(name="Another Slack workspace")
+    OrganizationMembership.objects.create(user_id=user_id, organization=other_org)
+    foreign_profile = DataPerson.objects.create(
+        organization=other_org, user_id=user_id, name="Same login elsewhere", slack_user_id="UFOREIGN123",
+    )
+    response = _save_slack_member(admin_client, user_id=user_id, name="Changed name", slack_user_id="WUPDATED123")
+    assert response.status_code == 200, response.content
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == "WUPDATED123"
+    foreign_profile.refresh_from_db()
+    assert foreign_profile.slack_user_id == "UFOREIGN123"
+    assert foreign_profile.name == "Same login elsewhere"
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_omitted_preserves_and_empty_clears(admin_client, org):
+    user_id = _save_slack_member(admin_client).json()["user_id"]
+    response = admin_client.post("/api/org/members/save/", data=json.dumps({
+        "user_id": user_id, "name": "Slack Member", "is_owner": True,
+    }), content_type="application/json")
+    assert response.status_code == 200, response.content
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == "U0123456789"
+    response = _save_slack_member(admin_client, user_id=user_id, slack_user_id="")
+    assert response.status_code == 200, response.content
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == ""
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("invalid_id", ["@nickname", "U1", "U" + "1" * 80, None, []])
+def test_invalid_member_slack_identity_rolls_back_new_account(admin_client, org, invalid_id):
+    response = _save_slack_member(admin_client, slack_user_id=invalid_id)
+    assert response.status_code == 400, response.content
+    assert "slack_user_id" in response.json()["fields"]
+    assert not CustomUser.objects.filter(email="slack-member@example.com").exists()
+    assert not DataPerson.objects.filter(organization=org, name="Slack Member").exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("concurrent_assignment", [False, True])
+def test_duplicate_member_slack_identity_rolls_back_all_edits(
+        admin_client, org, monkeypatch, concurrent_assignment):
+    from catalog.serializers import DataPersonSerializer
+
+    user_id = _save_slack_member(admin_client).json()["user_id"]
+    member = CustomUser.objects.get(pk=user_id)
+    company = Group.objects.get_or_create(name="Company")[0]
+    member.groups.add(company)
+    DataPerson.objects.create(organization=org, name="Already mapped", slack_user_id="UTAKEN123")
+    if concurrent_assignment:
+        # Simulate a competing assignment after validation has passed: the
+        # real PostgreSQL unique constraint must still roll back this request.
+        monkeypatch.setattr(DataPersonSerializer, "validate", lambda self, attrs: attrs)
+        monkeypatch.setattr(DataPersonSerializer, "get_validators", lambda self: [])
+    response = _save_slack_member(
+        admin_client, user_id=user_id, name="Must roll back", password="changed-password",
+        is_admin=True, group_ids=[], slack_user_id="UTAKEN123",
+    )
+    assert response.status_code == 400, response.content
+    assert "already linked" in response.json()["error"]
+    member.refresh_from_db()
+    assert member.check_password("original-password")
+    assert list(member.groups.values_list("pk", flat=True)) == [company.pk]
+    assert not OrganizationMembership.objects.get(user=member, organization=org).is_admin
+    profile = DataPerson.objects.get(user=member, organization=org)
+    assert profile.name == "Slack Member"
+    assert profile.slack_user_id == "U0123456789"
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_duplicates_are_scoped_to_org(admin_client, org):
+    other_org = Organization.objects.create(name="Different workspace")
+    DataPerson.objects.create(organization=other_org, name="Foreign member", slack_user_id="U0123456789")
+    response = _save_slack_member(admin_client)
+    assert response.status_code == 200, response.content
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("edit_by_id", [False, True])
+def test_member_slack_identity_cannot_claim_foreign_account(admin_client, org, edit_by_id):
+    other_org = Organization.objects.create(name="Foreign account org")
+    foreign = CustomUser.objects.create_user(username="foreign", email="foreign@example.com", password="private")
+    OrganizationMembership.objects.create(user=foreign, organization=other_org)
+    profile = DataPerson.objects.create(organization=other_org, user=foreign, name="Foreign", slack_user_id="UFOREIGN123")
+    overrides = {"email": foreign.email}
+    if edit_by_id:
+        overrides["user_id"] = foreign.pk
+    response = _save_slack_member(admin_client, **overrides)
+    assert response.status_code == (404 if edit_by_id else 409), response.content
+    assert not OrganizationMembership.objects.filter(user=foreign, organization=org).exists()
+    assert not DataPerson.objects.filter(user=foreign, organization=org).exists()
+    foreign.refresh_from_db()
+    profile.refresh_from_db()
+    assert foreign.check_password("private")
+    assert profile.slack_user_id == "UFOREIGN123"
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_requires_active_account_but_allows_clearing(admin_client, org):
+    user_id = _save_slack_member(admin_client).json()["user_id"]
+    CustomUser.objects.filter(pk=user_id).update(is_active=False)
+    response = _save_slack_member(admin_client, user_id=user_id, slack_user_id="UUPDATED123")
+    assert response.status_code == 400
+    assert "active member" in response.json()["error"]
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == "U0123456789"
+    response = _save_slack_member(admin_client, user_id=user_id, slack_user_id="")
+    assert response.status_code == 200, response.content
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == ""
+
+
+@pytest.mark.django_db
+def test_member_removal_clears_only_current_org_slack_identity(admin_client, org):
+    user_id = _save_slack_member(admin_client).json()["user_id"]
+    other_org = Organization.objects.create(name="Remaining membership")
+    OrganizationMembership.objects.create(user_id=user_id, organization=other_org)
+    foreign = DataPerson.objects.create(organization=other_org, user_id=user_id, name="Foreign", slack_user_id="UFOREIGN123")
+    response = admin_client.post("/api/org/members/remove/", data=json.dumps({"user_id": user_id}),
+                                 content_type="application/json")
+    assert response.status_code == 200, response.content
+    assert not OrganizationMembership.objects.filter(user_id=user_id, organization=org).exists()
+    assert DataPerson.objects.get(user_id=user_id, organization=org).slack_user_id == ""
+    foreign.refresh_from_db()
+    assert foreign.slack_user_id == "UFOREIGN123"
+    assert OrganizationMembership.objects.filter(user_id=user_id, organization=other_org).exists()
+
+
+@pytest.mark.django_db
+def test_member_slack_identity_update_requires_org_admin(client, rw_user):
+    client.force_login(rw_user)
+    response = _save_slack_member(client, user_id=rw_user.pk)
+    assert response.status_code == 403
+    assert not DataPerson.objects.filter(user=rw_user, slack_user_id="U0123456789").exists()

@@ -1,0 +1,115 @@
+# Production only: immutable images, existing database, explicitly named storage.
+# Read through deploy.py; do not combine with the development Compose file.
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "20m", max-file: "3"}
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:?}
+  env_file:
+    - path: ${SHARED_DIR:?}/backend.env
+      format: raw
+  environment:
+    DEBUG: "False"
+    PYTHON_DOTENV_DISABLED: "1"
+    DOCUMENT_EXPLORER_API_URL: http://document-api:8788
+    DOCUMENT_EXPLORER_STORAGE_ROOT: /app/private_documents
+    DEPLOYMENT_PROBE_HOST: ${PUBLIC_HOST:?}
+  volumes:
+    - static:/app/staticfiles
+    - media:/app/media
+    - originals:/app/private_documents
+  restart: unless-stopped
+  logging: *logging
+
+x-engine: &engine
+  image: ${ENGINE_IMAGE:?}
+  env_file:
+    - path: ${SHARED_DIR:?}/engine.env
+      format: raw
+  environment: &engine-env
+    DOCUMENT_EXPLORER_DATA_ROOT: /data
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging: *logging
+
+services:
+  web:
+    <<: *backend
+    # Migrations run once, explicitly, before starting the new application.
+    command: [gunicorn, --bind, "0.0.0.0:8000", --timeout, "300", -k, uvicorn.workers.UvicornWorker, config.asgi:application]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/api/branding/', headers={'Host':os.environ['DEPLOYMENT_PROBE_HOST']}); urllib.request.urlopen(r,timeout=5)"
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 12
+  worker:
+    <<: *backend
+    command: [python, manage.py, qcluster]
+    depends_on:
+      web: {condition: service_healthy}
+  frontend:
+    image: ${FRONTEND_IMAGE:?}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 12
+    restart: unless-stopped
+    logging: *logging
+  nginx:
+    image: ${GATEWAY_IMAGE:?}
+    ports: ["${GATEWAY_BIND:?}:80"]
+    volumes:
+      - static:/app/staticfiles:ro
+      - media:/app/media:ro
+    environment:
+      DEPLOYMENT_PROBE_HOST: ${PUBLIC_HOST:?}
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null --header="Host: $$DEPLOYMENT_PROBE_HOST" http://127.0.0.1/api/branding/ && wget -q -O /dev/null --header="Host: $$DEPLOYMENT_PROBE_HOST" http://127.0.0.1/login']
+      interval: 10s
+      timeout: 15s
+      start_period: 20s
+      retries: 12
+    depends_on:
+      web: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *logging
+  document-api:
+    <<: *engine
+    volumes: ["artifacts:/data:ro"]
+    # API health checks Qdrant; its image supplies the healthcheck.
+  document-worker:
+    <<: *engine
+    command: [python, -m, document_explorer.worker]
+    environment:
+      <<: *engine-env
+      DATAGOV_URL: http://web:8000
+      DOCUMENT_EXPLORER_IMPORT_ROOT: /imports
+    volumes: ["artifacts:/data", "imports:/imports:ro"]
+    healthcheck:
+      test: [CMD, python, -m, document_explorer.worker, --health]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 6
+    depends_on:
+      web: {condition: service_healthy}
+      document-api: {condition: service_healthy}
+
+volumes:
+  static: {external: true, name: "${STATIC_VOLUME:?}"}
+  media: {external: true, name: "${MEDIA_VOLUME:?}"}
+  originals: {external: true, name: "${ORIGINALS_VOLUME:?}"}
+  artifacts: {external: true, name: "${ARTIFACTS_VOLUME:?}"}
+  imports: {external: true, name: "${IMPORTS_VOLUME:?}"}

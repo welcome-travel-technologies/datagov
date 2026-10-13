@@ -226,6 +226,7 @@ def _member_payload(membership, dp, request_user_id):
         "is_steward": dp.is_steward if dp else False,
         "is_other": dp.is_other if dp else False,
         "slack_handle": (dp.slack_handle if dp else "") or "",
+        "slack_user_id": (dp.slack_user_id if dp else "") or "",
         "department_ids": (
             list(
                 dp.departments.filter(
@@ -331,7 +332,7 @@ def org_members_save_view(request):
     OrganizationMembership, replace
     the user's page-access groups, and upsert the DataPerson profile.
 
-    Body: {user_id?, email, password?, name, slack_handle, is_owner,
+    Body: {user_id?, email, password?, name, slack_handle, slack_user_id?, is_owner,
            is_steward, is_other, department_ids[], group_ids[]}.
     ``user_id`` switches to edit mode (email locked to identity, password
     optional — blank leaves it unchanged)."""
@@ -346,6 +347,9 @@ def org_members_save_view(request):
     except (ValueError, TypeError):
         return JsonResponse({"error": "Invalid JSON body."}, status=400)
 
+    if not isinstance(data, dict):
+        return JsonResponse({"error": "JSON body must be an object."}, status=400)
+
     email = (data.get("email") or "").strip()
     password = data.get("password") or ""
     name = (data.get("name") or "").strip()
@@ -357,10 +361,14 @@ def org_members_save_view(request):
     group_ids = [int(x) for x in (data.get("group_ids") or []) if str(x).isdigit()]
 
     edit_user = None
-    if data.get("user_id"):
+    if "user_id" in data:
+        if isinstance(data["user_id"], bool) or not str(data["user_id"]).isdigit():
+            return JsonResponse({"error": "Member not found."}, status=404)
         edit_user = CustomUser.objects.filter(
             id=data["user_id"], memberships__organization=org
         ).first()
+        if edit_user is None:
+            return JsonResponse({"error": "Member not found."}, status=404)
     is_edit = edit_user is not None
 
     # Validation mirrors the wizard's step-3 submit guard.
@@ -377,7 +385,8 @@ def org_members_save_view(request):
     # A name clash raises mid-way through creating the user, the membership and
     # the groups. Without a transaction that leaves a half-built member behind
     # for the admin to trip over on the retry.
-    from django.db import transaction
+    from django.db import IntegrityError, transaction
+    from rest_framework.exceptions import ValidationError
 
     from .access import CrossOrganizationDataPerson, DuplicateDataPersonName
 
@@ -394,6 +403,23 @@ def org_members_save_view(request):
         )
     except CrossOrganizationDataPerson as exc:
         return JsonResponse({"error": str(exc)}, status=409)
+    except ValidationError as exc:
+        errors = exc.detail
+        # DRF may run the model's compound unique validator before the
+        # serializer's friendlier, tenant-scoped Slack validation.
+        if any(getattr(message, "code", None) == "unique"
+               for message in errors.get("non_field_errors", [])):
+            errors = {"slack_user_id": ["This Slack member is already linked."]}
+        messages = [str(message) for values in errors.values()
+                    for message in (values if isinstance(values, list) else [values])]
+        return JsonResponse({"error": " ".join(messages), "fields": errors}, status=400)
+    except IntegrityError as exc:
+        # The database remains the arbiter when two administrators assign the
+        # same Slack identity concurrently after serializer validation.
+        constraint = getattr(getattr(exc.__cause__, "diag", None), "constraint_name", None)
+        if constraint == "uniq_dataperson_slack_org":
+            return JsonResponse({"error": "This Slack member is already linked."}, status=400)
+        raise
 
 
 def _save_member(request, org, data, edit_user, is_edit, email, password, name,
@@ -402,16 +428,29 @@ def _save_member(request, org, data, edit_user, is_edit, email, password, name,
     Split out so the whole thing runs inside one transaction."""
     from .models import CustomUser, Department
     from .access import upsert_data_person
+    from .serializers import DataPersonSerializer
+    from rest_framework.exceptions import ValidationError
 
     available_groups = get_access_groups_qs()
     departments = Department.objects.filter(organization=org)
 
     if is_edit:
-        target_user = edit_user
+        target_user = CustomUser.objects.select_for_update().get(pk=edit_user.pk)
+        # Removal locks the same user, so it cannot interleave with this save
+        # and accidentally recreate a membership or restore a removed mapping.
+        if not OrganizationMembership.objects.filter(user=target_user, organization=org).exists():
+            return JsonResponse({"error": "Member not found."}, status=404)
     else:
-        target_user, _ = CustomUser.objects.get_or_create(
+        target_user, created = CustomUser.objects.select_for_update().get_or_create(
             email=email, defaults={"username": email.split("@")[0]}
         )
+        if not created and not OrganizationMembership.objects.filter(
+            user=target_user, organization=org,
+        ).exists():
+            return JsonResponse(
+                {"error": "An account with this email already exists outside this organization."},
+                status=409,
+            )
     # Password: required on create, optional on edit (blank = keep existing).
     if password:
         target_user.set_password(password)
@@ -432,7 +471,6 @@ def _save_member(request, org, data, edit_user, is_edit, email, password, name,
     chosen = list(available_groups.filter(id__in=group_ids)) if group_ids else []
     target_user.groups.set(chosen + other_groups)
 
-    # Adopts a login-less namesake instead of creating a duplicate — see
     # Display names are not identity keys. A login-less namesake is reported as
     # a conflict for deliberate linking instead of being silently claimed.
     # The caller turns DuplicateDataPersonName into a 400 and this transaction
@@ -444,6 +482,18 @@ def _save_member(request, org, data, edit_user, is_edit, email, password, name,
         is_other=is_other,
         slack_handle=slack_handle or None,
     )
+    # Omission preserves mappings for older API clients; an explicit empty
+    # string removes one. Validate against the exact login-linked profile,
+    # never a display-name match or a person belonging to another tenant.
+    if "slack_user_id" in data:
+        serializer = DataPersonSerializer(
+            dp, data={"slack_user_id": data["slack_user_id"], "user": target_user.pk},
+            partial=True, context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data["slack_user_id"] and not target_user.is_active:
+            raise ValidationError({"slack_user_id": "Slack identity mapping requires an active member account."})
+        serializer.save()
     dp.departments.set(departments.filter(id__in=department_ids))
 
     return JsonResponse({"status": "saved", "user_id": target_user.id})
@@ -462,17 +512,32 @@ def org_members_remove_view(request):
     except (ValueError, TypeError):
         return JsonResponse({"error": "Invalid JSON body."}, status=400)
 
+    if not isinstance(data, dict):
+        return JsonResponse({"error": "JSON body must be an object."}, status=400)
+
     user_id = data.get("user_id")
     if user_id is None:
         return JsonResponse({"error": "user_id is required."}, status=400)
+    if isinstance(user_id, bool) or not str(user_id).isdigit():
+        return JsonResponse({"error": "Member not found."}, status=404)
     if str(user_id) == str(request.user.id):
         return JsonResponse({"error": "You cannot remove yourself."}, status=400)
 
-    deleted, _ = OrganizationMembership.objects.filter(
-        user_id=user_id, organization=org
-    ).delete()
-    if not deleted:
-        return JsonResponse({"error": "Member not found."}, status=404)
+    from django.db import transaction
+    from .models import CustomUser, DataPerson
+
+    with transaction.atomic():
+        target_user = CustomUser.objects.select_for_update().filter(pk=user_id).first()
+        if target_user is None:
+            return JsonResponse({"error": "Member not found."}, status=404)
+        deleted, _ = OrganizationMembership.objects.filter(
+            user_id=user_id, organization=org
+        ).delete()
+        if not deleted:
+            return JsonResponse({"error": "Member not found."}, status=404)
+        # Preserve governance ownership/history, but require an administrator
+        # to explicitly relink Slack if the account later rejoins this org.
+        DataPerson.objects.filter(user_id=user_id, organization=org).update(slack_user_id="")
     return JsonResponse({"status": "removed"})
 
 

@@ -5,6 +5,9 @@ node_modules
 npm-debug.log*
 *.tsbuildinfo
 .env*.local
+.env
+.env.*
+*.env
 README.md
 PROGRESS.md
 Dockerfile

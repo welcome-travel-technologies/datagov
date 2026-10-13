@@ -30,7 +30,7 @@
     "elkjs": "^0.11.1",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.460.0",
-    "next": "^15.5.18",
+    "next": "^15.5.27",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
@@ -51,13 +51,16 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.0",
     "eslint": "^9",
-    "eslint-config-next": "^15.0.3",
+    "eslint-config-next": "^15.5.27",
     "eslint-plugin-react-hooks": "5.2.0",
     "globals": "14.0.0",
     "jsdom": "^25.0.1",
-    "postcss": "^8.4.0",
+    "postcss": "^8.5.23",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "postcss": "$postcss"
   }
 }

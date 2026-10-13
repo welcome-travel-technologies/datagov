@@ -3,6 +3,7 @@
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 import { useAuth } from "@/lib/auth";
+import { safeReturnPath } from "@/lib/safe-return-path";
 
 // `/share/*` is the anonymous metrics-map viewer — no login required.
 const PUBLIC_PATHS = ["/login", "/share"];
@@ -11,14 +12,15 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
 
   useEffect(() => {
     if (loading) return;
-    const isPublic = PUBLIC_PATHS.some((p) => pathname?.startsWith(p));
     if (!user && !isPublic) {
-      router.push(`/login?next=${encodeURIComponent(pathname ?? "/")}`);
+      const destination = safeReturnPath(window.location.pathname + window.location.search + window.location.hash);
+      router.replace(`/login?next=${encodeURIComponent(destination)}`);
     }
-  }, [loading, user, pathname, router]);
+  }, [loading, user, pathname, isPublic, router]);
 
   if (loading) {
     return (
@@ -28,5 +30,5 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return user || isPublic ? <>{children}</> : null;
 }

@@ -70,13 +70,21 @@ export function SideNav() {
   // Persisted collapse state. Start expanded on the server, then sync from
   // localStorage after mount to avoid a hydration mismatch.
   const [collapsed, setCollapsed] = useState(false);
+  const [mobile, setMobile] = useState(false);
   useEffect(() => {
-    setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => {
+      setMobile(media.matches);
+      setCollapsed(media.matches || localStorage.getItem(COLLAPSE_KEY) === "1");
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
   }, []);
   const toggle = () => {
     setCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+      if (!mobile) localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
       return next;
     });
   };
@@ -84,10 +92,12 @@ export function SideNav() {
   const { name: orgName } = useBranding();
 
   return (
+    <>
+    {mobile && !collapsed && <button type="button" aria-label="Close navigation" onClick={() => setCollapsed(true)} className="fixed inset-0 z-30 bg-foreground/30 md:hidden" />}
     <aside
       className={cn(
         "flex shrink-0 flex-col overflow-hidden border-r border-line bg-panel2 transition-[width] duration-200 ease-in-out",
-        collapsed ? "w-16" : "w-64",
+        collapsed ? "w-16" : "absolute inset-y-0 left-0 z-40 w-64 shadow-xl md:relative md:shadow-none",
       )}
     >
       {/* brand + collapse toggle */}
@@ -104,7 +114,9 @@ export function SideNav() {
       </div>
 
       {/* nav */}
-      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3" onClick={(event) => {
+        if (mobile && (event.target as HTMLElement).closest("a")) setCollapsed(true);
+      }}>
         {NAV_GROUPS.map((group) => {
           const items = group.items.filter((i) => canSee(i, perms));
           if (items.length === 0) return null;
@@ -148,5 +160,6 @@ export function SideNav() {
         </button>
       </div>
     </aside>
+    </>
   );
 }

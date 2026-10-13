@@ -1,0 +1,5 @@
+**
+!nginx.conf
+!deploy/
+!deploy/azure/
+!deploy/azure/Dockerfile.gateway

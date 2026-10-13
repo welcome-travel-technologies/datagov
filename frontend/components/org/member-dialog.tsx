@@ -22,6 +22,7 @@ interface Draft {
   password: string;
   name: string;
   slack_handle: string;
+  slack_user_id: string;
   is_owner: boolean;
   is_steward: boolean;
   is_other: boolean;
@@ -35,6 +36,7 @@ const BLANK: Draft = {
   password: "",
   name: "",
   slack_handle: "",
+  slack_user_id: "",
   is_owner: true,
   is_steward: false,
   is_other: false,
@@ -49,6 +51,7 @@ function fromMember(m: OrgMember): Draft {
     password: "",
     name: m.display_name === "-" ? "" : m.display_name,
     slack_handle: m.slack_handle,
+    slack_user_id: m.slack_user_id || "",
     is_owner: m.is_owner,
     is_steward: m.is_steward,
     is_other: m.is_other,
@@ -120,6 +123,7 @@ export function MemberDialog({
         ...(draft.password ? { password: draft.password } : {}),
         name: draft.name.trim(),
         slack_handle: draft.slack_handle.trim(),
+        slack_user_id: draft.slack_user_id.trim(),
         is_owner: draft.is_owner,
         is_steward: draft.is_steward,
         is_other: draft.is_other,
@@ -140,6 +144,8 @@ export function MemberDialog({
   function validateLocal(): string | null {
     if (!isEdit && (!draft.email.trim() || !draft.password)) return "Email and password are required.";
     if (!draft.name.trim()) return "Name is required.";
+    if (draft.slack_user_id.trim() && !/^[UW][A-Z0-9]{2,79}$/.test(draft.slack_user_id.trim()))
+      return "Use a Slack member ID starting with U or W, or leave it blank.";
     if (!(draft.is_owner || draft.is_steward || draft.is_other))
       return "Select at least one role (Owner, Steward, or Other).";
     return null;
@@ -200,7 +206,7 @@ export function MemberDialog({
             </Field>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div>
             <Field label="Display name">
               <Input
                 value={draft.name}
@@ -208,6 +214,8 @@ export function MemberDialog({
                 placeholder="Jane Doe"
               />
             </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Slack handle">
               <Input
                 value={draft.slack_handle}
@@ -215,7 +223,19 @@ export function MemberDialog({
                 placeholder="@jane"
               />
             </Field>
+            <Field label="Slack member ID">
+              <Input
+                value={draft.slack_user_id}
+                onChange={(e) => set({ slack_user_id: e.target.value.toUpperCase() })}
+                placeholder="U0123456789"
+                maxLength={80}
+                autoComplete="off"
+                aria-describedby="slack-member-id-help"
+                className="font-mono"
+              />
+            </Field>
           </div>
+          <p id="slack-member-id-help" className="text-xs text-muted-foreground">The stable U… or W… member ID links this person’s Document Explorer permissions in Slack. Leave blank to remove the link.</p>
 
           <Field label="Governance roles">
             <div className="flex flex-wrap gap-2">

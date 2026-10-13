@@ -1,0 +1,31 @@
+# Omit this file for managed Qdrant. The API/worker use QDRANT_URL in engine.env.
+services:
+  document-vectors:
+    image: qdrant/qdrant:v1.19.1
+    env_file:
+      - path: ${SHARED_DIR:?}/qdrant.env
+        format: raw
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes: ["vectors:/qdrant/storage"]
+    # No published host ports.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333;
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\napi-key: %s\r\nConnection: close\r\n\r\n' "$$QDRANT__SERVICE__API_KEY" >&3;
+          IFS= read -r status <&3;
+          [[ "$$status" == *" 200 "* ]]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "3"}
+volumes:
+  vectors: {external: true, name: "${VECTORS_VOLUME:?}"}

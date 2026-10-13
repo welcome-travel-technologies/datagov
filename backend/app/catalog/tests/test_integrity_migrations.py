@@ -639,6 +639,11 @@ def test_production_0055_upgrade_with_legacy_rows_reaches_0064_safely():
 
         # The first all-kind status sweep honors current dismissals but opens
         # fresh work for the marker promotion that happened after its old Done.
+        # The historical 0055 -> 0064 assertions above intentionally use that
+        # era's app registry. Runtime services below use today's model fields,
+        # so bring the schema forward before exercising those services.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
         from catalog.governance_tasks import generate_tasks
         from catalog.models import (
             GovernanceTask as RuntimeGovernanceTask,
