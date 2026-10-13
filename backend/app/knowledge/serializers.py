@@ -73,6 +73,7 @@ class SourceSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         result = super().to_representation(instance)
-        result['allowed_user_ids'] = list(instance.allowed_users.values_list('id', flat=True))
-        result['allowed_group_ids'] = list(instance.allowed_groups.values_list('id', flat=True))
+        # .all() uses the list endpoint's prefetch cache; values_list() bypasses it.
+        result['allowed_user_ids'] = [user.pk for user in instance.allowed_users.all()]
+        result['allowed_group_ids'] = [group.pk for group in instance.allowed_groups.all()]
         return result

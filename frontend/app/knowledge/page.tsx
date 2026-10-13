@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth";
 import { documentHref, knowledgeApi } from "@/lib/knowledge-api";
 import { useDebounced } from "@/lib/use-debounced";
 import { Button } from "@/components/ui/button";
+import { isActiveStatus } from "@/components/ui/run-status";
 import { Input } from "@/components/ui/input";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -41,7 +42,7 @@ export default function KnowledgePage() {
   const runs = useQuery({ queryKey: ["knowledge", "runs", user?.id], queryFn: knowledgeApi.runs, enabled: authorized && enabled && canManage,
     refetchInterval: 10_000, retry: false });
   const allSources = sources.data?.results || [];
-  const activeRuns = (runs.data?.results || []).filter((run) => ["queued", "pending", "running", "processing", "claimed", "cancel_requested"].includes(run.status)).length;
+  const activeRuns = (runs.data?.results || []).filter((run) => isActiveStatus(run.status)).length;
   const selectClass = "h-9 min-w-0 rounded-lg border border-input bg-panel px-3 text-xs outline-none focus:ring-1 focus:ring-ring";
 
   if (user && !authorized) return <EmptyState title="Document Explorer access required" hint="Ask your organization administrator for AI Assistant access." icon={<ShieldCheck className="h-9 w-9" />} />;

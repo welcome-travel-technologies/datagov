@@ -1,23 +1,7 @@
 import { AlertCircle } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-export function readableStatus(status: string) {
-  const labels: Record<string, string> = {
-    ready: "Ready", completed: "Completed", succeeded: "Completed", complete: "Completed", published: "Published",
-    failed: "Failed", error: "Error", running: "Running", processing: "Processing", indexing: "Indexing", claimed: "Processing",
-    queued: "Queued", pending: "Pending", cancel_requested: "Cancelling", cancelled: "Cancelled", needs_ocr: "Needs OCR", partial: "Partially complete",
-  };
-  return labels[status] || status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
-}
-
-export function StatusBadge({ status }: { status: string }) {
-  const variant = ["ready", "completed", "succeeded", "published"].includes(status) ? "success"
-    : ["failed", "error"].includes(status) ? "danger"
-      : ["running", "processing", "indexing", "claimed"].includes(status) ? "info"
-        : ["queued", "pending", "cancel_requested", "needs_ocr", "partial"].includes(status) ? "warning" : "default";
-  return <Badge variant={variant} dot>{readableStatus(status)}</Badge>;
-}
+export { StatusBadge, readableStatus } from "@/components/ui/run-status";
 
 export function KnowledgeError({ message, retry }: { message: string; retry?: () => void }) {
   return (

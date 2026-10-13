@@ -6,10 +6,12 @@ import uuid
 from urllib.parse import urlparse
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -28,12 +30,13 @@ from .storage import private_storage
 
 
 def _doc(doc):
-    latest = doc.versions.first()
+    # List views supply just the latest status; never load page/chunk JSON for a card.
+    latest_status = doc.latest_status if hasattr(doc, 'latest_status') else doc.versions.values_list('status', flat=True).first()
     return {
         'id': str(doc.id), 'title': doc.title, 'mime_type': doc.mime_type,
         'source_id': str(doc.source_id), 'source_name': doc.source.name,
         'source_type': doc.source_type, 'source_url': doc.source_url or None,
-        'status': latest.status if latest else 'queued',
+        'status': latest_status or 'queued',
         'current_version_id': str(doc.current_version_id) if doc.current_version_id else None,
         'created_at': doc.created_at, 'updated_at': doc.updated_at,
     }
@@ -74,7 +77,11 @@ def status(request):
 def sources(request):
     org = request_org(request, manage=True)
     if request.method == 'GET':
-        return Response({'results': SourceSerializer(KnowledgeSource.objects.filter(organization=org), many=True).data})
+        sources = KnowledgeSource.objects.filter(organization=org).prefetch_related(
+            Prefetch('allowed_users', queryset=get_user_model().objects.only('id')),
+            Prefetch('allowed_groups', queryset=Group.objects.only('id')),
+        )
+        return Response({'results': SourceSerializer(sources, many=True).data})
     serializer = SourceSerializer(data=request.data, context={'org': org, 'request': request})
     serializer.is_valid(raise_exception=True)
     with transaction.atomic():
@@ -184,14 +191,15 @@ def _uuid(value):
 @permission_classes([IsAuthenticated])
 def documents(request):
     org = request_org(request)
-    qs = visible_documents(org, request.user).select_related('source', 'current_version').prefetch_related('versions')
+    qs = visible_documents(org, request.user).select_related('source').annotate(
+        latest_status=Subquery(DocumentVersion.objects.filter(document=OuterRef('pk')).values('status')[:1]),
+    )
     if request.query_params.get('search'):
         qs = qs.filter(title__icontains=request.query_params['search'][:200])
     if request.query_params.get('source_id'):
         qs = qs.filter(source_id=_uuid(request.query_params['source_id']))
     if request.query_params.get('status'):
-        from django.db.models import OuterRef, Subquery
-        qs = qs.annotate(latest_status=Subquery(DocumentVersion.objects.filter(document=OuterRef('pk')).values('status')[:1])).filter(latest_status=request.query_params['status'])
+        qs = qs.filter(latest_status=request.query_params['status'])
     try:
         page_size = max(1, min(int(request.query_params.get('page_size', 25)), 100))
         page_number = max(1, int(request.query_params.get('page', 1)))
@@ -218,19 +226,21 @@ def _resolve_document(request, document_id):
 @permission_classes([IsAuthenticated])
 def document_detail(request, document_id):
     org, doc, version = _resolve_document(request, document_id)
+    manage = can_manage(org, request.user)
     if request.method == 'DELETE':
-        if not can_manage(org, request.user):
+        if not manage:
             raise PermissionDenied()
         doc.deleted_at = timezone.now()
         doc.deletion_reason = 'manual'
         doc.save(update_fields=['deleted_at', 'deletion_reason', 'updated_at'])
         return Response(status=204)
     ready = version.status == 'ready' and version.published_at is not None
+    versions = doc.versions.all() if manage else doc.versions.filter(published_at__isnull=False)
     return Response({**_doc(doc), 'version_id': str(version.id), 'status': version.status,
-        'error': version.error if can_manage(org, request.user) else '',
+        'error': version.error if manage else '',
         'pages': version.pages if ready else [], 'chunks': version.chunks if ready else [],
         'content_url': f'/api/knowledge/documents/{doc.id}/content/?version={version.id}' if version.storage_key else None,
-        'versions': [{'id': str(v.id), 'created_at': v.created_at, 'status': v.status} for v in doc.versions.all() if v.published_at or can_manage(org, request.user)],
+        'versions': [{'id': str(v['id']), 'created_at': v['created_at'], 'status': v['status']} for v in versions.values('id', 'created_at', 'status')],
         'datagov_url': document_url(doc.id, version.id),
     })
 

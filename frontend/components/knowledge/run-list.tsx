@@ -5,6 +5,7 @@ import { CircleStop, Clock3, RotateCcw } from "lucide-react";
 import { getApiErrorMessage } from "@/lib/api";
 import { knowledgeApi, type KnowledgeRun } from "@/lib/knowledge-api";
 import { Button } from "@/components/ui/button";
+import { isActiveStatus } from "@/components/ui/run-status";
 import { EmptyState } from "@/components/ui/misc";
 import { KnowledgeError, StatusBadge, displayDate, readableStatus } from "./shared";
 
@@ -19,7 +20,7 @@ export function RunList({ runs }: { runs: KnowledgeRun[] }) {
     {action.isError && <KnowledgeError message={getApiErrorMessage(action.error, "The run could not be updated.")} />}
     {!runs.length && <EmptyState title="No processing runs yet" hint="Upload a PDF or refresh a source to start a run." icon={<Clock3 className="h-8 w-8" />} />}
     {runs.map((run) => {
-      const active = ["queued", "pending", "running", "processing", "claimed", "cancel_requested"].includes(run.status);
+      const active = isActiveStatus(run.status);
       const failed = ["failed", "partial", "cancelled", "error"].includes(run.status);
       const progress = Math.max(0, Math.min(100, Number(run.progress) || 0));
       return <article key={run.id} className="rounded-xl border border-line bg-card p-4">
