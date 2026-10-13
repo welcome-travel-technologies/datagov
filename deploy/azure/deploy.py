@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 
@@ -184,7 +185,38 @@ def rollout(compose, component, local_qdrant, run):
                        "document-api", "document-worker"])
 
 
-def apply(root, manifest, bundle=None):
+def registry_login(config, env, log, run, token_file=None):
+    if token_file is None:
+        run(["az", "login", "--identity", "--allow-no-subscriptions", "--output", "none"])
+        run(["az", "acr", "login", "--name", config["registry_name"], "--output", "none"])
+        return
+    # Manual releases use the operator's short-lived ACR token, transferred
+    # privately. Consume it once; never persist it in a release or command line.
+    details = token_file.lstat()
+    if not stat.S_ISREG(details.st_mode) or details.st_mode & 0o077 or details.st_uid != os.getuid():
+        raise ValueError("Manual registry token must be an owned regular file with permissions 0600")
+    if details.st_size > 65536:
+        raise ValueError("Invalid manual registry credential file")
+    try:
+        credentials = json.loads(token_file.read_text())
+        if set(credentials) != {"registry_host", "access_token"} or credentials["registry_host"] != config["registry_host"]:
+            raise ValueError("Manual registry credential does not match the configured registry")
+        token = credentials["access_token"]
+        if not isinstance(token, str) or not token or any(c.isspace() for c in token):
+            raise ValueError("Invalid manual registry token")
+        log.write("Authenticating with a one-time operator registry token\n")
+        log.flush()
+        result = subprocess.run(
+            ["docker", "login", config["registry_host"], "--username", "00000000-0000-0000-0000-000000000000", "--password-stdin"],
+            input=token, text=True, env=env, stdout=log, stderr=log, check=False, timeout=60,
+        )
+        if result.returncode:
+            raise RuntimeError("Manual registry authentication failed")
+    finally:
+        token_file.unlink(missing_ok=True)
+
+
+def apply(root, manifest, bundle=None, registry_token_file=None):
     config = json.loads((root / "shared/deployment.json").read_text())
     validate_config(config)
     validate_manifest(manifest, config["registry_host"])
@@ -233,8 +265,7 @@ def apply(root, manifest, bundle=None):
             for key, name in config["volumes"].items():
                 if key != "vectors" or config["local_qdrant"]:
                     run(["docker", "volume", "inspect", "--format", "{{.Name}}", name])
-            run(["az", "login", "--identity", "--allow-no-subscriptions", "--output", "none"])
-            run(["az", "acr", "login", "--name", config["registry_name"], "--output", "none"])
+            registry_login(config, env, log, run, registry_token_file)
             services = ["document-api", "document-worker"] if manifest["component"] == "engine" else [
                 "web", "worker", "frontend", "nginx", "document-api", "document-worker"]
             if config["local_qdrant"] and manifest["component"] == "app":
@@ -260,10 +291,12 @@ def main():
     parser.add_argument("--root", type=Path, default=Path("/opt/datagov"))
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--registry-token-file", type=Path,
+                        help="Manual release only: privately transferred short-lived ACR credentials; consumed on login")
     args = parser.parse_args()
     os.umask(0o077)
     try:
-        apply(args.root.resolve(strict=True), json.loads(args.manifest.read_text()), args.bundle)
+        apply(args.root.resolve(strict=True), json.loads(args.manifest.read_text()), args.bundle, args.registry_token_file)
     except (ValueError, KeyError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         raise SystemExit(f"Deployment failed: {error}") from None
 

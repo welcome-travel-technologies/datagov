@@ -136,6 +136,12 @@ Azure Run Command only permits one active command per VM and returns limited out
 
 ## Recovery and changes of storage
 
+### Manual release while deployment identity access is pending
+
+An operator whose Azure account already has registry push/pull and VM Run Command access can perform a manual release. Keep `AZURE_DEPLOY_ENABLED=false` until the GitHub and VM identities have their roles. Build the committed revisions, obtain their immutable registry digests, and use the same release manifest, controller, migrations and health checks as automation.
+
+The controller accepts `--registry-token-file /private/path/registry.json` instead of using the VM identity. This owned `0600` file must contain only `registry_host` and `access_token`, using a freshly issued operator token from `az acr login --expose-token`. Transfer the token privately, for example encrypted to a temporary key generated on the VM; never put the token in GitHub variables, shell arguments, Azure Run Command plaintext or logs. The controller sends it to Docker over stdin and deletes the file after the login attempt. Docker credentials remain in the deployment's temporary directory and are removed on exit. Clean up a transferred token if validation fails before login. Registry admin credentials and long-lived deployment secrets are unnecessary. The default automated path remains managed identity authentication.
+
 Failed migration/readiness means a failed deployment, with `pending.json` and a private log retained. The prior `state.json` is a record of the last successful release, **not proof that its containers are still running**. A failed app release can leave the application stopped until repaired. Do not claim or assume an automatic database rollback.
 
 Prefer correcting the failure and rerunning the same or a newer release from `main`. For a compatible code rollback, revert the code on `main` and let a **new** workflow run publish/deploy it. Old run IDs cannot overwrite a newer successful deployment. Confirm database and artifact format compatibility first; an image rollback does not reverse a migration. Restore from a consistent backup under a maintenance procedure if a data migration cannot be safely used by the previous code.

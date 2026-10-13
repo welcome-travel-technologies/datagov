@@ -1,5 +1,6 @@
 import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -175,6 +176,45 @@ class StateTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX secret ownership")
+    def test_manual_registry_login_consumes_token_without_logging_it(self):
+        for returncode in (0, 1):
+            with self.subTest(returncode=returncode), tempfile.TemporaryDirectory() as scratch:
+                path = Path(scratch) / "registry.json"
+                token = "synthetic-short-lived-operator-token"
+                path.write_text(json.dumps({"registry_host": config()["registry_host"], "access_token": token}))
+                path.chmod(0o600)
+                log = io.StringIO()
+                with patch.object(deploy.subprocess, "run", return_value=subprocess.CompletedProcess([], returncode)) as execute:
+                    if returncode:
+                        with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+                            deploy.registry_login(config(), {}, log, self.fail, path)
+                    else:
+                        deploy.registry_login(config(), {}, log, self.fail, path)
+                self.assertFalse(path.exists())
+                self.assertEqual(execute.call_args.kwargs["input"], token)
+                self.assertNotIn(token, str(execute.call_args.args))
+                self.assertNotIn(token, log.getvalue())
+
+    @unittest.skipIf(os.name == "nt", "POSIX secret ownership")
+    def test_manual_registry_login_rejects_public_symlink_and_foreign_credentials(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / "registry.json"
+            path.write_text(json.dumps({"registry_host": "foreign.azurecr.io", "access_token": "synthetic"}))
+            path.chmod(0o644)
+            with patch.object(deploy.subprocess, "run") as execute:
+                with self.assertRaisesRegex(ValueError, "0600"):
+                    deploy.registry_login(config(), {}, io.StringIO(), self.fail, path)
+                path.chmod(0o600)
+                link = Path(scratch) / "link.json"
+                link.symlink_to(path)
+                with self.assertRaisesRegex(ValueError, "regular file"):
+                    deploy.registry_login(config(), {}, io.StringIO(), self.fail, link)
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    deploy.registry_login(config(), {}, io.StringIO(), self.fail, path)
+                execute.assert_not_called()
+                self.assertFalse(path.exists())
+
     def test_azure_success_without_guest_success_is_failure(self):
         self.assertFalse(release.succeeded({"value": [{"code": "ProvisioningState/succeeded", "message": "script failed"}]}, manifest()))
         marker = "DATAGOV_DEPLOY_OK:app:1:" + "b" * 40
