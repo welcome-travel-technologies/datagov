@@ -323,3 +323,37 @@ def test_answer_scopes_versions_and_rechecks_acl_after_model(setup, monkeypatch)
 def test_no_documents_does_not_call_model(setup, monkeypatch):
     monkeypatch.setattr(chat.httpx, 'Client', lambda **kwargs: pytest.fail('No model request expected'))
     assert chat.answer_document_question(setup['org'], setup['user'], 'Question')['abstained']
+
+
+def test_large_answer_scope_keeps_every_authorized_version(setup, monkeypatch):
+    import json
+    documents = [Document(source=setup['source'], external_id=f'large-{i}', title=f'Guide {i}', mime_type='text/plain') for i in range(6000)]
+    Document.objects.bulk_create(documents)
+    versions = [DocumentVersion(document=d, content_hash=hashlib.sha256(str(d.id).encode()).hexdigest(), status='ready', published_at=timezone.now()) for d in documents]
+    DocumentVersion.objects.bulk_create(versions)
+    for document, version in zip(documents, versions):
+        document.current_version = version
+    Document.objects.bulk_update(documents, ['current_version'])
+    # A current ready version on an inaccessible source must still be excluded.
+    private = KnowledgeSource.objects.create(organization=setup['org'], name='Not shared', kind='upload', access='restricted')
+    hidden = Document.objects.create(source=private, external_id='hidden', title='Hidden', mime_type='text/plain')
+    hidden_version = DocumentVersion.objects.create(document=hidden, content_hash='f' * 64, status='ready', published_at=timezone.now())
+    hidden.current_version = hidden_version
+    hidden.save()
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={'answer': 'No matching evidence.', 'citations': [], 'abstained': True})
+    original = httpx.Client
+    monkeypatch.setattr(chat.httpx, 'Client', lambda **kwargs: original(transport=httpx.MockTransport(handler)))
+    chat.answer_document_question(setup['org'], setup['user'], 'What is the policy?')
+    assert len(requests) == 1
+    assert set(requests[0]['allowed_versions']) == {str(v.pk) for v in versions}
+
+
+def test_oversized_answer_scope_fails_before_provider_call(setup, monkeypatch):
+    publish(setup)
+    monkeypatch.setattr(chat, 'MAX_SEARCH_VERSIONS', 0)
+    monkeypatch.setattr(chat.httpx, 'Client', lambda **kwargs: pytest.fail('Oversized scope must not reach the model'))
+    with pytest.raises(ValueError, match='search capacity'):
+        chat.answer_document_question(setup['org'], setup['user'], 'Question')
