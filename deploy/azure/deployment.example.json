@@ -1,0 +1,17 @@
+{
+  "registry_name": "yourregistry",
+  "registry_host": "yourregistry.azurecr.io",
+  "project": "datagov_platform",
+  "public_host": "datagov.welcomd.com",
+  "gateway_bind": "127.0.0.1:8080",
+  "local_qdrant": true,
+  "initial_engine_image": "yourregistry.azurecr.io/document-explorer@sha256:REPLACE_WITH_PUBLISHED_DIGEST",
+  "volumes": {
+    "static": "datagov_platform_static_volume",
+    "media": "datagov_platform_media_volume",
+    "originals": "datagov_platform_document_originals",
+    "artifacts": "datagov_platform_document_artifacts",
+    "imports": "datagov_platform_document_imports",
+    "vectors": "datagov_platform_document_vectors"
+  }
+}

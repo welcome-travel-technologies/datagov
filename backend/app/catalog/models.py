@@ -62,6 +62,10 @@ class DataPerson(models.Model):
         max_length=80, blank=True, null=True, validators=[_validate_slack_handle],
         help_text="Slack handle, e.g. '@jane'. Optional.",
     )
+    slack_user_id = models.CharField(
+        max_length=80, blank=True, default='',
+        help_text='Verified Slack member ID for this organization, e.g. U0123456789.',
+    )
 
     class Meta:
         ordering = ['name']
@@ -76,6 +80,11 @@ class DataPerson(models.Model):
         # display-name rule cover the unscoped rows instead of silently exempting
         # every one of them.
         constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'slack_user_id'],
+                condition=~models.Q(slack_user_id=''),
+                name='uniq_dataperson_slack_org',
+            ),
             models.UniqueConstraint(
                 fields=['user', 'organization'],
                 condition=models.Q(user__isnull=False),
@@ -813,6 +822,14 @@ class PowerBIReportUsage(models.Model):
 
 class ChatSession(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='chat_sessions')
+    organization = models.ForeignKey(
+        'Organization', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='chat_sessions',
+    )
+    mode = models.CharField(
+        max_length=16, default='catalog',
+        choices=[('catalog', 'Catalog'), ('documents', 'Document Explorer')],
+    )
     title = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -830,6 +847,7 @@ class ChatMessage(models.Model):
     role = models.CharField(max_length=50)
     content = models.TextField()
     debug_meta = models.JSONField(default=dict, blank=True)
+    citations = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -856,6 +874,7 @@ class ChatbotModel(models.Model):
 class Organization(models.Model):
     name = models.CharField(max_length=255)
     slack_bot_token = models.CharField(max_length=255, blank=True, null=True)
+    slack_team_id = models.CharField(max_length=80, blank=True, null=True, unique=True)
     primary_color = models.CharField(max_length=50, default='#00cf95', blank=True)
     icon = models.ImageField(upload_to='organizations/icons/', blank=True, null=True)
 

@@ -53,15 +53,17 @@ function HookCard({ hook, kind }: { hook: IntegrationHook; kind: "bot" | "alerts
   const initialChannel = isBot ? hook.slack_channel : hook.slack_alerts_channel || hook.slack_channel;
 
   const [token, setToken] = useState("");
+  const [teamId, setTeamId] = useState(hook.slack_team_id || "");
   const [channel, setChannel] = useState(initialChannel);
 
   // Re-seed from the latest hook data whenever it changes.
   useEffect(() => {
     setToken("");
     setChannel(initialChannel);
-  }, [initialChannel]);
+    setTeamId(hook.slack_team_id || "");
+  }, [initialChannel, hook.slack_team_id]);
 
-  const connected = hook.is_active && hook.slack_bot_token_set;
+  const connected = hook.is_active && hook.slack_bot_token_set && (!isBot || !!hook.slack_team_id);
 
   const saveMut = useMutation({
     mutationFn: () => {
@@ -70,7 +72,10 @@ function HookCard({ hook, kind }: { hook: IntegrationHook; kind: "bot" | "alerts
         is_active: true,
       };
       if (token.trim()) body.slack_bot_token = token.trim();
-      if (isBot) body.slack_channel = channel.trim();
+      if (isBot) {
+        body.slack_channel = channel.trim();
+        body.slack_team_id = teamId.trim();
+      }
       else body.slack_alerts_channel = channel.trim();
       return api.integrations.saveHook(body);
     },
@@ -117,6 +122,10 @@ function HookCard({ hook, kind }: { hook: IntegrationHook; kind: "bot" | "alerts
           />
         </Field>
 
+        {isBot && <Field label="Slack Workspace ID">
+          <Input aria-label="Slack Workspace ID" value={teamId} onChange={(event) => setTeamId(event.target.value.toUpperCase())} placeholder="T0123456789" className="font-mono" />
+          <span className="block text-xs text-muted-foreground">The ID starting with T in your Slack workspace URL. It connects incoming messages to this organization.</span>
+        </Field>}
         <Field label={isBot ? "Bot Channel (e.g. #data-bot)" : "Alert Channel (e.g. #data-alerts)"}>
           <Input
             value={channel}
@@ -125,6 +134,7 @@ function HookCard({ hook, kind }: { hook: IntegrationHook; kind: "bot" | "alerts
           />
         </Field>
 
+        {isBot && <p className="text-xs text-muted-foreground">For document answers, send <code>documents: your question</code> in a direct message to the bot. An administrator must link your Slack member ID to your DataGov account. Source links open in Document Explorer.</p>}
         <p className="text-[12px] text-muted-foreground">
           <span className="font-medium text-foreground">How to get your Bot Token:</span> create an
           app at{" "}
@@ -159,7 +169,7 @@ function HookCard({ hook, kind }: { hook: IntegrationHook; kind: "bot" | "alerts
           ) : (
             <span />
           )}
-          <Button variant="brand" size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+          <Button variant="brand" size="sm" onClick={() => saveMut.mutate()} disabled={saveMut.isPending || isBot && !/^T[A-Z0-9]+$/.test(teamId.trim())}>
             {saveMut.isPending ? <Spinner className="text-white" /> : <Save />} Save
           </Button>
         </div>
@@ -174,6 +184,7 @@ function AddBotCard() {
   const qc = useQueryClient();
   const [token, setToken] = useState("");
   const [channel, setChannel] = useState("");
+  const [teamId, setTeamId] = useState("");
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -181,10 +192,12 @@ function AddBotCard() {
         is_active: true,
         slack_bot_token: token.trim(),
         slack_channel: channel.trim(),
+        slack_team_id: teamId.trim(),
       }),
     onSuccess: () => {
       setToken("");
       setChannel("");
+      setTeamId("");
       qc.invalidateQueries({ queryKey: QK });
     },
   });
@@ -212,6 +225,10 @@ function AddBotCard() {
             placeholder="xoxb-your-bot-token"
             className="font-mono"
           />
+        </Field>
+        <Field label="Slack Workspace ID">
+          <Input aria-label="Slack Workspace ID" value={teamId} onChange={(event) => setTeamId(event.target.value.toUpperCase())} placeholder="T0123456789" className="font-mono" />
+          <span className="block text-xs text-muted-foreground">The ID starting with T in your Slack workspace URL. It connects incoming messages to this organization.</span>
         </Field>
         <Field label="Bot Channel (e.g. #data-bot)">
           <Input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="#data-bot" />
@@ -243,7 +260,7 @@ function AddBotCard() {
             variant="brand"
             size="sm"
             onClick={() => createMut.mutate()}
-            disabled={createMut.isPending || !token.trim()}
+            disabled={createMut.isPending || !token.trim() || !/^T[A-Z0-9]+$/.test(teamId.trim())}
           >
             {createMut.isPending ? <Spinner className="text-white" /> : <Save />} Add Slack bot
           </Button>

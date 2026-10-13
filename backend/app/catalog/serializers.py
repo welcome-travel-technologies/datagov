@@ -98,6 +98,30 @@ class DataPersonSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'organization': 'This person does not belong to your organization.'})
 
+        # This ID grants access to private document answers in Slack. Treat it
+        # as an authentication mapping, not an editable stakeholder nickname.
+        from .access import is_org_admin
+        changing_slack_id = 'slack_user_id' in attrs and (
+            attrs['slack_user_id'] != getattr(self.instance, 'slack_user_id', '')
+        )
+        changing_mapped_user = (
+            self.instance is not None and self.instance.slack_user_id
+            and 'user' in attrs and attrs['user'] != self.instance.user
+        )
+        if (changing_slack_id or changing_mapped_user) and not is_org_admin(request.user, org):
+            raise serializers.ValidationError({
+                'slack_user_id': 'Only an organization administrator can change Slack identity mappings.'
+            })
+        if attrs.get('slack_user_id'):
+            import re
+            if not re.fullmatch(r'[UW][A-Z0-9]{2,79}', attrs['slack_user_id']):
+                raise serializers.ValidationError({'slack_user_id': 'Enter a Slack member ID, not a display name.'})
+            clash = DataPerson.objects.filter(organization=org, slack_user_id=attrs['slack_user_id'])
+            if self.instance:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise serializers.ValidationError({'slack_user_id': 'This Slack member is already linked.'})
+
         departments = attrs.get('departments')
         if departments is not None:
             foreign = [d.pk for d in departments if d.organization_id != org.id]

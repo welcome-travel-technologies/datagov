@@ -1,0 +1,137 @@
+name: DataGov checks and Azure release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: datagov-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: catalog
+          POSTGRES_PASSWORD: ci-disposable
+          POSTGRES_DB: catalog
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U catalog -d catalog"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DEBUG: "True"
+      PYTHON_DOTENV_DISABLED: "1"
+      DATAGOV_DATABASE_TARGET: local
+      DB_HOST: 127.0.0.1
+      DB_NAME: catalog
+      DB_USER: catalog
+      DB_PASSWORD: ci-disposable
+      DB_SSLMODE: disable
+      SECRET_KEY: disposable-ci-key-no-production-access
+      GEMINI_API_KEY: disposable-ci-key-no-provider-calls
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/app/requirements.txt
+      - run: pip install -r backend/app/requirements.txt
+      - run: python -m unittest discover -s deploy/azure/tests -v
+      - run: python deploy/azure/check_compose.py
+      - working-directory: backend/app
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+
+  release:
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AZURE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # No environment reviewer gate: a successful main build deploys automatically.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      AZURE_VM_NAME: ${{ vars.AZURE_VM_NAME }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: azure/login@8c334a195cbb38e46038007b304988d888bf676a
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify and log into registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ACR_NAME"
+          actual=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          test "$actual" = "$ACR_LOGIN_SERVER"
+          az acr login --name "$ACR_NAME"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - id: backend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: backend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/datagov-backend:sha-${{ github.sha }}
+          cache-from: type=gha,scope=datagov-backend
+          cache-to: type=gha,mode=max,scope=datagov-backend
+      - id: frontend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/datagov-frontend:sha-${{ github.sha }}
+          cache-from: type=gha,scope=datagov-frontend
+          cache-to: type=gha,mode=max,scope=datagov-frontend
+      - id: gateway
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: deploy/azure/Dockerfile.gateway
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/datagov-gateway:sha-${{ github.sha }}
+      - name: Deploy and verify VM release
+        env:
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+          GATEWAY_DIGEST: ${{ steps.gateway.outputs.digest }}
+        run: python3 deploy/azure/release.py --component app

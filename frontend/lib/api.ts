@@ -8,6 +8,7 @@
  */
 import { getCookie } from "@/lib/utils";
 import type { CanvasDoc } from "@/lib/metrics-canvas/types";
+import type { DocumentCitation } from "@/lib/knowledge-api";
 
 const BASE = "/api";
 
@@ -63,7 +64,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const method = (init.method ?? "GET").toUpperCase();
   const headers: Record<string, string> = {
     Accept: "application/json",
-    ...(init.body ? { "Content-Type": "application/json" } : {}),
+    ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
     ...((init.headers as Record<string, string>) ?? {}),
   };
   if (UNSAFE.has(method)) {
@@ -658,6 +659,7 @@ export interface OrgMember {
   is_steward: boolean;
   is_other: boolean;
   slack_handle: string;
+  slack_user_id: string;
   department_ids: number[];
 }
 
@@ -878,6 +880,7 @@ export interface MemberInput {
   password?: string;
   name: string;
   slack_handle?: string;
+  slack_user_id?: string;
   is_owner: boolean;
   is_steward: boolean;
   is_other: boolean;
@@ -941,6 +944,7 @@ export interface IntegrationHook {
   hook_type: string;
   is_active: boolean;
   slack_bot_token_set: boolean;
+  slack_team_id?: string;
   slack_channel: string;
   slack_alerts_channel: string;
 }
@@ -1471,6 +1475,7 @@ export const api = {
       name?: string;
       is_active?: boolean;
       slack_bot_token?: string;
+      slack_team_id?: string;
       slack_channel?: string;
       slack_alerts_channel?: string;
       disconnect?: boolean;
@@ -1538,17 +1543,17 @@ export const api = {
   powerbiUsageData: () => request<Record<string, unknown>>("/powerbi-usage/"),
 
   chat: {
-    send: (message: string, sessionId: number | null) =>
+    send: (message: string, sessionId: number | null, mode?: "catalog" | "documents") =>
       request<{ session_id?: number; task_id?: string; error?: string }>("/chat/", {
         method: "POST",
-        body: JSON.stringify({ message, session_id: sessionId }),
+        body: JSON.stringify({ message, session_id: sessionId, ...(mode ? { mode } : {}) }),
       }),
     taskStatus: (taskId: string) =>
       request<{ status: string; current_status?: string }>(`/chat/task/${taskId}/`),
     messages: (sessionId: number) =>
-      request<{ role: string; content: string }[]>(`/chat/sessions/${sessionId}/messages/`),
+      request<{ id?: number; role: string; content: string; citations?: DocumentCitation[]; metadata?: Record<string, unknown> }[]>(`/chat/sessions/${sessionId}/messages/`),
     sessions: () =>
-      request<{ id: number; title: string; updated_at: string }[]>("/chat/sessions/"),
+      request<{ id: number; title: string; updated_at: string; mode?: "catalog" | "documents" }[]>("/chat/sessions/"),
     delete: (sessionId: number) =>
       request<void>(`/chat/sessions/${sessionId}/`, { method: "DELETE" }),
   },

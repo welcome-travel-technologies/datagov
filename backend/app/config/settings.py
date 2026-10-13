@@ -87,6 +87,7 @@ INSTALLED_APPS = [
     'tailwind',
     'theme',
     'catalog',
+    'knowledge.apps.KnowledgeConfig',
 ]
 
 # OAuth 2.1 authorization server for the MCP endpoint (docs/mcp-server-plan.md M5).
@@ -231,7 +232,11 @@ ASGI_APPLICATION = 'config.asgi.application'
 #   DEBUG=False -> PRODUCTION Azure Postgres (PROD_DB_* in backend/.env).
 # WARNING: with DEBUG=False the running app — including all ETL writes — talks to
 # PRODUCTION. Use DEBUG=True for any local work.
-if DEBUG:
+DATABASE_TARGET = os.getenv('DATAGOV_DATABASE_TARGET', 'local' if DEBUG else 'production')
+if DATABASE_TARGET not in {'local', 'production'}:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('DATAGOV_DATABASE_TARGET must be local or production.')
+if DATABASE_TARGET == 'local':
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -274,6 +279,23 @@ else:
         }
     }
 
+
+# Password validation
+# Document Explorer is a private service with its own Python runtime. No service
+# key is serialized into browser configuration; all calls pass through Django.
+DOCUMENT_EXPLORER_ENABLED = os.getenv('DOCUMENT_EXPLORER_ENABLED', 'False').lower() == 'true'
+DOCUMENT_EXPLORER_API_URL = os.getenv('DOCUMENT_EXPLORER_API_URL', '')
+DOCUMENT_EXPLORER_API_KEY = os.getenv('DOCUMENT_EXPLORER_API_KEY', '')
+DOCUMENT_EXPLORER_WORKER_TOKEN = os.getenv('DOCUMENT_EXPLORER_WORKER_TOKEN', '')
+DOCUMENT_EXPLORER_PUBLIC_URL = os.getenv('DOCUMENT_EXPLORER_PUBLIC_URL', '')
+DOCUMENT_EXPLORER_STORAGE_ROOT = Path(os.getenv('DOCUMENT_EXPLORER_STORAGE_ROOT', str(BASE_DIR / 'private_documents')))
+DOCUMENT_EXPLORER_MAX_UPLOAD_BYTES = int(os.getenv('DOCUMENT_EXPLORER_MAX_UPLOAD_BYTES', str(20 * 1024 * 1024)))
+DOCUMENT_EXPLORER_MAX_TEXT_CHARS = int(os.getenv('DOCUMENT_EXPLORER_MAX_TEXT_CHARS', '5000000'))
+DOCUMENT_EXPLORER_MAX_RESULT_BYTES = int(os.getenv('DOCUMENT_EXPLORER_MAX_RESULT_BYTES', str(32 * 1024 * 1024)))
+DOCUMENT_EXPLORER_LEASE_SECONDS = int(os.getenv('DOCUMENT_EXPLORER_LEASE_SECONDS', '300'))
+DOCUMENT_EXPLORER_MAX_ATTEMPTS = int(os.getenv('DOCUMENT_EXPLORER_MAX_ATTEMPTS', '3'))
+DOCUMENT_EXPLORER_ANSWER_TIMEOUT = int(os.getenv('DOCUMENT_EXPLORER_ANSWER_TIMEOUT', '220'))
+SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET', '')
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

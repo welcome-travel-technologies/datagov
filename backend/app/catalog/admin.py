@@ -91,7 +91,7 @@ class OrganizationAdmin(admin.ModelAdmin):
                            'used in the sidebar, login screen and favicon.',
         }),
         ('AI Assistant', {
-            'fields': ('chatbot_model', 'chat_timeout_seconds', 'slack_bot_token',
+            'fields': ('chatbot_model', 'chat_timeout_seconds', 'slack_bot_token', 'slack_team_id',
                        'powerbi_tools_enabled', 'powerbi_live_tools_enabled',
                        'dbt_tools_enabled', 'bigquery_tools_enabled',
                        'bigquery_live_tools_enabled', 'debug_responses_enabled',

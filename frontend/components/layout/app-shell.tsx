@@ -27,6 +27,7 @@ function titleCase(s: string) {
 /** Breadcrumb segments from the pathname, preferring nav labels. */
 function crumbsFor(pathname: string | null): string[] {
   if (!pathname || pathname === "/") return ["Dashboard"];
+  if (pathname.startsWith("/knowledge/documents/")) return ["Document Explorer", "Document"];
   // Prefer the full nav label when a known section matches a prefix.
   const known = Object.keys(LABEL_BY_HREF)
     .filter((href) => pathname === href || pathname.startsWith(href + "/"))
@@ -44,13 +45,13 @@ function Topbar() {
   const crumbs = crumbsFor(pathname);
   const { name: orgName } = useBranding();
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-background px-7">
-      <div className="flex items-center gap-2 text-[13px] text-faint">
-        <span>{orgName}</span>
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-background px-4 sm:px-7">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-[13px] text-faint">
+        <span className="hidden shrink-0 sm:inline">{orgName}</span>
         {crumbs.map((crumb, i) => (
-          <span key={i} className="flex items-center gap-2">
+          <span key={i} className="flex min-w-0 items-center gap-2">
             <span className="opacity-50">/</span>
-            <span className={i === crumbs.length - 1 ? "font-semibold text-foreground" : undefined}>
+            <span className={cn("truncate", i === crumbs.length - 1 && "font-semibold text-foreground")}>
               {crumb}
             </span>
           </span>
@@ -97,7 +98,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 content pages keep overflow-y-auto so long pages scroll. */}
             <main
               className={cn(
-                "welcome-gradient min-h-0 flex-1 overflow-x-hidden px-7 py-7",
+                "welcome-gradient min-h-0 flex-1 overflow-x-hidden px-4 py-5 sm:px-7 sm:py-7",
                 fixedHeight ? "overflow-y-hidden" : "overflow-y-auto",
               )}
             >

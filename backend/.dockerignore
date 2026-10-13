@@ -24,3 +24,9 @@ staticfiles
 **/raw_fabric_definitions
 app/etl/sources/*/data
 media
+**/.env
+**/.env.*
+**/*.env
+app/private_documents
+app/media
+app/staticfiles

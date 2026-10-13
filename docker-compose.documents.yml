@@ -1,0 +1,118 @@
+# Opt-in overlay: docker compose --env-file .env.documents -f docker-compose.yml
+#   -f docker-compose.documents.yml up -d
+# Build the engine image from its separate repository; production uses an image digest.
+x-document-settings: &document-settings
+  DOCUMENT_EXPLORER_ENABLED: "True"
+  DOCUMENT_EXPLORER_API_URL: http://document-api:8788
+  DOCUMENT_EXPLORER_API_KEY: ${DOCUMENT_EXPLORER_API_KEY:?Set a private service API key}
+  DOCUMENT_EXPLORER_WORKER_TOKEN: ${DOCUMENT_EXPLORER_WORKER_TOKEN:?Set a separate worker token}
+  DOCUMENT_EXPLORER_PUBLIC_URL: ${DOCUMENT_EXPLORER_PUBLIC_URL:?Set the public DataGov URL}
+  DOCUMENT_EXPLORER_STORAGE_ROOT: /app/private_documents
+
+x-engine-settings: &engine-settings
+  DOCUMENT_EXPLORER_API_KEY: ${DOCUMENT_EXPLORER_API_KEY:?Set a private service API key}
+  DOCUMENT_EXPLORER_DATA_ROOT: /data
+  QDRANT_URL: http://document-vectors:6333
+  QDRANT_API_KEY: ${DOCUMENT_EXPLORER_QDRANT_KEY:?Set a private Qdrant key}
+  SERVING_GEMINI_API_KEY: ${DOCUMENT_EXPLORER_GEMINI_API_KEY:?Set the document model provider key}
+
+x-document-logging: &document-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  web:
+    environment: *document-settings
+    volumes:
+      - document_originals:/app/private_documents
+
+  worker:
+    environment: *document-settings
+    volumes:
+      - document_originals:/app/private_documents
+
+  document-api:
+    image: ${DOCUMENT_EXPLORER_IMAGE:?Set a pinned Document Explorer engine image}
+    environment: *engine-settings
+    expose:
+      - "8788"
+    volumes:
+      - document_artifacts:/data:ro
+    depends_on:
+      document-vectors:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: *document-logging
+
+  document-worker:
+    image: ${DOCUMENT_EXPLORER_IMAGE:?Set a pinned Document Explorer engine image}
+    command: ["python", "-m", "document_explorer.worker"]
+    environment:
+      <<: *engine-settings
+      DATAGOV_URL: http://web:8000
+      DOCUMENT_EXPLORER_WORKER_TOKEN: ${DOCUMENT_EXPLORER_WORKER_TOKEN:?Set a separate worker token}
+      DOCUMENT_EXPLORER_IMPORT_ROOT: /imports
+    volumes:
+      - document_artifacts:/data
+      # Each organization's snapshot files live under /imports/<organization_id>/.
+      # Operators populate this volume; DataGov users cannot read arbitrary host paths.
+      - document_imports:/imports:ro
+    depends_on:
+      web:
+        condition: service_started
+      document-vectors:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "document_explorer.worker", "--health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    logging: *document-logging
+
+  document-vectors:
+    image: qdrant/qdrant:v1.19.1
+    environment:
+      QDRANT__SERVICE__API_KEY: ${DOCUMENT_EXPLORER_QDRANT_KEY:?Set a private Qdrant key}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - document_vectors:/qdrant/storage
+    # No host port: only the private service network can reach Qdrant.
+    expose:
+      - "6333"
+    # The pinned image has bash, but no curl/wget. Check readyz without extra packages.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333;
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\napi-key: %s\r\nConnection: close\r\n\r\n' "$$QDRANT__SERVICE__API_KEY" >&3;
+          IFS= read -r status <&3;
+          [[ "$$status" == *" 200 "* ]]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+    logging: *document-logging
+
+volumes:
+  document_originals:
+  document_artifacts:
+  document_imports:
+  document_vectors:

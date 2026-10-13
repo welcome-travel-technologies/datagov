@@ -164,14 +164,52 @@ def deserialize_messages(data):
     return ModelMessagesTypeAdapter.validate_python(data)
 
 def _get_org_for_session(session):
-    """Return the session user's organization, or None when unavailable."""
-    membership = (
-        OrganizationMembership.objects
-        .filter(user=session.user)
-        .select_related('organization')
-        .first()
-    )
-    return membership.organization if membership else None
+    """Keep a thread pinned to its tenant and recheck membership on every turn."""
+    memberships = OrganizationMembership.objects.filter(
+        user=session.user,
+    ).select_related('organization')
+    if session.organization_id:
+        membership = memberships.filter(organization_id=session.organization_id).first()
+        return membership.organization if membership else None
+    # Legacy sessions can only be assigned when the tenant is unambiguous.
+    candidates = list(memberships[:2])
+    if len(candidates) == 1 and session.mode == 'catalog':
+        session.organization = candidates[0].organization
+        session.save(update_fields=['organization'])
+        return session.organization
+    return None
+
+
+def _chat_session_accessible(session):
+    if not session or not session.user.is_active:
+        return False
+    org = _get_org_for_session(session)
+    if session.organization_id:
+        if session.mode == 'documents':
+            from knowledge.permissions import can_read
+            return can_read(org, session.user)
+        return org is not None
+    return session.mode == 'catalog' and not OrganizationMembership.objects.filter(
+        user=session.user,
+    ).exists()
+
+
+def _serialize_chat_message(message, session):
+    content = _extract_parts_text(message.content) or message.content
+    citations = message.citations or []
+    if citations:
+        from knowledge.permissions import filter_citations
+        allowed = filter_citations(_get_org_for_session(session), session.user, citations)
+        if len(allowed) != len(citations):
+            # The answer itself may contain protected excerpts, not only its links.
+            content = 'This answer is no longer available because access to its sources has changed.'
+            citations = []
+        else:
+            citations = allowed
+    return {
+        'id': message.id, 'role': 'model' if message.role == 'assistant' else 'user',
+        'content': content, 'citations': citations,
+    }
 
 
 def _get_powerbi_client_for_org(org):
@@ -499,6 +537,7 @@ def run_chat_event_sync(session_id, user_message):
     can relay them to the frontend.
     """
     STATUS_CACHE_KEY = f'chat_status_{session_id}'
+    session = None
 
     def _on_tool_call(tool_name: str, _args: tuple, kwargs: dict) -> None:
         """Write the human-readable status for the tool currently executing."""
@@ -511,9 +550,29 @@ def run_chat_event_sync(session_id, user_message):
         # Announce immediately so the bubble shows something before any tool fires
         cache.set(STATUS_CACHE_KEY, 'Thinking...', timeout=300)
 
-        session = ChatSession.objects.filter(id=session_id).select_related('user').first()
+        session = ChatSession.objects.filter(id=session_id).select_related('user', 'organization').first()
         if not session:
             return
+        if not _chat_session_accessible(session):
+            raise PermissionDenied('Organization membership is required for this conversation.')
+
+        org = _get_org_for_session(session)
+        if session.mode == 'documents':
+            from knowledge.chat import answer_document_question
+            cache.set(STATUS_CACHE_KEY, 'Searching your documents...', timeout=300)
+            answer = answer_document_question(org, session.user, user_message, session=session)
+            # This is already the grounded final answer. Do not rewrite it with
+            # the catalog model or send evidence to another provider.
+            output = answer['answer']
+            ChatMessage.objects.create(
+                session=session, role='assistant', content=output,
+                citations=answer.get('citations', []),
+                debug_meta={'abstained': answer.get('abstained', False),
+                            'gaps': answer.get('gaps', [])},
+            )
+            # Queue administrators need job status, not another copy of
+            # restricted document content in Django-Q's generic Task.result.
+            return 'Document Explorer answer saved.'
 
         db_messages = list(session.messages.all().order_by('created_at'))
             
@@ -626,12 +685,15 @@ def run_chat_event_sync(session_id, user_message):
 
     except Exception as e:
         traceback.print_exc()
+        error_content = f"Sorry, I encountered an error: {str(e)}"
+        if session and session.mode == 'documents':
+            error_content = 'Document Explorer could not complete this request. Please try again or contact your administrator.'
         ChatMessage.objects.create(
             session_id=session_id,
             role="assistant",
-            content=f"Sorry, I encountered an error: {str(e)}"
+            content=error_content,
         )
-        return str(e)
+        return error_content if session and session.mode == 'documents' else str(e)
 
     finally:
         # Clear the status key so stale messages don't appear on the next request
@@ -650,17 +712,36 @@ def chat_api_view(request):
     try:
         user_message = request.data.get('message')
         session_id = request.data.get('session_id')
+        requested_mode = request.data.get('mode')
         
-        if not user_message:
+        if not isinstance(user_message, str) or not user_message.strip():
             return JsonResponse({'error': 'Message is required'}, status=400)
+        if requested_mode is not None and requested_mode not in ('catalog', 'documents'):
+            return JsonResponse({'error': 'Invalid chat mode'}, status=400)
             
         if session_id:
             session = ChatSession.objects.filter(id=session_id, user=user).first()
-            if not session:
+            if not _chat_session_accessible(session):
                 return JsonResponse({'error': 'Session not found'}, status=404)
+            if requested_mode is not None and requested_mode != session.mode:
+                return JsonResponse({'error': 'Start a new conversation to change chat mode.'}, status=400)
         else:
+            memberships = list(OrganizationMembership.objects.filter(
+                user=user,
+            ).select_related('organization')[:2])
+            if len(memberships) > 1:
+                return JsonResponse({'error': 'An unambiguous organization is required.'}, status=403)
+            org = memberships[0].organization if memberships else None
+            mode = requested_mode or 'catalog'
+            if mode == 'documents':
+                from django.conf import settings
+                from knowledge.permissions import can_read
+                if not getattr(settings, 'DOCUMENT_EXPLORER_ENABLED', False):
+                    return JsonResponse({'error': 'Document Explorer is not enabled.'}, status=503)
+                if not can_read(org, user):
+                    return JsonResponse({'error': 'Document Explorer access is required.'}, status=403)
             title = user_message[:40] + "..." if len(user_message) > 40 else user_message
-            session = ChatSession.objects.create(user=user, title=title)
+            session = ChatSession.objects.create(user=user, title=title, organization=org, mode=mode)
 
         # Per-org chat timeout (default 180). The Django-Q hard kill and the
         # session lock are sized just above it so the friendly Python-level
@@ -668,6 +749,12 @@ def chat_api_view(request):
         # guarantees a stuck worker can't hang indefinitely.
         org = _get_org_for_session(session)
         chat_timeout = getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS
+        if session.mode == 'documents':
+            from django.conf import settings
+            # The private document service has its own bounded HTTP budget.
+            # Do not let a shorter catalog timeout kill the worker before the
+            # service can return or its client can persist a graceful failure.
+            chat_timeout = max(chat_timeout, settings.DOCUMENT_EXPLORER_ANSWER_TIMEOUT + 10)
         hard_timeout = chat_timeout + 30
         lock_timeout = max(CHAT_SESSION_LOCK_TIMEOUT_SECONDS, hard_timeout + 60)
 
@@ -731,11 +818,11 @@ def get_chat_task_status(request, task_id):
         if not session_id:
             return JsonResponse({'status': 'not_found', 'error': 'Task not found'}, status=404)
 
-        owns_session = ChatSession.objects.filter(
+        session = ChatSession.objects.filter(
             id=session_id,
             user=request.user,
-        ).exists()
-        if not owns_session:
+        ).select_related('user', 'organization').first()
+        if not _chat_session_accessible(session):
             return JsonResponse({'status': 'forbidden', 'error': 'Forbidden'}, status=403)
 
         current_status = (
@@ -746,7 +833,9 @@ def get_chat_task_status(request, task_id):
         task = Task.objects.filter(id=task_id).first()
         if task:
             if task.success:
-                return JsonResponse({'status': 'completed', 'result': task.result})
+                latest = session.messages.filter(role='assistant').order_by('-created_at', '-id').first()
+                result = _serialize_chat_message(latest, session)['content'] if latest else ''
+                return JsonResponse({'status': 'completed', 'result': result})
             else:
                 # Even on Django-Q failure the worker wrote an error message to the DB
                 return JsonResponse({'status': 'failed', 'error': 'Task failed'})
@@ -767,32 +856,21 @@ def get_chat_task_status(request, task_id):
 @api_login_required
 @api_view(['GET'])
 def get_chat_sessions(request):
-    sessions = ChatSession.objects.filter(user=request.user).order_by('-updated_at')
-    data = [{'id': s.id, 'title': s.title, 'updated_at': s.updated_at.isoformat()} for s in sessions]
+    sessions = ChatSession.objects.filter(user=request.user).select_related('user', 'organization').order_by('-updated_at')
+    data = [{'id': s.id, 'title': s.title, 'updated_at': s.updated_at.isoformat(),
+             'mode': s.mode, 'organization_id': s.organization_id}
+            for s in sessions if _chat_session_accessible(s)]
     return Response(data)
 
 @api_login_required
 @api_view(['GET'])
 def get_chat_messages(request, session_id):
     session = ChatSession.objects.filter(id=session_id, user=request.user).first()
-    if not session:
+    if not _chat_session_accessible(session):
         return Response({'error': 'Session not found'}, status=404)
     
-    messages = session.messages.all().order_by('created_at')
-    data = []
-    
-    for m in messages:
-        content = m.content
-        # Backward compatibility: extract text if content is a legacy JSON string.
-        # Only override when the join is non-empty (else keep the stored content).
-        extracted = _extract_parts_text(content)
-        if extracted:
-            content = extracted
-        
-        # Standardize role naming for the frontend
-        role = 'model' if m.role == 'assistant' else 'user'
-        
-        data.append({'role': role, 'content': content})
+    messages = session.messages.all().order_by('created_at', 'id')
+    data = [_serialize_chat_message(message, session) for message in messages]
         
     return Response(data)
 
@@ -800,7 +878,7 @@ def get_chat_messages(request, session_id):
 @api_view(['DELETE'])
 def delete_chat_session(request, session_id):
     session = ChatSession.objects.filter(id=session_id, user=request.user).first()
-    if session:
+    if _chat_session_accessible(session):
         session.delete()
         return Response({'status': 'deleted'})
     return Response({'error': 'Session not found'}, status=404)
@@ -3623,6 +3701,7 @@ def integrations_get_all(request):
         'hook_type': h.hook_type,
         'is_active': h.is_active,
         'slack_bot_token_set': bool(h.slack_bot_token),
+        'slack_team_id': org.slack_team_id or '' if h.hook_type == 'slack' else '',
         'slack_channel': h.slack_channel or '',
         'slack_alerts_channel': h.slack_alerts_channel or '',
     } for h in hooks]
@@ -4149,6 +4228,15 @@ def integrations_save_hook(request):
     else:
         hook = IntegrationHook(organization=org, hook_type='slack')
 
+    team_id = org.slack_team_id
+    if hook.hook_type == 'slack' and 'slack_team_id' in data:
+        team_id = data['slack_team_id']
+        if not isinstance(team_id, str) or (team_id and not re.fullmatch(r'T[A-Z0-9]{2,79}', team_id)):
+            return Response({'error': 'Enter a valid Slack workspace ID (T...).'}, status=400)
+        team_id = team_id or None
+        if team_id and Organization.objects.filter(slack_team_id=team_id).exclude(pk=org.pk).exists():
+            return Response({'error': 'This Slack workspace belongs to another organization.'}, status=409)
+
     hook.name = data.get('name', hook.name)
     hook.is_active = data.get('is_active', hook.is_active)
 
@@ -4164,20 +4252,23 @@ def integrations_save_hook(request):
         # Keep Organization.slack_bot_token in sync for bot hook
         if hook.hook_type == 'slack':
             org.slack_bot_token = new_token
-            org.save(update_fields=['slack_bot_token'])
     elif data.get('disconnect'):
         hook.slack_bot_token = ''
         hook.is_active = False
         if hook.hook_type == 'slack':
             org.slack_bot_token = ''
-            org.save(update_fields=['slack_bot_token'])
+            team_id = None
     elif hook.hook_type == 'slack_alerts' and not hook.slack_bot_token:
         # For slack_alerts hook, inherit the token from the slack bot hook if not set
         slack_hook = IntegrationHook.objects.filter(organization=org, hook_type='slack').first()
         if slack_hook and slack_hook.slack_bot_token:
             hook.slack_bot_token = slack_hook.slack_bot_token
 
-    hook.save()
+    with transaction.atomic():
+        if hook.hook_type == 'slack':
+            org.slack_team_id = team_id
+            org.save(update_fields=['slack_bot_token', 'slack_team_id'])
+        hook.save()
     return Response({'status': 'saved', 'id': hook.id})
 
 

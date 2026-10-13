@@ -1,22 +1,32 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Send, Plus, Sparkles, MessageSquare, Trash2 } from "lucide-react";
+import { Send, Plus, Sparkles, MessageSquare, Trash2, FileSearch } from "lucide-react";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { DocumentCitations } from "@/components/knowledge/citations";
+import { knowledgeApi, type DocumentCitation } from "@/lib/knowledge-api";
+import { useAuth } from "@/lib/auth";
+
+type ChatMode = "catalog" | "documents";
 
 interface Msg {
   role: "user" | "model";
   content: string;
+  citations?: DocumentCitation[];
+  metadata?: Record<string, unknown>;
 }
 
 interface SessionRef {
   id: number;
   title: string;
   updated_at: string;
+  mode?: ChatMode;
 }
 
 const POLL_MS = 4000;
@@ -33,6 +43,7 @@ const PENDING_TTL_MS = 15 * 60 * 1000;
 interface PendingTask {
   taskId: string;
   sessionId: number;
+  mode?: ChatMode;
 }
 
 function persistPending(p: PendingTask) {
@@ -53,7 +64,7 @@ function readPending(): PendingTask | null {
       clearPending();
       return null;
     }
-    return { taskId: p.taskId, sessionId: p.sessionId };
+    return { taskId: p.taskId, sessionId: p.sessionId, mode: p.mode === "documents" ? "documents" : "catalog" };
   } catch {
     return null;
   }
@@ -68,6 +79,8 @@ function clearPending() {
 }
 
 export default function ChatPage() {
+  const { user } = useAuth();
+  const [mode, setMode] = useState<ChatMode>("catalog");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,6 +90,8 @@ export default function ChatPage() {
   const [activeTask, setActiveTask] = useState<PendingTask | null>(null);
   const sessionRef = useRef<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const documentStatus = useQuery({ queryKey: ["knowledge", "status", user?.id], queryFn: knowledgeApi.status, enabled: !!user, retry: false, staleTime: 60_000 });
+  const documentsAvailable = !!documentStatus.data?.enabled && !!documentStatus.data?.configured;
 
   useEffect(() => {
     if (messages.length === 0 && !status) return;
@@ -85,7 +100,10 @@ export default function ChatPage() {
 
   async function loadSessions() {
     try {
-      setSessions(await api.chat.sessions());
+      const items = await api.chat.sessions();
+      setSessions(items);
+      const active = items.find((item) => item.id === sessionRef.current);
+      if (active) setMode(active.mode || "catalog");
     } catch {
       /* non-fatal: panel just stays empty */
     }
@@ -100,6 +118,7 @@ export default function ChatPage() {
     // poller instead of showing an empty chat.
     const pending = readPending();
     if (pending) {
+      setMode(pending.mode || "catalog");
       sessionRef.current = pending.sessionId;
       setActiveId(pending.sessionId);
       setBusy(true);
@@ -107,12 +126,14 @@ export default function ChatPage() {
       api.chat
         .messages(pending.sessionId)
         .then((msgs) =>
-          setMessages(msgs.map((m) => ({ role: m.role === "user" ? "user" : "model", content: m.content }))),
+          setMessages(msgs.map((m) => ({ ...m, role: m.role === "user" ? "user" : "model" }))),
         )
         .catch(() => {
           /* leave chat as-is; the poller reloads messages on completion */
         });
       setActiveTask(pending);
+    } else if (new URLSearchParams(window.location.search).get("mode") === "documents") {
+      setMode("documents");
     }
   }, []);
 
@@ -133,7 +154,7 @@ export default function ChatPage() {
       try {
         const msgs = await api.chat.messages(sessionId);
         if (!stopped) {
-          setMessages(msgs.map((m) => ({ role: m.role === "user" ? "user" : "model", content: m.content })));
+          setMessages(msgs.map((m) => ({ ...m, role: m.role === "user" ? "user" : "model" })));
         }
       } catch {
         /* keep whatever is already on screen */
@@ -195,13 +216,13 @@ export default function ChatPage() {
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || mode === "documents" && !documentsAvailable) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setBusy(true);
     setStatus("Analyzing metadata…");
     try {
-      const res = await api.chat.send(text, sessionRef.current);
+      const res = await api.chat.send(text, sessionRef.current, mode);
       if (res.error) throw new Error(res.error);
       const sessionId = res.session_id ?? sessionRef.current;
       if (res.session_id && !sessionRef.current) {
@@ -211,8 +232,8 @@ export default function ChatPage() {
       if (res.task_id && sessionId) {
         // Hand off to the polling effect, which owns busy/status from here and
         // persists the task so it can resume after a tab/window switch.
-        persistPending({ taskId: res.task_id, sessionId });
-        setActiveTask({ taskId: res.task_id, sessionId });
+        persistPending({ taskId: res.task_id, sessionId, mode });
+        setActiveTask({ taskId: res.task_id, sessionId, mode });
       } else {
         setBusy(false);
         setStatus(null);
@@ -232,10 +253,11 @@ export default function ChatPage() {
     if (busy || id === activeId) return;
     sessionRef.current = id;
     setActiveId(id);
+    setMode(sessions.find((session) => session.id === id)?.mode || "catalog");
     setStatus(null);
     try {
       const msgs = await api.chat.messages(id);
-      setMessages(msgs.map((m) => ({ role: m.role === "user" ? "user" : "model", content: m.content })));
+      setMessages(msgs.map((m) => ({ ...m, role: m.role === "user" ? "user" : "model" })));
     } catch {
       setMessages([]);
     }
@@ -266,7 +288,7 @@ export default function ChatPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="AI Assistant"
-        description="Ask about measures, columns, reports, lineage and dependencies."
+        description={mode === "documents" ? "Ask your documents. Open every source in Document Explorer." : "Ask about measures, columns, reports, lineage and dependencies."}
         actions={
           // Fallback for screens below `lg`, where the History panel (and the
           // "New chat" button it now hosts) is hidden.
@@ -276,6 +298,15 @@ export default function ChatPage() {
         }
       />
 
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex rounded-lg border border-line bg-card p-1" role="group" aria-label="Assistant mode">
+          <Button size="sm" variant={mode === "catalog" ? "secondary" : "ghost"} aria-pressed={mode === "catalog"} disabled={busy || activeId !== null} onClick={() => setMode("catalog")}><MessageSquare /> Catalog</Button>
+          <Button size="sm" variant={mode === "documents" ? "secondary" : "ghost"} aria-pressed={mode === "documents"} disabled={busy || activeId !== null || !documentStatus.data?.enabled} onClick={() => setMode("documents")}><FileSearch /> Documents</Button>
+        </div>
+        {mode === "documents" && <Link href="/knowledge" className="text-xs text-brand hover:underline">Browse Document Explorer</Link>}
+        {activeId !== null && <p className="text-xs text-muted-foreground">Start a new chat to change the source.</p>}
+      </div>
+      {mode === "documents" && !documentsAvailable && <p role="status" className="mb-3 rounded-lg border border-line bg-panel p-3 text-xs text-muted-foreground">{documentStatus.isPending ? "Checking document search availability…" : "Document search is currently unavailable. Your administrator can check the Document Explorer service."}</p>}
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
@@ -283,8 +314,7 @@ export default function ChatPage() {
               <div className="flex items-start gap-2.5">
                 <Avatar />
                 <Bubble role="model">
-                  Hello! I&apos;m your Data Governance Assistant. I can help you search for measures, columns,
-                  reports, or dependencies.
+                  {mode === "documents" ? "What would you like to find in your company documents? I will include sources you can open to check the answer." : "Hello! I'm your Data Governance Assistant. I can help you search for measures, columns, reports, or dependencies."}
                 </Bubble>
               </div>
             )}
@@ -293,6 +323,7 @@ export default function ChatPage() {
                 {m.role === "model" ? <Avatar /> : null}
                 <Bubble role={m.role}>
                   {m.role === "model" ? <Markdown>{m.content}</Markdown> : m.content}
+                  {m.role === "model" && !!m.citations?.length && <DocumentCitations citations={m.citations} />}
                 </Bubble>
               </div>
             ))}
@@ -314,11 +345,12 @@ export default function ChatPage() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={busy}
-              placeholder="Ask about your DataGov"
+              disabled={busy || mode === "documents" && !documentsAvailable}
+              aria-label={mode === "documents" ? "Ask a question about your documents" : "Ask about your DataGov"}
+              placeholder={mode === "documents" ? "Ask a question about your documents…" : "Ask about your DataGov"}
               className="h-10 flex-1 rounded-lg border border-input bg-panel px-3 text-[13px] outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
             />
-            <Button type="submit" variant="brand" size="icon" disabled={busy || !input.trim()} aria-label="Send">
+            <Button type="submit" variant="brand" size="icon" disabled={busy || !input.trim() || mode === "documents" && !documentsAvailable} aria-label="Send">
               <Send className="h-4 w-4" />
             </Button>
           </form>
@@ -344,7 +376,7 @@ export default function ChatPage() {
                   s.id === activeId ? "bg-foreground/[0.06] text-foreground" : "text-muted-foreground hover:bg-foreground/[0.04]",
                 )}
               >
-                <MessageSquare className="h-4 w-4 shrink-0 opacity-70" />
+                {s.mode === "documents" ? <FileSearch className="h-4 w-4 shrink-0 opacity-70" /> : <MessageSquare className="h-4 w-4 shrink-0 opacity-70" />}
                 <span className="flex-1 truncate">{s.title || "Untitled chat"}</span>
                 {/* Absolutely positioned + opacity-toggled so revealing it on hover
                     never changes the row's size (a display toggle made the row grow,

@@ -4,6 +4,7 @@
 .env
 .env.*
 !.env.sample
+!.env.documents.sample
 !.env.local.example
 *.env
 credentials.txt
@@ -15,6 +16,8 @@ TODO.md
 # Proprietary / extracted data  (ETL output and cloned client repos)
 # ─────────────────────────────────────────────────────────────────────────────
 **/data/
+backend/app/private_documents/
+.env.documents
 **/raw_fabric_definitions/
 **/dbt_artifacts/
 dashboard_data.json

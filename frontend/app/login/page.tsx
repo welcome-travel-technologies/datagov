@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
 import { BrandLogo, useBranding } from "@/lib/branding";
+import { safeReturnPath } from "@/lib/safe-return-path";
 
 const GOOGLE_ERRORS: Record<string, string> = {
   cancelled: "Google sign-in was cancelled. You can try again.",
@@ -24,15 +25,7 @@ function LoginForm() {
   const { name: orgName } = useBranding();
   const router = useRouter();
   const search = useSearchParams();
-  // Browser URL parsing treats backslashes as slashes and strips some control
-  // characters, so reject those as well as external/protocol-relative URLs.
-  const rawNext = search.get("next") || "/dashboard";
-  const hasUnsafeCharacters = Array.from(rawNext).some(
-    (char) => char === "\\" || char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
-  );
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") && !hasUnsafeCharacters
-    ? rawNext
-    : "/dashboard";
+  const next = safeReturnPath(search.get("next"));
   const googleError = search.get("google_error");
   const { data: googleConfig, isPending: googleConfigPending, refetch: refreshGoogleConfig } = useQuery({
     queryKey: ["google-sign-in-config"],
