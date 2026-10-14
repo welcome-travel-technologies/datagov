@@ -1242,6 +1242,8 @@ class OrganizationMembership(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='memberships')
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='memberships')
     is_admin = models.BooleanField(default=False)
+    assistant_tool_access = models.JSONField(default=dict, blank=True)
+    assistant_tool_preferences = models.JSONField(default=dict, blank=True)
 
     class Meta:
         unique_together = ('user', 'organization')

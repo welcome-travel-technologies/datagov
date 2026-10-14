@@ -32,7 +32,12 @@ coordinated restore remain separate follow-up work; they are not claimed as deli
 - Source groups use explicit connection IDs or reviewed import labels. The
   `map_document_collections --mapping-file ... [--apply]` command validates tenant ownership
   and preserves ACLs, schedules, document/version IDs and run history.
-- Integrations contains Data & documents, uploads, collection access and processing history.
+- Integrations uses one Sources inventory for connectors, imports and uploads. Explicit
+  connection IDs join catalog connectors to their collections without merging their ACLs.
+  Source settings contain credentials, content selection and access. Workflow owns schedules,
+  run/pause/retry controls, indexing opt-in and processing history; Data & documents is only
+  the content browser. Catalog runs and asynchronous document runs retain separate statuses.
+  Settings updates omit schedule fields, preserving the registered scheduler and next due time.
   Its content endpoint is available to authorized readers; credential/settings endpoints
   remain admin-only. Old `/knowledge` bookmarks redirect there; document URLs remain stable.
 - The shared reader uses a locally bundled React-PDF/PDF.js text layer, selection, zoom,
@@ -42,6 +47,18 @@ coordinated restore remain separate follow-up work; they are not claimed as deli
 - The colleague's original checkout and engine baseline are unchanged. No new answer-model
   test or embedding-profile change is part of this migration. Original source preservation
   is not a claim of retrieval-quality parity.
+
+### Per-member assistant tools
+
+Organization Membership stores administrator access overrides separately from personal tool
+preferences. Empty overrides retain existing defaults. User Settings may only update the
+requester's preferences, never administrator grants or another member. Organization capability
+flags and existing data ACLs still apply. Disallowed providers contribute neither tools nor
+front-loaded context; execution rechecks member policy, including asynchronous functions.
+Document mode also checks this policy. Mapped Slack accounts and MCP keys use the same member
+policy; an unmapped Slack author has no callable assistant tools until linked to a DataGov user.
+This controls future assistant tool use, not visibility of previously saved chat answers or
+normal governance/catalog pages. No permissions are automatically revoked by this migration.
 
 ## Recommendation
 

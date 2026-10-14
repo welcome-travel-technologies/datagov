@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SourceManager } from "./source-manager";
 import { RunList } from "./run-list";
 import { UploadDialog } from "./upload-dialog";
+import { CollectionSchedule } from "@/components/integrations/workflow-sources";
 import type { KnowledgeRun, KnowledgeSource } from "@/lib/knowledge-api";
 
 vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: 7 } }) }));
@@ -29,26 +30,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); });
 
 describe("document source controls", () => {
-  it("creates a schedule with explicit reader access, defaulting to the current user", async () => {
+  it("creates a content source with explicit reader access and leaves scheduling to Workflow", async () => {
     mount(<SourceManager sources={[]} configured />);
-    fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add content source" }));
     expect(await screen.findByRole("checkbox", { name: /Alex/ })).toBeChecked();
     fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "Travel policy" } });
-    fireEvent.change(screen.getByLabelText("Cron expression"), { target: { value: "0 6 * * *" } });
-    fireEvent.change(screen.getByLabelText("Time zone"), { target: { value: "Europe/Athens" } });
+    expect(screen.queryByLabelText("Cron expression")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save source" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/knowledge/sources/", expect.objectContaining({ method: "POST" })));
     const write = fetchMock.mock.calls.find(([url, options]) => url === "/api/knowledge/sources/" && options?.method === "POST")!;
-    expect(JSON.parse(String(write[1]?.body))).toMatchObject({ name: "Travel policy", cron: "0 6 * * *", timezone: "Europe/Athens", access: "restricted", allowed_user_ids: [7], kind: "upload" });
+    expect(JSON.parse(String(write[1]?.body))).toMatchObject({ name: "Travel policy", cron: "", access: "restricted", allowed_user_ids: [7], kind: "upload" });
   });
 
-  it("surfaces rejected source refreshes without claiming a run was queued", async () => {
-    fetchMock.mockImplementation(async () => json({ detail: "This source already has an active run." }, 409));
-    mount(<SourceManager sources={[source]} configured />);
-    fireEvent.click(screen.getByText("Collections"));
-    fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("already has an active run");
-    expect(screen.queryByText(/Refresh queued/)).not.toBeInTheDocument();
+  it("updates the schedule without writing source access or configuration", async () => {
+    mount(<CollectionSchedule source={source} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Cron expression"), { target: { value: "0 6 * * *" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/knowledge/sources/source-1/", expect.objectContaining({ method: "PATCH" })));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ cron: "0 6 * * *", timezone: "Europe/Athens" });
   });
 
   it("offers a retry for partially failed runs and sends the run identifier", async () => {

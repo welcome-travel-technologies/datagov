@@ -292,11 +292,13 @@ def build_chatbot_agent_for_org(
     ``assistant_bigquery_dataset_ids``); ``getattr`` defaults keep this working
     before the settings migration is applied.
     """
-    powerbi_client = _get_powerbi_client_for_org(org)        # live DAX only
-    bigquery_client = _get_bigquery_client_for_org(org)      # catalog or live
-    dbt_enabled = _get_dbt_enabled_for_org(org)
-    powerbi_tools_enabled = _get_powerbi_tools_enabled_for_org(org)
-    bigquery_live_enabled = _get_bigquery_live_enabled_for_org(org)
+    from .services.assistant_tools import member_policy
+    policy = member_policy(org, user)
+    powerbi_client = _get_powerbi_client_for_org(org) if policy['powerbi'] and policy['powerbi_live'] else None
+    bigquery_client = _get_bigquery_client_for_org(org) if policy['bigquery'] else None
+    dbt_enabled = policy['dbt'] and _get_dbt_enabled_for_org(org)
+    powerbi_tools_enabled = policy['powerbi'] and _get_powerbi_tools_enabled_for_org(org)
+    bigquery_live_enabled = policy['bigquery_live'] and _get_bigquery_live_enabled_for_org(org)
     chatbot_model = _get_chatbot_model_for_org(org)
     workspace_scope = None
     # Workspace defaults help the profiler too, so resolve them whenever the
@@ -3809,19 +3811,21 @@ def integrations_save_source(request):
 
     source.save()
 
-    # Upsert schedule
-    frequency = data.get('schedule_frequency', 'manual')
-    cron_expr = data.get('schedule_cron', '')
-    schedule_enabled = data.get('schedule_enabled', False)
+    # Settings and scheduling are independent editors. Omission preserves the schedule.
+    if not source_id or any(key.startswith('schedule_') for key in data):
+        # Upsert schedule
+        frequency = data.get('schedule_frequency', 'manual')
+        cron_expr = data.get('schedule_cron', '')
+        schedule_enabled = data.get('schedule_enabled', False)
 
-    schedule, _ = SourceSchedule.objects.get_or_create(source=source)
-    schedule.frequency = frequency
-    schedule.cron_expression = cron_expr if frequency == 'custom' else _frequency_to_cron(frequency, data)
-    schedule.is_enabled = schedule_enabled
-    schedule.save()
+        schedule, _ = SourceSchedule.objects.get_or_create(source=source)
+        schedule.frequency = frequency
+        schedule.cron_expression = cron_expr if frequency == 'custom' else _frequency_to_cron(frequency, data)
+        schedule.is_enabled = schedule_enabled
+        schedule.save()
 
-    # Update Django-Q schedule
-    _update_django_q_schedule(source, schedule)
+        # Update Django-Q schedule
+        _update_django_q_schedule(source, schedule)
 
     return Response({'status': 'saved', 'id': source.id})
 
@@ -4050,33 +4054,35 @@ def integrations_save_destination(request):
 
     dest.save()
 
-    # Upsert schedule
-    frequency = data.get('schedule_frequency', 'manual')
-    cron_expr = data.get('schedule_cron', '')
-    schedule_enabled = data.get('schedule_enabled', False)
+    # Settings and scheduling are independent editors. Omission preserves the schedule.
+    if not dest_id or any(key.startswith('schedule_') for key in data):
+        # Upsert schedule
+        frequency = data.get('schedule_frequency', 'manual')
+        cron_expr = data.get('schedule_cron', '')
+        schedule_enabled = data.get('schedule_enabled', False)
 
-    schedule, _ = DestinationSchedule.objects.get_or_create(destination=dest)
-    schedule.frequency = frequency
-    schedule.cron_expression = cron_expr if frequency == 'custom' else _frequency_to_cron(frequency, data)
-    schedule.is_enabled = schedule_enabled
-    schedule.save()
+        schedule, _ = DestinationSchedule.objects.get_or_create(destination=dest)
+        schedule.frequency = frequency
+        schedule.cron_expression = cron_expr if frequency == 'custom' else _frequency_to_cron(frequency, data)
+        schedule.is_enabled = schedule_enabled
+        schedule.save()
 
-    # Update Django-Q schedule for destination
-    try:
-        from django_q.models import Schedule
-        task_name = f'dest_run_{dest.id}'
-        Schedule.objects.filter(name=task_name).delete()
-        if schedule.is_enabled and schedule.cron_expression:
-            Schedule.objects.create(
-                name=task_name,
-                func='catalog.integration_tasks.run_destination_task',
-                args=f'{dest.id}',
-                kwargs='{"triggered_by": "scheduler"}',
-                schedule_type=Schedule.CRON,
-                cron=schedule.cron_expression,
-            )
-    except Exception:
-        logger.exception('Failed to register Django-Q schedule for destination %s', dest.id)
+        # Update Django-Q schedule for destination
+        try:
+            from django_q.models import Schedule
+            task_name = f'dest_run_{dest.id}'
+            Schedule.objects.filter(name=task_name).delete()
+            if schedule.is_enabled and schedule.cron_expression:
+                Schedule.objects.create(
+                    name=task_name,
+                    func='catalog.integration_tasks.run_destination_task',
+                    args=f'{dest.id}',
+                    kwargs='{"triggered_by": "scheduler"}',
+                    schedule_type=Schedule.CRON,
+                    cron=schedule.cron_expression,
+                )
+        except Exception:
+            logger.exception('Failed to register Django-Q schedule for destination %s', dest.id)
 
     return Response({'status': 'saved', 'id': dest.id, 'bq_project_id': dest.bq_project_id})
 

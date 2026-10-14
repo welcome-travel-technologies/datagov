@@ -5,6 +5,34 @@ from catalog.models import IntegrationSource, IntegrationDestination, Integratio
 @pytest.mark.django_db
 class TestIntegrationsAPI:
 
+    @pytest.mark.parametrize('kind', ['source', 'destination'])
+    def test_settings_edits_preserve_schedule_and_schedule_edits_preserve_settings(self, client, rw_user, org, kind):
+        from catalog.models import SourceSchedule, DestinationSchedule
+        from django_q.models import Schedule
+        OrganizationMembership.objects.filter(user=rw_user, organization=org).update(is_admin=True)
+        client.force_login(rw_user)
+        if kind == 'source':
+            obj = IntegrationSource.objects.create(organization=org, name='Original', source_type='dbt', github_repo_url='https://example.test/repo', github_token='private-test-token')
+            schedule = SourceSchedule.objects.create(source=obj, frequency='daily', cron_expression='0 6 * * *', is_enabled=True)
+            url, task = '/api/integrations/sources/save/', f'source_run_{obj.pk}'
+        else:
+            obj = IntegrationDestination.objects.create(organization=org, name='Original', bq_dataset_id='existing', bq_service_account_json='{"private_key":"test-value"}')
+            schedule = DestinationSchedule.objects.create(destination=obj, frequency='daily', cron_expression='0 6 * * *', is_enabled=True)
+            url, task = '/api/integrations/destinations/save/', f'dest_run_{obj.pk}'
+        registered = Schedule.objects.create(name=task, func='test.fixture', schedule_type=Schedule.CRON, cron='0 6 * * *')
+        assert client.post(url, {'id': obj.pk, 'name': 'Renamed'}, content_type='application/json').status_code == 200
+        schedule.refresh_from_db()
+        assert (schedule.frequency, schedule.cron_expression, schedule.is_enabled) == ('daily', '0 6 * * *', True)
+        assert Schedule.objects.get(name=task).pk == registered.pk
+        assert client.post(url, {'id': obj.pk, 'schedule_frequency': 'daily', 'schedule_hour': '9', 'schedule_enabled': True}, content_type='application/json').status_code == 200
+        obj.refresh_from_db()
+        schedule.refresh_from_db()
+        assert obj.name == 'Renamed' and schedule.cron_expression == '0 9 * * *'
+        if kind == 'source':
+            assert obj.github_token == 'private-test-token' and obj.github_repo_url == 'https://example.test/repo'
+        else:
+            assert obj.bq_dataset_id == 'existing' and 'test-value' in obj.bq_service_account_json
+
     def test_integrations_get_all_unauthorized(self, client):
         # Django is API-only now: unauthenticated requests get a clean 401 JSON
         # (api_login_required) instead of a redirect to a server-rendered login.

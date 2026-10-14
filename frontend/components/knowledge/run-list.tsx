@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { useState } from "react";
 import { CircleStop, Clock3, RotateCcw } from "lucide-react";
 import { getApiErrorMessage } from "@/lib/api";
 import { knowledgeApi, type KnowledgeRun } from "@/lib/knowledge-api";
@@ -13,6 +14,7 @@ import { KnowledgeError, StatusBadge, displayDate, readableStatus } from "./shar
 export function RunList({ runs }: { runs: KnowledgeRun[] }) {
   const qc = useQueryClient();
   const { user } = useAuth();
+  const [limit, setLimit] = useState(10);
   const outputs = useQuery({ queryKey: ["knowledge", "indexing-outputs", user?.id], queryFn: knowledgeApi.indexingOutputs, retry: false, refetchInterval: 10000 });
   const action = useMutation({
     mutationFn: ({ id, cancel }: { id: string; cancel: boolean }) => cancel ? knowledgeApi.cancelRun(id) : knowledgeApi.retryRun(id),
@@ -27,7 +29,7 @@ export function RunList({ runs }: { runs: KnowledgeRun[] }) {
       <p className="mt-2 text-xs">{output.error || "Extraction saved. Indexing will start when this collection is available."}</p>
     </article>)}
     {!runs.length && <EmptyState title="No processing runs yet" hint="Upload a PDF or refresh a source to start a run." icon={<Clock3 className="h-8 w-8" />} />}
-    {runs.map((run) => {
+    {runs.slice(0, limit).map((run) => {
       const active = isActiveStatus(run.status);
       const failed = ["failed", "partial", "cancelled", "error"].includes(run.status);
       const progress = Math.max(0, Math.min(100, Number(run.progress) || 0));
@@ -44,5 +46,6 @@ export function RunList({ runs }: { runs: KnowledgeRun[] }) {
         {run.error && <p className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-err/5 p-3 text-xs text-err">{run.error}</p>}
       </article>;
     })}
+    {runs.length > limit && <Button variant="outline" onClick={() => setLimit((value) => value + 10)}>Show more runs ({runs.length - limit})</Button>}
   </div>;
 }

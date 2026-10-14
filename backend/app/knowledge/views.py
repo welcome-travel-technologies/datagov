@@ -99,11 +99,14 @@ def source_detail(request, source_id):
     org = request_org(request, manage=True)
     with transaction.atomic():
         source = get_object_or_404(KnowledgeSource.objects.select_for_update(), pk=source_id, organization=org)
+        schedule_fields = ('cron', 'timezone', 'is_active', 'refresh_paused', 'pipeline_enabled')
+        previous_schedule = tuple(getattr(source, field) for field in schedule_fields)
         serializer = SourceSerializer(source, data=request.data, partial=True, context={'org': org, 'request': request})
         serializer.is_valid(raise_exception=True)
         source = serializer.save()
-        source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active and not source.refresh_paused and not source.pipeline_enabled else None
-        source.save(update_fields=['next_run_at'])
+        if previous_schedule != tuple(getattr(source, field) for field in schedule_fields):
+            source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active and not source.refresh_paused and not source.pipeline_enabled else None
+            source.save(update_fields=['next_run_at'])
         if not source.is_active:
             source.runs.filter(status='queued').update(status='cancelled', stage='cancelled', finished_at=timezone.now())
             source.runs.filter(status='running').update(status='cancel_requested', stage='cancel_requested')

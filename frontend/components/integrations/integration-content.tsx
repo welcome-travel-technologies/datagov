@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ChevronLeft, ChevronRight, FileSearch, FileText, FolderInput, RefreshCw, Search, ShieldCheck, Upload } from "lucide-react";
@@ -9,13 +9,9 @@ import { useAuth } from "@/lib/auth";
 import { documentHref, knowledgeApi } from "@/lib/knowledge-api";
 import { useDebounced } from "@/lib/use-debounced";
 import { Button } from "@/components/ui/button";
-import { isActiveStatus } from "@/components/ui/run-status";
 import { Input } from "@/components/ui/input";
 import { EmptyState, LoadingState } from "@/components/ui/misc";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { KnowledgeError, StatusBadge, displayDate } from "@/components/knowledge/shared";
-import { SourceManager } from "@/components/knowledge/source-manager";
-import { RunList } from "@/components/knowledge/run-list";
 import { useEvidenceReader } from "@/components/knowledge/evidence-workspace";
 import { UploadDialog } from "@/components/knowledge/upload-dialog";
 
@@ -25,11 +21,11 @@ export function IntegrationContent({ initialGroup = "" }: { initialGroup?: strin
   const { user } = useAuth();
   const reader = useEvidenceReader();
   const qc = useQueryClient();
-  const [tab, setTab] = useState("documents");
   const [upload, setUpload] = useState(false);
   const [search, setSearch] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [groupId, setGroupId] = useState(initialGroup);
+  useEffect(() => { setGroupId(initialGroup || new URLSearchParams(window.location.search).get("group") || ""); }, [initialGroup]);
   const [documentStatus, setDocumentStatus] = useState("");
   const [page, setPage] = useState(1);
   const [notice, setNotice] = useState("");
@@ -42,11 +38,8 @@ export function IntegrationContent({ initialGroup = "" }: { initialGroup?: strin
   const documents = useQuery({ queryKey: ["knowledge", "documents", user?.id, filter, groupId, sourceId, documentStatus, page],
     queryFn: () => knowledgeApi.documents({ search: filter, source_id: sourceId, group: groupId, status: documentStatus, page, page_size: PAGE_SIZE }),
     enabled: authorized && enabled, retry: false, refetchInterval: 15_000, gcTime: 0, staleTime: 0, refetchOnWindowFocus: true });
-  const runs = useQuery({ queryKey: ["knowledge", "runs", user?.id], queryFn: knowledgeApi.runs, enabled: authorized && enabled && canManage,
-    refetchInterval: 10_000, retry: false });
   const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups, enabled: authorized && enabled, gcTime: 0, staleTime: 0 });
   const allSources = sources.data?.results || [];
-  const activeRuns = (runs.data?.results || []).filter((run) => isActiveStatus(run.status)).length;
   const selectClass = "h-9 min-w-0 rounded-lg border border-input bg-panel px-3 text-xs outline-none focus:ring-1 focus:ring-ring";
 
   if (user && !authorized) return <EmptyState title="Data & documents access required" hint="Ask your organization administrator for AI Assistant access." icon={<ShieldCheck className="h-9 w-9" />} />;
@@ -69,8 +62,7 @@ export function IntegrationContent({ initialGroup = "" }: { initialGroup?: strin
       </div>
       {enabled && <div className="relative mt-5 flex flex-wrap gap-x-6 gap-y-2 border-t border-line pt-4 text-xs text-muted-foreground">
         <span><strong className="font-semibold text-foreground">{documents.data?.count?.toLocaleString() ?? "—"}</strong> {filter || sourceId || documentStatus ? "matching " : ""}{documents.data?.count === 1 ? "document" : "documents"}</span>
-        <span><strong className="font-semibold text-foreground">{groups.data?.results.length ?? "—"}</strong> connections & import groups</span>
-        {canManage && <span><strong className="font-semibold text-foreground">{activeRuns}</strong> active {activeRuns === 1 ? "run" : "runs"}</span>}
+        <span><strong className="font-semibold text-foreground">{groups.data?.results.length ?? "—"}</strong> sources</span>
         <span className="inline-flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5 text-brand" /> Only documents you can access</span>
       </div>}
     </header>
@@ -81,23 +73,19 @@ export function IntegrationContent({ initialGroup = "" }: { initialGroup?: strin
     {enabled && <>
       {!status.data?.configured && <div role="status" className="rounded-xl border border-warn/25 bg-warn/5 p-4 text-[13px]">The document service is not configured yet. {canManage ? "You can prepare sources while your administrator completes setup." : "Please contact your administrator."}</div>}
       {notice && <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-brand/20 bg-brand/5 p-4 text-[13px]"><span>{notice}</span><button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setNotice("")}>Dismiss</button></div>}
-      <Tabs value={tab} onValueChange={setTab}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <TabsList><TabsTrigger value="documents">Documents</TabsTrigger>{canManage && <><TabsTrigger value="sources">Collections & access</TabsTrigger><TabsTrigger value="runs">Processing runs{activeRuns > 0 && <span className="ml-2 rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] text-brand">{activeRuns}</span>}</TabsTrigger></>}</TabsList>
-          <Button variant="ghost" size="sm" onClick={() => { void qc.invalidateQueries({ queryKey: ["knowledge"] }); }}><RefreshCw /> Refresh</Button>
-        </div>
-        <TabsContent value="documents" className="space-y-4">
+      <div className="space-y-4">
+        <div className="flex justify-end"><Button variant="ghost" size="sm" onClick={() => { void qc.invalidateQueries({ queryKey: ["knowledge"] }); }}><RefreshCw /> Refresh</Button></div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="relative min-w-48 flex-1"><span className="sr-only">Search documents</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-faint" /><Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search document titles…" className="h-9 pl-9" /></label>
-            <select aria-label="Filter by connection" value={groupId} onChange={(event) => { setGroupId(event.target.value); setSourceId(""); setPage(1); }} className={selectClass}><option value="">All connections and uploads</option>{groups.data?.results.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.document_count.toLocaleString()})</option>)}</select>
-            {canManage && <select aria-label="Filter by source" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setPage(1); }} className={selectClass}><option value="">All sources</option>{allSources.filter((source) => !groupId || groups.data?.results.find((g) => g.id === groupId)?.collections.some((c) => c.id === source.id)).map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>}
+            <select aria-label="Filter by source" value={groupId} onChange={(event) => { setGroupId(event.target.value); setSourceId(""); setPage(1); }} className={selectClass}><option value="">All sources</option>{groups.data?.results.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.document_count.toLocaleString()})</option>)}</select>
+            {canManage && <select aria-label="Filter by collection" value={sourceId} onChange={(event) => { setSourceId(event.target.value); setPage(1); }} className={selectClass}><option value="">All collections</option>{allSources.filter((source) => !groupId || groups.data?.results.find((g) => g.id === groupId)?.collections.some((c) => c.id === source.id)).map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>}
             <select aria-label="Filter by status" value={documentStatus} onChange={(event) => { setDocumentStatus(event.target.value); setPage(1); }} className={selectClass}><option value="">All statuses</option><option value="ready">Ready</option><option value="queued">Queued</option><option value="processing">Processing</option><option value="needs_ocr">Needs OCR</option><option value="failed">Failed</option></select>
           </div>
           {documents.isPending && <LoadingState label="Loading documents…" />}
           {documents.isError && <KnowledgeError message={getApiErrorMessage(documents.error, "Documents could not be loaded.")} retry={() => { void documents.refetch(); }} />}
           {documents.data && !documents.data.results.length && <div className="rounded-xl border border-line bg-card p-5"><EmptyState title={search || sourceId || documentStatus ? "No matching documents" : "Your document library starts here"}
             hint={search || sourceId || documentStatus ? "Try another title, source, or status." : canManage ? "Create a source, then upload a PDF or text file to make it searchable." : "Documents will appear here when an administrator adds a source you can access."}
-            icon={<FolderInput className="h-9 w-9" />} />{canManage && !search && !sourceId && !documentStatus && <div className="mb-4 text-center"><Button variant="outline" onClick={() => setTab("sources")}>Manage sources <ArrowRight /></Button></div>}</div>}
+            icon={<FolderInput className="h-9 w-9" />} />{canManage && !search && !sourceId && !documentStatus && <div className="mb-4 text-center"><Button variant="outline" asChild><Link href="/integrations?tab=sources">Manage sources <ArrowRight /></Link></Button></div>}</div>}
           {!!documents.data?.results.length && <div className="overflow-hidden rounded-xl border border-line bg-card shadow-card">
             <div className="hidden grid-cols-[minmax(0,1fr)_150px_120px_190px] gap-4 border-b border-line bg-panel px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-faint lg:grid"><span>Document</span><span>Source</span><span>Status</span><span>Updated</span></div>
             <div className="divide-y divide-line">{documents.data.results.map((doc) => <Link key={doc.id} href={documentHref({ document_id: doc.id, version_id: doc.current_version_id })}
@@ -109,11 +97,8 @@ export function IntegrationContent({ initialGroup = "" }: { initialGroup?: strin
             </Link>)}</div>
           </div>}
           {!!documents.data?.count && <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground"><span>{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, documents.data.count)} of {documents.data.count.toLocaleString()}</span><div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={page === 1} onClick={() => setPage((p) => p - 1)}><ChevronLeft /> Previous</Button><Button size="sm" variant="outline" disabled={page * PAGE_SIZE >= documents.data.count} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight /></Button></div></div>}
-        </TabsContent>
-        {canManage && <><TabsContent value="sources">{sources.isPending ? <LoadingState label="Loading sources…" /> : sources.isError ? <KnowledgeError message={getApiErrorMessage(sources.error, "Sources could not be loaded.")} retry={() => { void sources.refetch(); }} /> : <SourceManager sources={allSources} configured={!!status.data?.configured} />}</TabsContent>
-          <TabsContent value="runs">{runs.isPending ? <LoadingState label="Loading processing runs…" /> : runs.isError ? <KnowledgeError message={getApiErrorMessage(runs.error, "Processing runs could not be loaded.")} retry={() => { void runs.refetch(); }} /> : <RunList runs={runs.data?.results || []} />}</TabsContent></>}
-      </Tabs>
-      <UploadDialog open={upload} onOpenChange={setUpload} sources={allSources} onUploaded={(unchanged) => { setNotice(unchanged ? "This document is already in the source. No duplicate was created." : "Document uploaded. Processing is queued; follow its progress below."); if (!unchanged) setTab("runs"); }} />
+      </div>
+      <UploadDialog open={upload} onOpenChange={setUpload} sources={allSources} onUploaded={(unchanged) => { setNotice(unchanged ? "This document is already in the source. No duplicate was created." : "Document uploaded. Follow processing in Workflow."); }} />
     </>}
   </div>;
 }

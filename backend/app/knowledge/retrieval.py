@@ -12,7 +12,8 @@ REVOKED_ANSWER = 'Access to supporting documents changed. Please ask again with 
 
 
 def native_enabled(org, user):
-    return bool(getattr(settings, 'DOCUMENT_NATIVE_AI_ENABLED', False) and can_read(org, user))
+    from catalog.services.assistant_tools import member_policy
+    return bool(getattr(settings, 'DOCUMENT_NATIVE_AI_ENABLED', False) and can_read(org, user) and member_policy(org, user)['documents'])
 
 
 class EvidenceContext:
@@ -51,6 +52,8 @@ class EvidenceContext:
             evidence = list(self._citations.values())
         if not evidence:
             return answer, []
+        if not native_enabled(self.org, self.user):
+            return REVOKED_ANSWER, []
         allowed = filter_citations(self.org, self.user, evidence)
         if len(allowed) != len(evidence):
             return REVOKED_ANSWER, []

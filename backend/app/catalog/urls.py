@@ -24,6 +24,7 @@ from .slack_views import slack_events, slack_oauth, slack_alerts_oauth
 from .mcp.views import mcp_endpoint
 from .mcp.oauth import OrgAdminAuthorizationView
 from .google_auth import google_config_view, google_start_view, google_callback_view, google_link_view
+from .assistant_settings import assistant_tool_preferences
 from .spa_auth import (
     me_view, branding_view, login_view, logout_view, change_password_view, me_workspaces_view,
     org_members_view, org_members_save_view, org_members_remove_view,
@@ -58,6 +59,7 @@ urlpatterns = [
     path('branding/', branding_view, name='api-branding'),
     path('me/change-password/', change_password_view, name='api-change-password'),
     path('me/workspaces/', me_workspaces_view, name='api-me-workspaces'),
+    path('me/assistant-tools/', assistant_tool_preferences, name='api-me-assistant-tools'),
     path('auth/login/', login_view, name='api-auth-login'),
     path('auth/logout/', logout_view, name='api-auth-logout'),
     path('auth/google/config/', google_config_view, name='api-google-config'),

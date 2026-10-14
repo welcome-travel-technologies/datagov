@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBadge, isActiveStatus } from "@/components/integrations/status-badge";
 import { WorkflowDag } from "@/components/integrations/workflow-dag";
+import { WorkflowSources } from "./workflow-sources";
 import { ScheduleFields } from "@/components/integrations/schedule-fields";
 import { TestResultPanel } from "@/components/integrations/test-result-panel";
 import {
@@ -64,17 +65,21 @@ export function WorkflowPanel() {
 
   const latest = data.runs[0];
   const running = isActiveStatus(latest?.status);
+  const needsAttention = running || latest?.status === "failed";
 
   return (
     <div className="space-y-4">
+      <WorkflowSources />
+      <details className="rounded-xl border border-line bg-card" open={needsAttention || undefined}>
+      <summary className="cursor-pointer p-4 text-sm font-semibold">Catalog pipeline & schedule · {describeSchedule(data.schedule)}</summary>
       <Card>
         <CardContent className="pt-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-[14px] font-semibold">Full pipeline</h3>
+              <h3 className="text-[14px] font-semibold">Catalog workflow</h3>
               <p className="mt-0.5 text-[12.5px] text-muted-foreground">
                 Runs all active transformation sources, then visualization sources, then pushes to
-                destinations. Schedule: <span className="font-medium text-foreground">{describeSchedule(data.schedule)}</span>
+                destinations. Document indexing follows opted-in extractions asynchronously; uploads and snapshot refreshes are managed in Source flows above. Schedule: <span className="font-medium text-foreground">{describeSchedule(data.schedule)}</span>
               </p>
             </div>
             <div className="flex gap-2">
@@ -90,7 +95,9 @@ export function WorkflowPanel() {
           </div>
         </CardContent>
       </Card>
-
+      </details>
+      <details className="rounded-xl border border-line bg-card" open={needsAttention || undefined}>
+      <summary className="cursor-pointer p-4 text-sm font-semibold">Catalog run history</summary>
       <Card>
         <CardContent className="pt-5">
           <div className="mb-2 flex items-center justify-between gap-2">
@@ -120,8 +127,8 @@ export function WorkflowPanel() {
           )}
         </CardContent>
       </Card>
-
-      <RawExportCard rawExport={data.raw_export} onSaved={invalidate} />
+      </details>
+      <details className="rounded-xl border border-line bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Advanced: raw exports</summary><div className="mt-4"><RawExportCard rawExport={data.raw_export} onSaved={invalidate} /></div></details>
 
       <WorkflowScheduleDialog
         open={scheduleOpen}

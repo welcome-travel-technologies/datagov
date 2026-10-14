@@ -648,6 +648,7 @@ export interface Branding {
 // ---- org admin (members + settings) ---------------------------------------
 
 export interface OrgMember {
+  assistant_tool_access?: Record<string, boolean>;
   user_id: number;
   email: string;
   username: string;
@@ -875,6 +876,7 @@ export interface QueuesResponse {
 
 /** Body for create (no user_id) or edit (with user_id) of a member. */
 export interface MemberInput {
+  assistant_tool_access?: Record<string, boolean>;
   user_id?: number;
   email?: string;
   password?: string;

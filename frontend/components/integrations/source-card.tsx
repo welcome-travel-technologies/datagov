@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Play, FlaskConical, Settings2, ScrollText, Database, GitBranch } from "lucide-react";
+import { CalendarClock, Play, FlaskConical, Settings2, ScrollText, Database, GitBranch } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { StatusBadge, isActiveStatus } from "@/components/integrations/status-ba
 import { SourceDialog } from "@/components/integrations/source-dialog";
 import { RunsDialog } from "@/components/integrations/runs-dialog";
 import { TestResultPanel } from "@/components/integrations/test-result-panel";
+import { StepScheduleDialog } from "./step-schedule-dialog";
 import { describeSchedule } from "@/lib/integrations/schedule";
 import { fmtWhen } from "@/lib/format";
 import { api, getApiErrorMessage, type IntegrationSource } from "@/lib/api";
@@ -18,12 +19,15 @@ import { api, getApiErrorMessage, type IntegrationSource } from "@/lib/api";
 export function SourceCard({
   source,
   onChanged,
+  mode = "settings",
   onBrowseContent,
 }: {
   source: IntegrationSource;
   onChanged: () => void;
+  mode?: "settings" | "workflow";
   onBrowseContent?: () => void;
 }) {
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const isDbt = source.source_type === "dbt";
@@ -53,14 +57,14 @@ export function SourceCard({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        {mode === "workflow" && <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <span>{source.is_active ? "Active" : "Inactive"}</span>
           <Switch
             checked={source.is_active}
             disabled={toggleMut.isPending}
             onCheckedChange={(v) => toggleMut.mutate(v)}
           />
-        </div>
+        </div>}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-muted-foreground">
@@ -68,11 +72,11 @@ export function SourceCard({
           <StatusBadge status={source.last_run?.status} />
         </span>
         {source.last_run && <span>Last run {fmtWhen(source.last_run.started_at)}</span>}
-        <span>Schedule: {describeSchedule(source.schedule)}</span>
+        {mode === "workflow" && <span>Schedule: {describeSchedule(source.schedule)}</span>}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button
+        {mode === "workflow" && <Button
           size="sm"
           variant="brand"
           onClick={() => runMut.mutate()}
@@ -81,16 +85,17 @@ export function SourceCard({
         >
           {runMut.isPending || running ? <Spinner className="text-white" /> : <Play />}
           {!source.is_active ? "Activate to run" : running ? "Running…" : "Run now"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+        </Button>}
+        {mode === "settings" && <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
           {testMut.isPending ? <Spinner /> : <FlaskConical />} Test
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+        </Button>}
+        {mode === "settings" && <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
           <Settings2 /> Configure
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setLogsOpen(true)}>
+        </Button>}
+        {mode === "workflow" && <Button size="sm" variant="ghost" onClick={() => setLogsOpen(true)}>
           <ScrollText /> Logs
-        </Button>
+        </Button>}
+        {mode === "workflow" && <Button size="sm" variant="outline" onClick={() => setScheduleOpen(true)}><CalendarClock /> Schedule</Button>}
         {onBrowseContent && <Button size="sm" variant="ghost" onClick={onBrowseContent}><Database /> Data & documents</Button>}
       </div>
 
@@ -115,6 +120,7 @@ export function SourceCard({
         logsFn={() => api.integrations.sourceLogs(source.id)}
         detailFn={(logId) => api.integrations.logDetail(logId)}
       />
+      {scheduleOpen && <StepScheduleDialog step={source} kind="source" onClose={() => setScheduleOpen(false)} />}
     </Card>
   );
 }

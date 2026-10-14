@@ -21,6 +21,18 @@ def connection(setup):
         github_repo_url='https://github.com/example/project', github_branch='main', github_token='must-not-leak')
 
 
+def test_access_edits_preserve_next_scheduled_refresh(setup):
+    from datetime import timedelta
+    due = timezone.now() + timedelta(hours=1)
+    source = setup['source']
+    source.cron, source.next_run_at = '0 6 * * *', due
+    source.save()
+    response = setup['client'].patch(f'/api/knowledge/sources/{source.pk}/', {'name': 'Updated display', 'is_active': source.is_active}, format='json')
+    assert response.status_code == 200
+    source.refresh_from_db()
+    assert source.cron == '0 6 * * *' and source.next_run_at == due
+
+
 def test_grouped_content_respects_acl_and_never_exposes_credentials(setup):
     provider = connection(setup)
     setup['source'].integration = provider
