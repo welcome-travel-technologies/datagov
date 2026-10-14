@@ -74,3 +74,18 @@ def test_revoked_native_history_never_reaches_model(rw_user, org, evidence, monk
     views.run_chat_event_sync(session.id, 'Follow-up')
     assert 'PRIVATE' not in str(model.call_args)
     assert model.call_args.kwargs['message_history'] == []
+
+
+def test_registered_native_tool_keeps_telemetry_without_private_arguments():
+    from catalog.tools.agent import get_agent
+    def search_evidence(question: str) -> dict:
+        return {'citations': [], 'message': 'PRIVATE PASSAGE'}
+    records = []
+    agent = get_agent(evidence_context=SimpleNamespace(search_evidence=search_evidence), record_call=records.append)
+    tool = agent._function_toolset.tools['safe_search_evidence']
+    assert tool.function('PRIVATE QUESTION')['data']['message'] == 'PRIVATE PASSAGE'
+    assert len(records) == 1
+    assert records[0]['tool'] == 'search_evidence'
+    assert records[0]['status'] == 'success'
+    assert records[0]['args'] == {} and records[0]['kwargs'] == {}
+    assert 'PRIVATE' not in str(records)
