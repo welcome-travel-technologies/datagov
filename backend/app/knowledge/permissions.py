@@ -73,7 +73,7 @@ def filter_citations(org, user, citations):
             continue
     versions = {str(v.id): v for v in DocumentVersion.objects.filter(
         id__in=ids, document__in=visible_documents(org, user), status='ready', published_at__isnull=False,
-    ).select_related('document')}
+    ).select_related('document').defer('pages')}
     result, seen = [], set()
     for citation in citations[:100]:
         if not isinstance(citation, dict):

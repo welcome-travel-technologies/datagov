@@ -278,10 +278,20 @@ def get_agent(
     # forceful directive instead, converting a runaway loop into one more answer.
     call_guard = _make_repeat_guard()
 
+    def record_evidence_safe(entry):
+        # A later tool's arguments can quote earlier retrieved passages. Keep
+        # operational tracing for every tool, without those private arguments.
+        if record_call is not None:
+            record_call({
+                'tool': entry.get('tool'), 'duration_ms': entry.get('duration_ms'),
+                'status': entry.get('status'), 'args': {}, 'kwargs': {},
+                'error': 'Tool execution failed.' if entry.get('error') else None,
+            })
+
     for tool_func in tools:
         agent.tool_plain(make_safe_tool(
             tool_func, before_call=before_tool_call,
-            record_call=None if evidence_context is not None else record_call,
+            record_call=record_evidence_safe if evidence_context is not None else record_call,
             guard=call_guard,
         ))
 
