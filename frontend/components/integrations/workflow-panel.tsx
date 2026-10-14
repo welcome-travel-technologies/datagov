@@ -65,11 +65,12 @@ export function WorkflowPanel() {
 
   const latest = data.runs[0];
   const running = isActiveStatus(latest?.status);
+  const needsAttention = running || latest?.status === "failed";
 
   return (
     <div className="space-y-4">
       <WorkflowSources />
-      <details className="rounded-xl border border-line bg-card" open={running || undefined}>
+      <details className="rounded-xl border border-line bg-card" open={needsAttention || undefined}>
       <summary className="cursor-pointer p-4 text-sm font-semibold">Catalog pipeline & schedule · {describeSchedule(data.schedule)}</summary>
       <Card>
         <CardContent className="pt-5">
@@ -78,7 +79,7 @@ export function WorkflowPanel() {
               <h3 className="text-[14px] font-semibold">Catalog workflow</h3>
               <p className="mt-0.5 text-[12.5px] text-muted-foreground">
                 Runs all active transformation sources, then visualization sources, then pushes to
-                destinations. Document indexing follows opted-in extractions asynchronously; uploads and snapshot refreshes are managed below. Schedule: <span className="font-medium text-foreground">{describeSchedule(data.schedule)}</span>
+                destinations. Document indexing follows opted-in extractions asynchronously; uploads and snapshot refreshes are managed in Source flows above. Schedule: <span className="font-medium text-foreground">{describeSchedule(data.schedule)}</span>
               </p>
             </div>
             <div className="flex gap-2">
@@ -95,7 +96,7 @@ export function WorkflowPanel() {
         </CardContent>
       </Card>
       </details>
-      <details className="rounded-xl border border-line bg-card" open={running || undefined}>
+      <details className="rounded-xl border border-line bg-card" open={needsAttention || undefined}>
       <summary className="cursor-pointer p-4 text-sm font-semibold">Catalog run history</summary>
       <Card>
         <CardContent className="pt-5">
