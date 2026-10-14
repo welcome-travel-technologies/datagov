@@ -181,6 +181,9 @@ def run_source_task(source_id, triggered_by='manual'):
                 _cleanup_local_files(log)
                 src.extract(etl_dir=etl_dir, log=log)
                 raise_if_cancelled()
+                from knowledge.pipeline import capture_indexing_output
+                capture_indexing_output(source, run_log, etl_dir, log)
+                raise_if_cancelled()
 
                 # ── Step 3: Load into Django DB ───────────────────────────────
                 log(
@@ -206,6 +209,8 @@ def run_source_task(source_id, triggered_by='manual'):
 
     except TaskCancelled:
         run_log.status = 'failed'
+        from knowledge.pipeline import cancel_indexing_output
+        cancel_indexing_output(run_log)
         log(f'\n[{timezone.now().isoformat()}] ⏹ Source run killed by user.')
 
     except Exception as e:
@@ -582,6 +587,9 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
                         _cleanup_local_files(log)
                         src.extract(etl_dir=etl_dir, log=log)
                         raise_if_cancelled(wf, run_log)
+                        from knowledge.pipeline import capture_indexing_output
+                        capture_indexing_output(source, run_log, etl_dir, log)
+                        raise_if_cancelled(wf, run_log)
 
                         # Optional: zip + upload this source's pre-transform raw
                         # API output before the static workspace is cleaned.
@@ -624,6 +632,8 @@ def run_workflow_task(workflow_run_id, triggered_by='manual'):
 
             except WorkflowCancelled:
                 run_log.status = 'failed'
+                from knowledge.pipeline import cancel_indexing_output
+                cancel_indexing_output(run_log)
                 source_results[source.name] = 'failed'
                 log(f'\n[{timezone.now().isoformat()}] ⏹ Source {source.name} stopped because workflow was killed.')
                 raise

@@ -1,8 +1,12 @@
 from django.urls import path
 from . import views
+from . import integrations
 
 urlpatterns = [
     path('status/', views.status),
+    path('groups/', integrations.content_groups),
+    path('connections/', integrations.connections),
+    path('indexing-outputs/', integrations.indexing_outputs),
     path('sources/', views.sources),
     path('sources/<uuid:source_id>/', views.source_detail),
     path('sources/<uuid:source_id>/sync/', views.sync_source),

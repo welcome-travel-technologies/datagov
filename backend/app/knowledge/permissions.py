@@ -15,7 +15,7 @@ def enabled():
 def can_read(org, user):
     if not enabled() or org is None or not getattr(user, 'is_authenticated', False) or not user.is_active:
         return False
-    membership = OrganizationMembership.objects.filter(organization=org, user=user).first()
+    membership = OrganizationMembership.objects.filter(organization=org, user=user, user__is_active=True).first()
     return bool(membership and (membership.is_admin or user.groups.filter(name='Company').exists()))
 
 

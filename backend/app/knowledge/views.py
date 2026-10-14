@@ -21,7 +21,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .jobs import JobConflict, claim, enqueue, lease_deadline, leased_run, locked_run, reconcile_expired
-from .models import Document, DocumentVersion, IngestionRun, KnowledgeSource
+from .models import Document, DocumentVersion, ExtractionArtifact, IngestionRun, KnowledgeSource
 from .permissions import can_manage, document_url, enabled, request_org, visible_documents
 from .parsers import BoundedJSONParser
 from .scheduling import next_occurrence
@@ -49,6 +49,7 @@ def _run(run):
         'counters': run.counters, 'error': run.error, 'attempt': run.attempt,
         'created_at': run.created_at, 'started_at': run.started_at,
         'finished_at': run.finished_at, 'cancel_requested': run.status == 'cancel_requested',
+        'upstream_key': run.configuration.get('upstream_key'), 'profile': run.configuration.get('profile'),
     }
 
 
@@ -66,6 +67,7 @@ def status(request):
     org = resolve_org(request.user)
     return Response({
         'enabled': enabled(),
+        'native_ai_enabled': enabled() and settings.DOCUMENT_NATIVE_AI_ENABLED,
         'configured': bool(settings.DOCUMENT_EXPLORER_API_URL and settings.DOCUMENT_EXPLORER_API_KEY and settings.DOCUMENT_EXPLORER_WORKER_TOKEN),
         'can_manage': can_manage(org, request.user),
         'supported_sources': ['upload', 'snapshot'],
@@ -86,7 +88,7 @@ def sources(request):
     serializer.is_valid(raise_exception=True)
     with transaction.atomic():
         source = serializer.save()
-        source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active else None
+        source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active and not source.refresh_paused and not source.pipeline_enabled else None
         source.save(update_fields=['next_run_at'])
     return Response(SourceSerializer(source).data, status=201)
 
@@ -100,7 +102,7 @@ def source_detail(request, source_id):
         serializer = SourceSerializer(source, data=request.data, partial=True, context={'org': org, 'request': request})
         serializer.is_valid(raise_exception=True)
         source = serializer.save()
-        source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active else None
+        source.next_run_at = next_occurrence(source.cron, source.timezone) if source.is_active and not source.refresh_paused and not source.pipeline_enabled else None
         source.save(update_fields=['next_run_at'])
         if not source.is_active:
             source.runs.filter(status='queued').update(status='cancelled', stage='cancelled', finished_at=timezone.now())
@@ -121,7 +123,7 @@ def sync_source(request, source_id):
 @permission_classes([IsAuthenticated])
 def upload(request):
     org = request_org(request, manage=True)
-    source = get_object_or_404(KnowledgeSource, pk=_uuid(request.data.get('source_id')), organization=org, kind='upload', is_active=True)
+    source = get_object_or_404(KnowledgeSource, pk=_uuid(request.data.get('source_id')), organization=org, kind='upload', is_active=True, pipeline_enabled=False)
     incoming = request.FILES.get('file')
     if incoming is None or not incoming.size:
         raise ValidationError({'file': 'Choose a nonempty PDF or UTF-8 text file.'})
@@ -198,6 +200,16 @@ def documents(request):
         qs = qs.filter(title__icontains=request.query_params['search'][:200])
     if request.query_params.get('source_id'):
         qs = qs.filter(source_id=_uuid(request.query_params['source_id']))
+    if request.query_params.get('group'):
+        group = request.query_params['group']
+        if group.startswith('integration:') and group[12:].isdigit():
+            qs = qs.filter(source__integration_id=int(group[12:]), source__integration__organization=org)
+        elif group.startswith('import:'):
+            qs = qs.filter(source__integration__isnull=True, source__import_group=group[7:])
+        elif group in ('uploads', 'imports'):
+            qs = qs.filter(source__integration__isnull=True, source__import_group='', source__kind='upload' if group == 'uploads' else 'snapshot')
+        else:
+            raise ValidationError('Invalid content group.')
     if request.query_params.get('status'):
         qs = qs.filter(latest_status=request.query_params['status'])
     try:
@@ -327,7 +339,12 @@ def run_detail(request, run_id, action=None):
         elif action == 'retry':
             if run.status in IngestionRun.ACTIVE:
                 raise JobConflict('This run is still active.')
-            new, _ = enqueue(run.source, _idempotency(request), run.versions.filter(published_at__isnull=True))
+            retry_versions = run.versions.all() if run.configuration.get('artifact_id') else run.versions.filter(published_at__isnull=True)
+            new, _ = enqueue(run.source, _idempotency(request), retry_versions)
+            if run.configuration.get('artifact_id'):
+                new.configuration = run.configuration
+                new.save(update_fields=['configuration'])
+                ExtractionArtifact.objects.filter(pk=run.configuration['artifact_id'], source=run.source).update(run=new, cancelled_at=None)
             return Response(_run(new), status=202)
         else:
             raise ValidationError('Unknown run action.')
@@ -350,7 +367,7 @@ def _job_payload(run):
             'mime_type': v.document.mime_type, 'content_hash': v.content_hash,
             'source_type': v.document.source_type, 'source_url': v.document.source_url or '',
             'download_url': f'/api/knowledge/internal/jobs/{run.id}/documents/{v.id}/content/',
-        } for v in run.versions.select_related('document').all()]}
+        } for v in run.versions.select_related('document').defer('pages', 'chunks')]}
 
 
 @api_view(['POST'])
@@ -489,9 +506,14 @@ def complete_job(request, run_id):
             if retire_ids and len(retire_ids) / live.count() > 0.25:
                 raise JobConflict('Snapshot would remove more than 25% of published documents. Review its scope before retrying.')
         now, ready = timezone.now(), 0
+        artifact = ExtractionArtifact.objects.filter(pk=run.configuration.get('artifact_id'), source=run.source).first() if run.configuration.get('artifact_id') else None
         for version, (state, pages, chunks, error) in checked:
             publishable = Document.objects.filter(Q(deleted_at__isnull=True) | Q(deletion_reason='source_missing'), pk=version.document_id)
-            if run.source.kind == 'upload':
+            if artifact:
+                # Extraction order, not content-version creation order, governs
+                # reverts. A delayed retry cannot supersede a newer extraction.
+                publishable = publishable.filter(Q(current_artifact__isnull=True) | Q(current_artifact__created_at__lte=artifact.created_at))
+            elif run.source.kind == 'upload':
                 # A late retry of a failed older upload cannot replace a newer
                 # published upload. Snapshots can intentionally revert content.
                 publishable = publishable.exclude(current_version__created_at__gt=version.created_at)
@@ -501,7 +523,7 @@ def complete_job(request, run_id):
                 if state != 'ready' or version.pages != pages or version.chunks != chunks:
                     raise JobConflict('Published document versions are immutable.')
                 ready += 1
-                publishable.update(current_version=version, deleted_at=None, deletion_reason='', updated_at=now)
+                publishable.update(current_version=version, current_artifact=artifact, deleted_at=None, deletion_reason='', updated_at=now)
                 continue
             version.status, version.pages, version.chunks, version.error = state, pages, chunks, error
             version.index_generation = generation
@@ -510,7 +532,7 @@ def complete_job(request, run_id):
                 ready += 1
             version.save()
             if state == 'ready':
-                publishable.update(current_version=version, deleted_at=None, deletion_reason='', updated_at=now)
+                publishable.update(current_version=version, current_artifact=artifact, deleted_at=None, deletion_reason='', updated_at=now)
         run.status = 'succeeded' if ready == len(checked) else 'partial' if ready else 'failed'
         run.stage, run.progress, run.finished_at = run.status, 100, now
         run.result_hash = payload_hash

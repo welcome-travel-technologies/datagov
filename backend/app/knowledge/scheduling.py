@@ -20,11 +20,13 @@ def tick():
     if not enabled():
         return 0
     reconcile_expired()
+    from .pipeline import dispatch_pending
+    dispatch_pending()
     now, count = timezone.now(), 0
-    for source_id in KnowledgeSource.objects.filter(is_active=True, next_run_at__lte=now).exclude(cron='').values_list('id', flat=True):
+    for source_id in KnowledgeSource.objects.filter(is_active=True, refresh_paused=False, pipeline_enabled=False, next_run_at__lte=now).exclude(cron='').values_list('id', flat=True):
         with transaction.atomic():
             source = KnowledgeSource.objects.select_for_update().get(id=source_id)
-            if not source.is_active or not source.next_run_at or source.next_run_at > now:
+            if not source.is_active or source.refresh_paused or source.pipeline_enabled or not source.next_run_at or source.next_run_at > now:
                 continue
             key = f'schedule:{source.next_run_at.isoformat()}'
             try:

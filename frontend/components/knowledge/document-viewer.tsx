@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, ChevronLeft, ChevronRight, Copy, FileText, LockKeyhole, Upload } from "lucide-react";
@@ -12,6 +13,9 @@ import { KnowledgeError, StatusBadge, displayDate } from "./shared";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { UploadDialog } from "./upload-dialog";
+import { HighlightedText } from "./highlighted-text";
+
+const PdfReader = dynamic(() => import("./pdf-reader"), { ssr: false, loading: () => <LoadingState label="Loading PDF viewer…" /> });
 
 export interface DocumentViewerProps {
   documentId: string;
@@ -70,7 +74,8 @@ function DocumentBody({ document: doc, compact, initialPage, chunkId, onVersion 
   const originalSource = safeSourceUrl(doc.source_url);
   const pageText = doc.pages.find((p) => p.page === page)?.text;
   const pageChunks = doc.chunks.filter((chunk) => chunk.page === page || (chunk.page === null && page === 1));
-  const maxPage = pageNumbers[pageNumbers.length - 1];
+  const [pdfPages, setPdfPages] = useState(0);
+  const maxPage = pdfPages || pageNumbers[pageNumbers.length - 1];
   const versions = doc.versions.filter((v) => ["ready", "published", "completed", "succeeded"].includes(v.status) || v.id === versionId);
 
   async function copyLink() {
@@ -134,18 +139,17 @@ function DocumentBody({ document: doc, compact, initialPage, chunkId, onVersion 
             <label className="flex items-center gap-2 text-xs">Page
               <input aria-label="Page number" type="number" min={1} max={maxPage} value={page}
                 className="w-16 rounded-md border border-input bg-card px-2 py-1.5 text-center"
-                onChange={(event) => { const next = Number(event.target.value); if (Number.isInteger(next) && next > 0) setPage(next); }} />
+                onChange={(event) => { const next = Number(event.target.value); if (Number.isInteger(next) && next > 0 && (!maxPage || next <= maxPage)) setPage(next); }} />
               {maxPage ? <span className="text-muted-foreground">of {maxPage}</span> : null}
             </label>
             <Button size="icon" variant="ghost" aria-label="Next page" disabled={!isPdf && !maxPage || !!maxPage && page >= maxPage} onClick={() => setPage((p) => p + 1)}><ChevronRight /></Button>
           </div>
         </div>
         {view === "pdf" && isPdf ? <div>
-          <iframe key={`${versionId}-${page}`} title={`${doc.title} — page ${page}`} src={`${contentHref}#page=${page}&view=FitH`}
-            className={cn("w-full bg-panel2", compact ? "h-[58vh] min-h-[320px]" : "h-[72vh] min-h-[420px]")} />
+          <PdfReader key={`${versionId}-${page}`} url={contentHref} page={page} passage={citedChunk?.page === page ? citedChunk.text : undefined} onPages={setPdfPages} />
           <p className="border-t border-line px-4 py-2 text-xs text-muted-foreground">If the preview is unavailable, use Open PDF or switch to Extracted text.</p>
         </div> : <div className={cn("p-5 sm:p-8", compact ? "min-h-[280px]" : "min-h-[420px]")}>
-          {pageText ? <p className="mx-auto max-w-3xl whitespace-pre-wrap break-words text-[14px] leading-7">{pageText}</p>
+          {pageText ? <HighlightedText text={pageText} passage={citedChunk?.page === page ? citedChunk.text : undefined} />
             : pageChunks.length ? <div className="mx-auto max-w-3xl space-y-5">{pageChunks.map((chunk) => <section key={chunk.id} className={cn(chunk.id === chunkId && "rounded-lg bg-brand/10 p-3")}>
               {chunk.section && <h3 className="mb-2 font-medium">{chunk.section}</h3>}
               <p className="whitespace-pre-wrap break-words text-[14px] leading-7">{chunk.text}</p>

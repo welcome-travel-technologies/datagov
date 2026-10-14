@@ -5,23 +5,42 @@ from croniter import croniter
 from django.contrib.auth.models import Group
 from rest_framework import serializers
 
-from catalog.models import OrganizationMembership
+from catalog.models import IntegrationSource, OrganizationMembership
 from .models import KnowledgeSource
 
 
 class SourceSerializer(serializers.ModelSerializer):
+    integration_id = serializers.IntegerField(min_value=1, allow_null=True, required=False)
     allowed_user_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
     allowed_group_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
 
     class Meta:
         model = KnowledgeSource
-        fields = ['id', 'name', 'kind', 'config', 'is_active', 'access', 'allowed_user_ids', 'allowed_group_ids', 'cron', 'timezone', 'last_run_at', 'next_run_at']
+        fields = ['id', 'name', 'kind', 'config', 'is_active', 'access', 'allowed_user_ids', 'allowed_group_ids', 'cron', 'timezone', 'last_run_at', 'next_run_at', 'integration_id', 'import_group', 'refresh_paused', 'pipeline_enabled']
         read_only_fields = ['id', 'last_run_at', 'next_run_at']
         validators = []
 
     def validate(self, attrs):
         org = self.context['org']
         kind = attrs.get('kind', self.instance.kind if self.instance else 'upload')
+        integration_id = attrs.get('integration_id', self.instance.integration_id if self.instance else None)
+        integration = IntegrationSource.objects.filter(pk=integration_id, organization=org).first() if integration_id else None
+        if integration_id and integration is None:
+            raise serializers.ValidationError({'integration_id': 'Choose a connection in this organization.'})
+        pipeline = attrs.get('pipeline_enabled', self.instance.pipeline_enabled if self.instance else False)
+        if pipeline:
+            from etl.sources.registry import SOURCE_REGISTRY
+            if kind != 'upload' or not integration or integration.source_type not in SOURCE_REGISTRY:
+                raise serializers.ValidationError({'pipeline_enabled': 'Indexing requires an upload collection linked to a supported connection.'})
+            if KnowledgeSource.objects.filter(integration_id=integration_id, pipeline_enabled=True).exclude(pk=self.instance.pk if self.instance else None).exists():
+                raise serializers.ValidationError({'pipeline_enabled': 'This connection already has an indexing collection.'})
+            # The existing integration scheduler owns refresh. Never add a second clock.
+            attrs['cron'] = ''
+        if self.instance and self.instance.documents.exists() and integration_id != self.instance.integration_id:
+            # Linking an old import adds provenance; moving established ownership
+            # to another connection requires a reviewed migration.
+            if self.instance.integration_id is not None:
+                raise serializers.ValidationError({'integration_id': 'A populated collection cannot be moved to another connection.'})
         if self.instance and kind != self.instance.kind:
             raise serializers.ValidationError({'kind': 'Create a new source to change its kind.'})
         name = attrs.get('name', self.instance.name if self.instance else '')

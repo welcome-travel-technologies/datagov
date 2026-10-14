@@ -1,7 +1,6 @@
 import {
   LayoutDashboard,
   BookOpen,
-  Files,
   ClipboardCheck,
   Trophy,
   MessageSquare,
@@ -29,6 +28,7 @@ export type NavItem = {
   perm?: keyof MePerms;
   /** When true, `is_admin` also unlocks the item. */
   orAdmin?: boolean;
+  orPerm?: keyof MePerms;
 };
 
 export type NavGroup = { label: string; items: NavItem[] };
@@ -49,7 +49,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/tasks", label: "Task Manager", icon: ClipboardCheck, perm: "can_view_tasks" },
       { href: "/champions", label: "Data Champions", icon: Trophy, perm: "can_view_champions" },
       { href: "/chat", label: "AI Assistant", icon: MessageSquare, perm: "can_view_chat" },
-      { href: "/knowledge", label: "Document Explorer", icon: Files, perm: "can_view_chat" },
       { href: "/powerbi/catalog", label: "PowerBI Catalog", icon: Database, perm: "can_view_powerbi", orAdmin: true },
       { href: "/powerbi/reports", label: "Report Health & Usage", icon: BarChart3, perm: "can_view_reports" },
       { href: "/powerbi/metrics-map", label: "Metrics Map", icon: Sigma, perm: "can_view_powerbi", orAdmin: true },
@@ -72,7 +71,7 @@ export const FOOTER_ITEMS: NavItem[] = [
   { href: "/settings/user", label: "User Settings", icon: Settings },
   { href: "/settings/org", label: "Org Settings", icon: Building2, perm: "can_view_org_settings", orAdmin: true },
   { href: "/settings/queues", label: "Queues", icon: ListChecks, perm: "can_view_org_settings", orAdmin: true },
-  { href: "/integrations", label: "Integrations", icon: Zap, perm: "can_view_integrations", orAdmin: true },
+  { href: "/integrations", label: "Integrations", icon: Zap, perm: "can_view_integrations", orPerm: "can_view_chat", orAdmin: true },
 ];
 
 /** Whether a nav item is visible for a given permission set. Missing perms
@@ -81,6 +80,7 @@ export function canSee(item: NavItem, perms: MePerms | undefined): boolean {
   if (!item.perm) return true;
   if (!perms) return true;
   if (item.orAdmin && perms.is_admin) return true;
+  if (item.orPerm && perms[item.orPerm]) return true;
   return perms[item.perm] !== false;
 }
 

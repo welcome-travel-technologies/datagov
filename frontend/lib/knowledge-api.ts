@@ -25,6 +25,15 @@ export interface KnowledgeSource {
   access: "organization" | "restricted";
   allowed_user_ids: number[];
   allowed_group_ids: number[];
+  integration_id?: number | null;
+  import_group?: string;
+  refresh_paused?: boolean;
+  pipeline_enabled?: boolean;
+}
+
+export interface ContentGroup {
+  id: string; name: string; provider: string; document_count: number;
+  collections: { id: string; name: string; kind: string; document_count: number; is_active: boolean; refresh_paused: boolean; pipeline_enabled: boolean; last_run_at: string | null }[];
 }
 
 export interface KnowledgeDocument {
@@ -64,9 +73,11 @@ export interface KnowledgeRun {
   started_at: string | null;
   finished_at: string | null;
   cancel_requested: boolean;
+  upstream_key?: string | null;
+  profile?: string | null;
 }
 
-export type SourceInput = Pick<KnowledgeSource, "name" | "kind" | "is_active" | "cron" | "timezone" | "config" | "access" | "allowed_user_ids" | "allowed_group_ids">;
+export type SourceInput = Pick<KnowledgeSource, "name" | "kind" | "is_active" | "cron" | "timezone" | "config" | "access" | "allowed_user_ids" | "allowed_group_ids" | "integration_id" | "import_group" | "refresh_paused" | "pipeline_enabled">;
 
 function query(values: Record<string, string | number | undefined>) {
   const params = new URLSearchParams();
@@ -98,12 +109,15 @@ export function safeSourceUrl(value: string | null | undefined): string | null {
 }
 
 export const knowledgeApi = {
-  status: () => request<{ enabled: boolean; configured: boolean; can_manage: boolean }>("/knowledge/status/"),
+  status: () => request<{ enabled: boolean; configured: boolean; can_manage: boolean; native_ai_enabled?: boolean }>("/knowledge/status/"),
+  groups: () => request<{ results: ContentGroup[]; can_manage: boolean }>("/knowledge/groups/"),
+  connections: () => request<{ results: { id: number; name: string; provider: string; capabilities: string[] }[] }>("/knowledge/connections/"),
+  indexingOutputs: () => request<{ results: { id: string; source_name: string; upstream_key: string; profile: string; status: string; error: string; created_at: string; run_id: string | null }[] }>("/knowledge/indexing-outputs/"),
   sources: () => request<{ results: KnowledgeSource[] }>("/knowledge/sources/"),
   createSource: (body: SourceInput) => request<KnowledgeSource>("/knowledge/sources/", { method: "POST", body: JSON.stringify(body) }),
   updateSource: (id: string, body: Partial<SourceInput>) => request<KnowledgeSource>(`/knowledge/sources/${encodeURIComponent(id)}/`, { method: "PATCH", body: JSON.stringify(body) }),
   syncSource: (id: string) => request<KnowledgeRun>(`/knowledge/sources/${encodeURIComponent(id)}/sync/`, { method: "POST", body: "{}" }),
-  documents: (params: { search?: string; page?: number; page_size?: number; source_id?: string; status?: string } = {}) =>
+  documents: (params: { search?: string; page?: number; page_size?: number; source_id?: string; status?: string; group?: string } = {}) =>
     request<{ count: number; results: KnowledgeDocument[] }>(`/knowledge/documents/${query(params)}`),
   document: (id: string, version?: string | null) => request<DocumentDetail>(`/knowledge/documents/${encodeURIComponent(id)}/${query({ version: version || undefined })}`),
   upload: (file: File, sourceId: string, documentId?: string) => {

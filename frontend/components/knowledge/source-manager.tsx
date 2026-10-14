@@ -16,6 +16,8 @@ import { KnowledgeError, displayDate } from "./shared";
 const selectClass = "h-9 w-full rounded-lg border border-input bg-panel px-3 text-[13px] outline-none focus:ring-1 focus:ring-ring";
 
 export function SourceManager({ sources, configured }: { sources: KnowledgeSource[]; configured: boolean }) {
+  const { user } = useAuth();
+  const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups });
   const qc = useQueryClient();
   const [editing, setEditing] = useState<KnowledgeSource | "new" | null>(null);
   const [notice, setNotice] = useState("");
@@ -27,8 +29,8 @@ export function SourceManager({ sources, configured }: { sources: KnowledgeSourc
     },
   });
   const toggle = useMutation({
-    mutationFn: (source: KnowledgeSource) => knowledgeApi.updateSource(source.id, { is_active: !source.is_active }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["knowledge", "sources"] }); },
+    mutationFn: (source: KnowledgeSource) => knowledgeApi.updateSource(source.id, { refresh_paused: !source.refresh_paused }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["knowledge"] }); },
   });
 
   return <div className="space-y-4">
@@ -39,12 +41,14 @@ export function SourceManager({ sources, configured }: { sources: KnowledgeSourc
     {notice && <p role="status" className="rounded-lg border border-brand/20 bg-brand/5 px-4 py-3 text-[13px]">{notice}</p>}
     {(sync.isError || toggle.isError) && <KnowledgeError message={getApiErrorMessage(sync.error || toggle.error, "The source could not be updated.")} />}
     {!sources.length && <EmptyState title="Create your first source" hint="Start with a PDF upload collection, or import a prepared document snapshot." icon={<FolderInput className="h-8 w-8" />} />}
-    <div className="grid gap-4 xl:grid-cols-2">
-      {sources.map((source) => <article key={source.id} className="rounded-xl border border-line bg-card p-5 shadow-card">
+    {(groups.data?.results || [{ id: "all", name: "Collections", document_count: 0, collections: sources }]).map((group) => <details key={group.id} className="rounded-xl border border-line bg-card">
+      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">{group.name}<span className="ml-3 text-xs font-normal text-muted-foreground">{group.collections.length} collections · {group.document_count.toLocaleString()} documents</span></summary>
+      <div className="grid gap-3 border-t border-line p-3 xl:grid-cols-2">
+      {sources.filter((source) => group.collections.some((c) => c.id === source.id)).map((source) => <article key={source.id} className="rounded-xl border border-line bg-card p-5">
         <div className="flex items-start gap-3">
           <div className="rounded-lg bg-brand/10 p-2.5 text-brand">{source.kind === "upload" ? <Upload className="h-5 w-5" /> : <FolderInput className="h-5 w-5" />}</div>
-          <div className="min-w-0 flex-1"><h3 className="truncate text-[14px] font-semibold">{source.name}</h3><p className="mt-1 text-xs text-muted-foreground">{source.kind === "upload" ? "PDF upload collection" : "Snapshot import"}</p></div>
-          <Badge variant={source.is_active ? "success" : "default"} dot>{source.is_active ? "Active" : "Paused"}</Badge>
+          <div className="min-w-0 flex-1"><h3 className="truncate text-[14px] font-semibold">{source.name}</h3><p className="mt-1 text-xs text-muted-foreground">{source.pipeline_enabled ? "Integration indexing output" : source.kind === "upload" ? "Uploaded documents" : "Imported snapshot"}</p></div>
+          <Badge variant={source.is_active && !source.refresh_paused ? "success" : "default"} dot>{!source.is_active ? "Access disabled" : source.refresh_paused ? "Refresh paused" : "Active"}</Badge>
         </div>
         <dl className="my-4 space-y-2 text-xs text-muted-foreground">
           <div className="flex items-start gap-2"><CalendarClock className="h-3.5 w-3.5 shrink-0" /><dt className="sr-only">Schedule</dt><dd>{source.cron ? <><span className="font-mono text-foreground">{source.cron}</span> · {source.timezone}</> : "Manual refresh"}</dd></div>
@@ -53,11 +57,11 @@ export function SourceManager({ sources, configured }: { sources: KnowledgeSourc
         </dl>
         <div className="flex flex-wrap gap-2 border-t border-line pt-3">
           <Button variant="outline" size="sm" onClick={() => setEditing(source)}><Pencil /> Settings</Button>
-          <Button variant="outline" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(source)}>{source.is_active ? "Pause" : "Resume"}</Button>
-          <Button variant="outline" size="sm" disabled={!configured || !source.is_active || sync.isPending} onClick={() => { setNotice(""); sync.mutate(source.id); }}><Play /> Refresh now</Button>
+          <Button variant="outline" size="sm" disabled={!source.is_active || toggle.isPending} onClick={() => toggle.mutate(source)}>{source.refresh_paused ? "Resume refresh" : "Pause refresh"}</Button>
+          <Button variant="outline" size="sm" disabled={!configured || !source.is_active || source.refresh_paused || sync.isPending} onClick={() => { setNotice(""); sync.mutate(source.id); }}><Play /> {source.pipeline_enabled ? "Retry pending documents" : "Refresh now"}</Button>
         </div>
       </article>)}
-    </div>
+    </div></details>)}
     <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
       <DialogContent><DialogHeader><DialogTitle>{editing === "new" ? "Add document source" : "Source settings"}</DialogTitle>
         <DialogDescription>Choose who can find these documents and when they refresh.</DialogDescription></DialogHeader>
@@ -73,6 +77,10 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
   const [name, setName] = useState(source?.name || "");
   const [kind, setKind] = useState<KnowledgeSource["kind"]>(source?.kind || "upload");
   const [path, setPath] = useState(String(source?.config?.path || ""));
+  const [integrationId, setIntegrationId] = useState(source?.integration_id ? String(source.integration_id) : "");
+  const [importGroup, setImportGroup] = useState(source?.import_group || "");
+  const [pipeline, setPipeline] = useState(source?.pipeline_enabled || false);
+  const connections = useQuery({ queryKey: ["knowledge", "connections", user?.id], queryFn: knowledgeApi.connections });
   const [cron, setCron] = useState(source?.cron || "");
   const [timezone, setTimezone] = useState(source?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const [active, setActive] = useState(source?.is_active ?? true);
@@ -89,6 +97,7 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
     event.preventDefault();
     save.mutate({ name: name.trim(), kind, config: kind === "snapshot" ? { ...source?.config, path: path.trim() } : source?.config || {},
       cron: cron.trim(), timezone: timezone.trim(), is_active: active, access,
+      integration_id: integrationId ? Number(integrationId) : null, import_group: importGroup.trim(), pipeline_enabled: pipeline,
       allowed_user_ids: access === "restricted" ? userIds : [], allowed_group_ids: access === "restricted" ? groupIds : [] });
   }
   function toggleId(list: number[], id: number) { return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]; }
@@ -97,9 +106,17 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
     <label className="block space-y-1.5 text-[13px] font-medium">Source name<Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Company handbook" maxLength={200} required /></label>
     <label className="block space-y-1.5 text-[13px] font-medium">Source type
       <select value={kind} onChange={(e) => setKind(e.target.value as KnowledgeSource["kind"])} disabled={!!source} className={selectClass}>
-        <option value="upload">PDF upload collection</option><option value="snapshot">Snapshot import</option>
+        <option value="upload">Uploaded documents / integration output</option><option value="snapshot">Snapshot import</option>
       </select>
     </label>
+    <label className="block space-y-1.5 text-[13px] font-medium">Connection
+      <select className={selectClass} value={integrationId} onChange={(e) => { setIntegrationId(e.target.value); setPipeline(false); }}>
+        <option value="">Independent collection</option>
+        {connections.data?.results.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
+      </select>
+    </label>
+    {!integrationId && <label className="block space-y-1.5 text-[13px] font-medium">Import group<Input value={importGroup} onChange={(e) => setImportGroup(e.target.value)} placeholder="e.g. Confluence — company knowledge" maxLength={200} /></label>}
+    {integrationId && kind === "upload" && <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={pipeline} onChange={(e) => setPipeline(e.target.checked)} className="accent-brand" />Index definitions from this connection after extraction. Refresh follows its existing integration schedule.</label>}
     {kind === "snapshot" && <label className="block space-y-1.5 text-[13px] font-medium">Snapshot manifest path
       <Input required value={path} onChange={(e) => setPath(e.target.value)} placeholder="company/manifest.json" />
       <span className="block text-xs font-normal text-muted-foreground">A prepared manifest inside your organization’s import folder, managed by your administrator. Enter its path relative to that folder.</span>
@@ -107,11 +124,11 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
     <div className="rounded-lg border border-line bg-panel/50 p-3">
       <h3 className="mb-3 text-[13px] font-semibold">Refresh schedule</h3>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block space-y-1.5 text-xs">Cron expression<Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="Manual only" /></label>
+        <label className="block space-y-1.5 text-xs">Cron expression<Input disabled={pipeline} value={pipeline ? "" : cron} onChange={(e) => setCron(e.target.value)} placeholder={pipeline ? "Managed by connection" : "Manual only"} /></label>
         <label className="block space-y-1.5 text-xs">Time zone<Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Europe/Athens" required /></label>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">Leave blank for manual refresh. For daily at 06:00, use <code>0 6 * * *</code>. Missed refreshes are combined into one run.</p>
-      <label className="mt-3 flex items-center gap-2 text-[13px]"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="accent-brand" /> Source active</label>
+      <label className="mt-3 flex items-center gap-2 text-[13px]"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="accent-brand" /> Content access enabled</label>
     </div>
     <label className="block space-y-1.5 text-[13px] font-medium">Document access
       <select value={access} onChange={(e) => setAccess(e.target.value as KnowledgeSource["access"])} className={selectClass}>
