@@ -196,8 +196,10 @@ def process_slack_event(event_data, bot_token):
     # per-integration schema/run tools (PowerBI live values via
     # get_pb_measure_schema → powerbi_run_dax_query). The Slack
     # thread is the memory — prior turns arrive via ``formatted_history``.
+    person = DataPerson.objects.filter(organization=org, slack_user_id=event_data.get('user', ''), user__is_active=True).exclude(slack_user_id='').select_related('user').first()
+    from django.contrib.auth.models import AnonymousUser
     agent = build_chatbot_agent_for_org(
-        org,
+        org, user=person.user if person else AnonymousUser(),
         record_call=debug_log.append,
         surface='slack',
         chat_session=None,

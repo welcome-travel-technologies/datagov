@@ -196,6 +196,14 @@ def get_agent(
     #     only when the live tier is on (tools_client set only then).
     # The ``powerbi_client is not None`` clause keeps older callers that pass
     # only a client working.
+    from catalog.services.assistant_tools import member_policy, tool_allowed, bind_tool_policy
+    policy = member_policy(org, user)
+    powerbi_tools_enabled = powerbi_tools_enabled and policy['powerbi']
+    powerbi_client = powerbi_client if policy['powerbi'] and policy['powerbi_live'] else None
+    dbt_enabled = dbt_enabled and policy['dbt']
+    bigquery_client = bigquery_client if policy['bigquery'] else None
+    bigquery_live_enabled = bigquery_live_enabled and policy['bigquery_live']
+    evidence_context = evidence_context if policy['documents'] else None
     active = []
     if powerbi_tools_enabled or powerbi_client is not None:
         active.append(('powerbi', None, powerbi_client, pb_workspace_ids))
@@ -289,8 +297,10 @@ def get_agent(
             })
 
     for tool_func in tools:
+        if not tool_allowed(org, user, tool_func.__name__):
+            continue
         agent.tool_plain(make_safe_tool(
-            tool_func, before_call=before_tool_call,
+            bind_tool_policy(tool_func, org, user), before_call=before_tool_call,
             record_call=record_evidence_safe if evidence_context is not None else record_call,
             guard=call_guard,
         ))

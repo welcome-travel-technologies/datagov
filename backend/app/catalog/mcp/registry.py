@@ -72,9 +72,11 @@ def _build_overview_tool(org, user, bigquery_client):
 
         pb_scope = getattr(org, 'assistant_powerbi_workspace_ids', None) or None
         bq_scope = getattr(org, 'assistant_bigquery_dataset_ids', None) or None
+        from ..services.assistant_tools import member_policy
+        policy = member_policy(org, user)
         sections = []
 
-        if getattr(org, 'powerbi_tools_enabled', True):
+        if policy['powerbi'] and getattr(org, 'powerbi_tools_enabled', True):
             try:
                 sections.append(PROVIDERS['powerbi'].build_context(
                     org, client=None, scope_ids=pb_scope))
@@ -90,13 +92,13 @@ def _build_overview_tool(org, user, bigquery_client):
                     sections.append(_workspace_scope_block(scope))
             except Exception:
                 pass
-        if getattr(org, 'dbt_tools_enabled', False):
+        if policy['dbt'] and getattr(org, 'dbt_tools_enabled', False):
             try:
                 sections.append(PROVIDERS['dbt'].build_context(
                     org, client=None, scope_ids=None))
             except Exception:
                 pass
-        if getattr(org, 'bigquery_tools_enabled', False) and bigquery_client is not None:
+        if policy['bigquery'] and getattr(org, 'bigquery_tools_enabled', False) and bigquery_client is not None:
             try:
                 sections.append(PROVIDERS['bigquery'].build_context(
                     org, client=bigquery_client, scope_ids=bq_scope))
@@ -124,12 +126,14 @@ def build_tool_specs(key) -> list:
     )
 
     org, user = key.organization, key.user
+    from ..services.assistant_tools import member_policy, tool_allowed, bind_tool_policy
+    policy = member_policy(org, user)
     scopes = set(key.scopes or [])
     specs: list = []
 
-    powerbi_enabled = _get_powerbi_tools_enabled_for_org(org)
-    dbt_enabled = _get_dbt_enabled_for_org(org)
-    bigquery_client = _get_bigquery_client_for_org(org)
+    powerbi_enabled = policy['powerbi'] and _get_powerbi_tools_enabled_for_org(org)
+    dbt_enabled = policy['dbt'] and _get_dbt_enabled_for_org(org)
+    bigquery_client = _get_bigquery_client_for_org(org) if policy['bigquery'] else None
 
     if auth.SCOPE_CATALOG_READ in scopes:
         from ..tools.analytics import get_pb_usage_analytics
@@ -168,4 +172,5 @@ def build_tool_specs(key) -> list:
                 if tool.__name__ == 'bigquery_execute_query':
                     specs.append(_spec_for(tool))
 
-    return specs
+    return [_spec_for(spec.func if spec.name == 'get_catalog_overview' else bind_tool_policy(spec.func, org, user), name=spec.name)
+            for spec in specs if (spec.name == 'get_catalog_overview' and any(policy[k] for k in ('powerbi', 'dbt', 'bigquery'))) or tool_allowed(org, user, spec.name)]

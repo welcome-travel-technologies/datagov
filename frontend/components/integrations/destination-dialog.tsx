@@ -14,12 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { ScheduleFields } from "@/components/integrations/schedule-fields";
-import {
-  scheduleStateFrom,
-  schedulePayload,
-  type ScheduleState,
-} from "@/lib/integrations/schedule";
 import { api, getApiErrorMessage, type DestinationInput, type IntegrationDestination } from "@/lib/api";
 
 export function DestinationDialog({
@@ -36,7 +30,6 @@ export function DestinationDialog({
   const [name, setName] = useState(destination.name);
   const [datasetId, setDatasetId] = useState(destination.bq_dataset_id);
   const [saJson, setSaJson] = useState("");
-  const [schedule, setSchedule] = useState<ScheduleState>(scheduleStateFrom(destination.schedule));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,7 +37,6 @@ export function DestinationDialog({
     setName(destination.name);
     setDatasetId(destination.bq_dataset_id);
     setSaJson("");
-    setSchedule(scheduleStateFrom(destination.schedule));
     setError(null);
   }, [open, destination]);
 
@@ -54,7 +46,6 @@ export function DestinationDialog({
         id: destination.id,
         name,
         bq_dataset_id: datasetId,
-        ...schedulePayload(schedule),
       };
       if (saJson.trim()) body.bq_service_account_json = saJson.trim();
       return api.integrations.saveDestination(body);
@@ -116,7 +107,6 @@ export function DestinationDialog({
             />
           </Field>
 
-          <ScheduleFields value={schedule} onChange={setSchedule} />
 
           {error && <FormError>{error}</FormError>}
         </div>

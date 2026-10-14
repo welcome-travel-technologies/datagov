@@ -20,12 +20,6 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { ScheduleFields } from "@/components/integrations/schedule-fields";
-import {
-  scheduleStateFrom,
-  schedulePayload,
-  type ScheduleState,
-} from "@/lib/integrations/schedule";
 import { api, getApiErrorMessage, type IntegrationSource, type SourceInput } from "@/lib/api";
 
 // Radix Select disallows empty-string item values, so use a sentinel for "none".
@@ -66,7 +60,6 @@ export function SourceDialog({
   const [githubToken, setGithubToken] = useState("");
   const [branch, setBranch] = useState(source.github_branch);
   const [manifestPath, setManifestPath] = useState(source.dbt_manifest_path);
-  const [schedule, setSchedule] = useState<ScheduleState>(scheduleStateFrom(source.schedule));
   const [error, setError] = useState<string | null>(null);
 
   // Re-seed from the latest source whenever the dialog opens.
@@ -82,7 +75,6 @@ export function SourceDialog({
     setGithubToken("");
     setBranch(source.github_branch);
     setManifestPath(source.dbt_manifest_path);
-    setSchedule(scheduleStateFrom(source.schedule));
     setError(null);
   }, [open, source]);
 
@@ -92,7 +84,6 @@ export function SourceDialog({
         id: source.id,
         name,
         source_type: source.source_type,
-        ...schedulePayload(schedule),
       };
       if (isDbt) {
         body.github_repo_url = repoUrl;
@@ -222,7 +213,6 @@ export function SourceDialog({
             </>
           )}
 
-          <ScheduleFields value={schedule} onChange={setSchedule} />
 
           {error && <FormError>{error}</FormError>}
         </div>

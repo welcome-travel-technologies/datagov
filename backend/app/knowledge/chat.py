@@ -32,7 +32,8 @@ def _history(org, user, session, question, allowed_versions):
 
 
 def answer_document_question(org, user, question, session=None):
-    if not can_read(org, user):
+    from catalog.services.assistant_tools import member_policy
+    if not can_read(org, user) or not member_policy(org, user)['documents']:
         raise PermissionDenied('Document Explorer access is required.')
     question = str(question).strip()
     if not question or len(question) > 10000:
@@ -71,7 +72,7 @@ def answer_document_question(org, user, question, session=None):
     if any(not isinstance(c, dict) or str(c.get('version_id')) not in allowed for c in citations):
         raise RuntimeError('The document service returned evidence outside this question scope.')
     validated = filter_citations(org, user, citations)
-    if len(validated) != len(citations):
+    if not member_policy(org, user)['documents'] or len(validated) != len(citations):
         return {'answer': 'Access to the supporting documents changed while this answer was being prepared. Please ask again.', 'citations': [], 'abstained': True, 'gaps': ['Document access changed.']}
     abstained = result.get('abstained') is True
     if not validated and not abstained:

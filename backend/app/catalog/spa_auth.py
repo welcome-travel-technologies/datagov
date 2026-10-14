@@ -218,6 +218,7 @@ def _member_payload(membership, dp, request_user_id):
         "username": u.username,
         "display_name": (dp.name if dp else "") or u.get_full_name() or u.email,
         "is_admin": membership.is_admin,
+        "assistant_tool_access": membership.assistant_tool_access,
         "is_self": u.id == request_user_id,
         # only the self-service page-access groups (Company / Analytics);
         # org-admin is reported separately via is_admin, not as a group.
@@ -459,6 +460,13 @@ def _save_member(request, org, data, edit_user, is_edit, email, password, name,
     membership, _ = OrganizationMembership.objects.get_or_create(
         user=target_user, organization=org
     )
+    if "assistant_tool_access" in data:
+        from .services.assistant_tools import validate_overrides
+        try:
+            membership.assistant_tool_access = validate_overrides(data["assistant_tool_access"])
+        except ValueError as exc:
+            raise ValidationError({"assistant_tool_access": str(exc)})
+        membership.save(update_fields=["assistant_tool_access"])
     # Org-admin is a per-membership flag (not a group). Never let an admin strip
     # their OWN admin access here — that's a lockout guard; changeable for others.
     if "is_admin" in data and target_user.id != request.user.id:

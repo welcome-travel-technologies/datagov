@@ -7,7 +7,10 @@ import { Workflow, Database, CloudUpload, Bell, Bot } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoadingState, EmptyState } from "@/components/ui/misc";
-import { SourceCard } from "@/components/integrations/source-card";
+import { SourceManager } from "@/components/knowledge/source-manager";
+import { knowledgeApi } from "@/lib/knowledge-api";
+import { useAuth } from "@/lib/auth";
+import { sourceGroups } from "@/lib/integrations/source-groups";
 import { DestinationCard } from "@/components/integrations/destination-card";
 import { WorkflowPanel } from "@/components/integrations/workflow-panel";
 import { BotTab, AlertsTab } from "@/components/integrations/notifications-panel";
@@ -19,7 +22,16 @@ const QK = ["integrations"];
 export function IntegrationsManager() {
   const [tab, setTab] = useState("workflow");
   const [contentGroup, setContentGroup] = useState("");
-  useEffect(() => { if (new URLSearchParams(window.location.search).get("tab") === "content") setTab("content"); }, []);
+  useEffect(() => {
+    const read = () => { const params = new URLSearchParams(window.location.search); const value = params.get("tab"); setTab(value && ["workflow", "content", "sources", "destinations", "alerts", "bot"].includes(value) ? value : "workflow"); setContentGroup(params.get("group") || ""); };
+    read(); window.addEventListener("popstate", read); return () => window.removeEventListener("popstate", read);
+  }, []);
+  const navigate = (value: string, group = "") => { setTab(value); setContentGroup(group); const url = new URL(window.location.href); url.searchParams.set("tab", value); if (group) url.searchParams.set("group", group); else url.searchParams.delete("group"); window.history.pushState(null, "", url); };
+  const { user } = useAuth();
+  const status = useQuery({ queryKey: ["knowledge", "status", user?.id], queryFn: knowledgeApi.status });
+  const documentsEnabled = !!status.data?.enabled && !!status.data?.can_manage;
+  const collections = useQuery({ queryKey: ["knowledge", "sources", user?.id], queryFn: knowledgeApi.sources, enabled: documentsEnabled });
+  const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups, enabled: documentsEnabled });
   const qc = useQueryClient();
   const onChanged = () => qc.invalidateQueries({ queryKey: QK });
 
@@ -51,16 +63,16 @@ export function IntegrationsManager() {
   const { sources, destinations, hooks } = query.data;
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="w-full">
+    <Tabs value={tab} onValueChange={(value) => navigate(value)} className="w-full">
       <TabsList className="flex-wrap">
         <Trigger value="workflow" icon={<Workflow className="h-4 w-4" />} label="Workflow" />
-        <Trigger value="content" icon={<Database className="h-4 w-4" />} label="Data & documents" />
         <Trigger
           value="sources"
           icon={<Database className="h-4 w-4" />}
           label="Sources"
-          count={sources.length}
+          count={sourceGroups(sources, groups.data?.results ?? []).length}
         />
+        <Trigger value="content" icon={<Database className="h-4 w-4" />} label="Data & documents" />
         <Trigger
           value="destinations"
           icon={<CloudUpload className="h-4 w-4" />}
@@ -77,17 +89,8 @@ export function IntegrationsManager() {
       </TabsContent>
 
       <TabsContent value="sources">
-        {sources.length === 0 ? (
-          <Card>
-            <EmptyState title="No sources configured" />
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {sources.map((s) => (
-              <SourceCard key={s.id} source={s} onChanged={onChanged} onBrowseContent={() => { setContentGroup(`integration:${s.id}`); setTab("content"); }} />
-            ))}
-          </div>
-        )}
+        {collections.isError && <p role="alert" className="mb-3 text-sm text-err">Document collections could not be loaded. Connector settings remain available.</p>}
+        {collections.isLoading ? <LoadingState label="Loading sources…" /> : <SourceManager sources={collections.data?.results || []} connections={sources} configured={!!status.data?.configured} documentsEnabled={documentsEnabled} onBrowse={(group) => navigate("content", group)} onWorkflow={() => navigate("workflow")} />}
       </TabsContent>
 
       <TabsContent value="destinations">

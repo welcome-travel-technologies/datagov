@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { AssistantTools } from "@/components/settings/assistant-tools";
 import { WorkspaceDefaults } from "@/components/settings/workspace-defaults";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
@@ -66,6 +67,7 @@ export default function UserSettingsPage() {
             </Card>
 
             <WorkspaceDefaults />
+            <AssistantTools />
           </div>
         </TabsContent>
 

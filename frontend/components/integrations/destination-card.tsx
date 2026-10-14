@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Play, FlaskConical, Settings2, ScrollText, CloudUpload } from "lucide-react";
+import { CalendarClock, Play, FlaskConical, Settings2, ScrollText, CloudUpload } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -11,6 +11,7 @@ import { StatusBadge, isActiveStatus } from "@/components/integrations/status-ba
 import { DestinationDialog } from "@/components/integrations/destination-dialog";
 import { RunsDialog } from "@/components/integrations/runs-dialog";
 import { TestResultPanel } from "@/components/integrations/test-result-panel";
+import { StepScheduleDialog } from "./step-schedule-dialog";
 import { describeSchedule } from "@/lib/integrations/schedule";
 import { fmtWhen } from "@/lib/format";
 import { api, getApiErrorMessage, type IntegrationDestination } from "@/lib/api";
@@ -18,10 +19,13 @@ import { api, getApiErrorMessage, type IntegrationDestination } from "@/lib/api"
 export function DestinationCard({
   destination,
   onChanged,
+  mode = "settings",
 }: {
   destination: IntegrationDestination;
   onChanged: () => void;
+  mode?: "settings" | "workflow";
 }) {
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const running = isActiveStatus(destination.last_run?.status);
@@ -50,24 +54,24 @@ export function DestinationCard({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+        {mode === "workflow" && <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <span>{destination.is_active ? "Active" : "Inactive"}</span>
           <Switch
             checked={destination.is_active}
             disabled={toggleMut.isPending}
             onCheckedChange={(v) => toggleMut.mutate(v)}
           />
-        </div>
+        </div>}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-muted-foreground">
         <StatusBadge status={destination.last_run?.status} />
         {destination.last_run && <span>Last run {fmtWhen(destination.last_run.started_at)}</span>}
-        <span>Schedule: {describeSchedule(destination.schedule)}</span>
+        {mode === "workflow" && <span>Schedule: {describeSchedule(destination.schedule)}</span>}
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button
+        {mode === "workflow" && <Button
           size="sm"
           variant="brand"
           onClick={() => runMut.mutate()}
@@ -75,16 +79,17 @@ export function DestinationCard({
         >
           {runMut.isPending || running ? <Spinner className="text-white" /> : <Play />}
           {running ? "Running…" : "Run now"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+        </Button>}
+        {mode === "settings" && <Button size="sm" variant="outline" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
           {testMut.isPending ? <Spinner /> : <FlaskConical />} Test
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+        </Button>}
+        {mode === "settings" && <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
           <Settings2 /> Configure
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setLogsOpen(true)}>
+        </Button>}
+        {mode === "workflow" && <Button size="sm" variant="ghost" onClick={() => setLogsOpen(true)}>
           <ScrollText /> Logs
-        </Button>
+        </Button>}
+        {mode === "workflow" && <Button size="sm" variant="outline" onClick={() => setScheduleOpen(true)}><CalendarClock /> Schedule</Button>}
       </div>
 
       {runMut.isError && (
@@ -113,6 +118,7 @@ export function DestinationCard({
         logsFn={() => api.integrations.destLogs(destination.id)}
         detailFn={(logId) => api.integrations.destLogDetail(logId)}
       />
+      {scheduleOpen && <StepScheduleDialog step={destination} kind="destination" onClose={() => setScheduleOpen(false)} />}
     </Card>
   );
 }

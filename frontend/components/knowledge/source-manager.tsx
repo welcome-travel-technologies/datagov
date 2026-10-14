@@ -2,76 +2,63 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, FolderInput, LockKeyhole, Pencil, Play, Plus, Upload } from "lucide-react";
-import { api, getApiErrorMessage } from "@/lib/api";
+import { Database, FolderInput, LockKeyhole, Pencil, Plus, Upload } from "lucide-react";
+import { api, getApiErrorMessage, type IntegrationSource } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { knowledgeApi, type KnowledgeSource, type SourceInput } from "@/lib/knowledge-api";
+import { sourceGroups } from "@/lib/integrations/source-groups";
+import { SourceCard } from "@/components/integrations/source-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { EmptyState } from "@/components/ui/misc";
+import { EmptyState, LoadingState } from "@/components/ui/misc";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { KnowledgeError, displayDate } from "./shared";
+import { UploadDialog } from "./upload-dialog";
+import { KnowledgeError } from "./shared";
 
 const selectClass = "h-9 w-full rounded-lg border border-input bg-panel px-3 text-[13px] outline-none focus:ring-1 focus:ring-ring";
 
-export function SourceManager({ sources, configured }: { sources: KnowledgeSource[]; configured: boolean }) {
+export function SourceManager({ sources, configured, connections = [], onBrowse, onWorkflow, documentsEnabled = true }: {
+  sources: KnowledgeSource[]; configured: boolean; connections?: IntegrationSource[];
+  onBrowse?: (group: string) => void; onWorkflow?: () => void; documentsEnabled?: boolean;
+}) {
   const { user } = useAuth();
-  const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups });
+  const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups, retry: false, enabled: documentsEnabled });
   const qc = useQueryClient();
   const [editing, setEditing] = useState<KnowledgeSource | "new" | null>(null);
+  const [upload, setUpload] = useState(false);
   const [notice, setNotice] = useState("");
-  const sync = useMutation({
-    mutationFn: knowledgeApi.syncSource,
-    onSuccess: () => {
-      setNotice("Refresh queued. Follow its progress in Processing runs.");
-      void qc.invalidateQueries({ queryKey: ["knowledge"] });
-    },
-  });
-  const toggle = useMutation({
-    mutationFn: (source: KnowledgeSource) => knowledgeApi.updateSource(source.id, { refresh_paused: !source.refresh_paused }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["knowledge"] }); },
-  });
-
+  const changed = () => { void qc.invalidateQueries({ queryKey: ["integrations"] }); void qc.invalidateQueries({ queryKey: ["knowledge"] }); void qc.invalidateQueries({ queryKey: ["workflow-status"] }); };
+  const grouped = sourceGroups(connections, groups.data?.results ?? []);
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="max-w-2xl text-[13px] text-muted-foreground">Organize uploads and import document snapshots. DataGov manages refresh schedules and access for each source.</p>
-      <Button variant="brand" size="sm" onClick={() => setEditing("new")}><Plus /> Add source</Button>
+      <p className="max-w-2xl text-[13px] text-muted-foreground">Connect systems, choose content and manage access. Schedules and processing live in Workflow.</p>
+      {documentsEnabled && <div className="flex gap-2"><Button variant="outline" size="sm" disabled={!configured} onClick={() => setUpload(true)}><Upload /> Upload documents</Button><Button variant="brand" size="sm" onClick={() => setEditing("new")}><Plus /> Add content source</Button></div>}
     </div>
-    {notice && <p role="status" className="rounded-lg border border-brand/20 bg-brand/5 px-4 py-3 text-[13px]">{notice}</p>}
-    {(sync.isError || toggle.isError) && <KnowledgeError message={getApiErrorMessage(sync.error || toggle.error, "The source could not be updated.")} />}
-    {!sources.length && <EmptyState title="Create your first source" hint="Start with a PDF upload collection, or import a prepared document snapshot." icon={<FolderInput className="h-8 w-8" />} />}
-    {(groups.data?.results || [{ id: "all", name: "Collections", document_count: 0, collections: sources }]).map((group) => <details key={group.id} className="rounded-xl border border-line bg-card">
-      <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">{group.name}<span className="ml-3 text-xs font-normal text-muted-foreground">{group.collections.length} collections · {group.document_count.toLocaleString()} documents</span></summary>
-      <div className="grid gap-3 border-t border-line p-3 xl:grid-cols-2">
-      {sources.filter((source) => group.collections.some((c) => c.id === source.id)).map((source) => <article key={source.id} className="rounded-xl border border-line bg-card p-5">
-        <div className="flex items-start gap-3">
-          <div className="rounded-lg bg-brand/10 p-2.5 text-brand">{source.kind === "upload" ? <Upload className="h-5 w-5" /> : <FolderInput className="h-5 w-5" />}</div>
-          <div className="min-w-0 flex-1"><h3 className="truncate text-[14px] font-semibold">{source.name}</h3><p className="mt-1 text-xs text-muted-foreground">{source.pipeline_enabled ? "Integration indexing output" : source.kind === "upload" ? "Uploaded documents" : "Imported snapshot"}</p></div>
-          <Badge variant={source.is_active && !source.refresh_paused ? "success" : "default"} dot>{!source.is_active ? "Access disabled" : source.refresh_paused ? "Refresh paused" : "Active"}</Badge>
+    {notice && <p role="status" className="text-sm">{notice} <Button variant="link" onClick={onWorkflow}>View Workflow</Button></p>}
+    {groups.isLoading && <LoadingState label="Loading sources…" />}
+    {groups.isError && <KnowledgeError message="Document sources could not be loaded." retry={() => { void groups.refetch(); }} />}
+    {!groups.isPending && !groups.isError && !grouped.length && <EmptyState title="Create your first source" hint="Add an upload collection or import a prepared snapshot." icon={<FolderInput className="h-8 w-8" />} />}
+    {grouped.map((group) => <section key={group.id} className="overflow-hidden rounded-xl border border-line bg-card">
+      {group.connection ? <SourceCard source={group.connection} onChanged={changed} onBrowseContent={() => onBrowse?.(group.id)} /> : <div className="flex flex-wrap items-center justify-between gap-3 p-5"><div><h3 className="text-sm font-semibold">{group.name}</h3><p className="mt-1 text-xs text-muted-foreground">{group.provider === "upload" ? "Files uploaded to DataGov" : "Imported snapshots · refresh reprocesses the prepared import, not the live provider"}</p></div><Button size="sm" variant="outline" onClick={() => onBrowse?.(group.id)}><Database /> Browse content</Button></div>}
+      <details className="border-t border-line">
+        <summary className="cursor-pointer px-5 py-3 text-xs font-medium">{group.collections.length} collections · {group.document_count.toLocaleString()} documents · Access & settings</summary>
+        <div className="grid gap-3 border-t border-line p-4 lg:grid-cols-2">
+          {sources.filter((source) => group.collections.some((collection) => collection.id === source.id)).map((source) => <article key={source.id} className="rounded-lg border border-line p-4">
+            <div className="flex items-start justify-between gap-3"><h4 className="text-sm font-medium">{source.name}</h4><Badge variant={source.is_active ? "success" : "default"}>{source.is_active ? "Access enabled" : "Access disabled"}</Badge></div>
+            <p className="my-3 flex items-center gap-2 text-xs text-muted-foreground"><LockKeyhole className="h-3.5 w-3.5" />{source.access === "restricted" ? "Selected members and groups" : "Organization members with assistant access"}</p>
+            <Button variant="outline" size="sm" onClick={() => setEditing(source)}><Pencil /> Settings & access</Button>
+          </article>)}
+          {!group.collections.length && <p className="text-xs text-muted-foreground">No document collections. Catalog extraction is configured above.</p>}
         </div>
-        <dl className="my-4 space-y-2 text-xs text-muted-foreground">
-          <div className="flex items-start gap-2"><CalendarClock className="h-3.5 w-3.5 shrink-0" /><dt className="sr-only">Schedule</dt><dd>{source.cron ? <><span className="font-mono text-foreground">{source.cron}</span> · {source.timezone}</> : "Manual refresh"}</dd></div>
-          <div className="flex items-center gap-2"><LockKeyhole className="h-3.5 w-3.5" /><dt className="sr-only">Access</dt><dd>{source.access === "restricted" ? "Restricted to selected members and groups" : "Organization members with AI Assistant access"}</dd></div>
-          <div><dt className="inline">Last run: </dt><dd className="inline">{displayDate(source.last_run_at)}</dd></div>
-        </dl>
-        <div className="flex flex-wrap gap-2 border-t border-line pt-3">
-          <Button variant="outline" size="sm" onClick={() => setEditing(source)}><Pencil /> Settings</Button>
-          <Button variant="outline" size="sm" disabled={!source.is_active || toggle.isPending} onClick={() => toggle.mutate(source)}>{source.refresh_paused ? "Resume refresh" : "Pause refresh"}</Button>
-          <Button variant="outline" size="sm" disabled={!configured || !source.is_active || source.refresh_paused || sync.isPending} onClick={() => { setNotice(""); sync.mutate(source.id); }}><Play /> {source.pipeline_enabled ? "Retry pending documents" : "Refresh now"}</Button>
-        </div>
-      </article>)}
-    </div></details>)}
-    <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
-      <DialogContent><DialogHeader><DialogTitle>{editing === "new" ? "Add document source" : "Source settings"}</DialogTitle>
-        <DialogDescription>Choose who can find these documents and when they refresh.</DialogDescription></DialogHeader>
-        {editing && <SourceForm key={editing === "new" ? "new" : editing.id} source={editing === "new" ? undefined : editing} done={() => setEditing(null)} />}
-      </DialogContent>
-    </Dialog>
+      </details>
+    </section>)}
+    <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}><DialogContent><DialogHeader><DialogTitle>{editing === "new" ? "Add content source" : "Collection settings"}</DialogTitle><DialogDescription>Choose content, its source and who can access it.</DialogDescription></DialogHeader>{editing && <SourceForm key={editing === "new" ? "new" : editing.id} source={editing === "new" ? undefined : editing} done={() => setEditing(null)} />}</DialogContent></Dialog>
+    <UploadDialog open={upload} onOpenChange={setUpload} sources={sources} onUploaded={(unchanged) => setNotice(unchanged ? "This document already exists; no duplicate was created." : "Upload received. Processing is queued in Workflow.")} />
   </div>;
 }
 
-function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => void }) {
+export function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => void }) {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [name, setName] = useState(source?.name || "");
@@ -79,25 +66,22 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
   const [path, setPath] = useState(String(source?.config?.path || ""));
   const [integrationId, setIntegrationId] = useState(source?.integration_id ? String(source.integration_id) : "");
   const [importGroup, setImportGroup] = useState(source?.import_group || "");
-  const [pipeline, setPipeline] = useState(source?.pipeline_enabled || false);
   const connections = useQuery({ queryKey: ["knowledge", "connections", user?.id], queryFn: knowledgeApi.connections });
-  const [cron, setCron] = useState(source?.cron || "");
-  const [timezone, setTimezone] = useState(source?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const [active, setActive] = useState(source?.is_active ?? true);
   const [access, setAccess] = useState<KnowledgeSource["access"]>(source?.access || "restricted");
   const [userIds, setUserIds] = useState(source?.allowed_user_ids || (user ? [user.id] : []));
   const [groupIds, setGroupIds] = useState(source?.allowed_group_ids || []);
   const members = useQuery({ queryKey: ["knowledge", "access-options", user?.id], queryFn: api.org.members, enabled: access === "restricted", retry: false });
   const save = useMutation({
-    mutationFn: (body: SourceInput) => source ? knowledgeApi.updateSource(source.id, body) : knowledgeApi.createSource(body),
+    mutationFn: (body: Partial<SourceInput>) => source ? knowledgeApi.updateSource(source.id, body) : knowledgeApi.createSource({ cron: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", ...body } as SourceInput),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["knowledge"] }); done(); },
   });
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
     save.mutate({ name: name.trim(), kind, config: kind === "snapshot" ? { ...source?.config, path: path.trim() } : source?.config || {},
-      cron: cron.trim(), timezone: timezone.trim(), is_active: active, access,
-      integration_id: integrationId ? Number(integrationId) : null, import_group: importGroup.trim(), pipeline_enabled: pipeline,
+      is_active: active, access,
+      integration_id: integrationId ? Number(integrationId) : null, import_group: importGroup.trim(),
       allowed_user_ids: access === "restricted" ? userIds : [], allowed_group_ids: access === "restricted" ? groupIds : [] });
   }
   function toggleId(list: number[], id: number) { return list.includes(id) ? list.filter((item) => item !== id) : [...list, id]; }
@@ -110,26 +94,18 @@ function SourceForm({ source, done }: { source?: KnowledgeSource; done: () => vo
       </select>
     </label>
     <label className="block space-y-1.5 text-[13px] font-medium">Connection
-      <select className={selectClass} value={integrationId} onChange={(e) => { setIntegrationId(e.target.value); setPipeline(false); }}>
+      <select className={selectClass} value={integrationId} onChange={(e) => { setIntegrationId(e.target.value); }}>
         <option value="">Independent collection</option>
         {connections.data?.results.map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
       </select>
     </label>
     {!integrationId && <label className="block space-y-1.5 text-[13px] font-medium">Import group<Input value={importGroup} onChange={(e) => setImportGroup(e.target.value)} placeholder="e.g. Confluence — company knowledge" maxLength={200} /></label>}
-    {integrationId && kind === "upload" && <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={pipeline} onChange={(e) => setPipeline(e.target.checked)} className="accent-brand" />Index definitions from this connection after extraction. Refresh follows its existing integration schedule.</label>}
     {kind === "snapshot" && <label className="block space-y-1.5 text-[13px] font-medium">Snapshot manifest path
       <Input required value={path} onChange={(e) => setPath(e.target.value)} placeholder="company/manifest.json" />
       <span className="block text-xs font-normal text-muted-foreground">A prepared manifest inside your organization’s import folder, managed by your administrator. Enter its path relative to that folder.</span>
     </label>}
-    <div className="rounded-lg border border-line bg-panel/50 p-3">
-      <h3 className="mb-3 text-[13px] font-semibold">Refresh schedule</h3>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block space-y-1.5 text-xs">Cron expression<Input disabled={pipeline} value={pipeline ? "" : cron} onChange={(e) => setCron(e.target.value)} placeholder={pipeline ? "Managed by connection" : "Manual only"} /></label>
-        <label className="block space-y-1.5 text-xs">Time zone<Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Europe/Athens" required /></label>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">Leave blank for manual refresh. For daily at 06:00, use <code>0 6 * * *</code>. Missed refreshes are combined into one run.</p>
-      <label className="mt-3 flex items-center gap-2 text-[13px]"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="accent-brand" /> Content access enabled</label>
-    </div>
+    <p className="text-xs text-muted-foreground">Scheduling and indexing are managed in Workflow.</p>
+    <label className="flex items-center gap-2 text-[13px]"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="accent-brand" /> Content access enabled</label>
     <label className="block space-y-1.5 text-[13px] font-medium">Document access
       <select value={access} onChange={(e) => setAccess(e.target.value as KnowledgeSource["access"])} className={selectClass}>
         <option value="restricted">Selected members and groups</option><option value="organization">Organization</option>

@@ -17,7 +17,10 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { api, getApiErrorMessage, type DepartmentRef, type GroupRef, type OrgMember } from "@/lib/api";
 
+import { AssistantToolAccess } from "@/components/settings/assistant-tools";
+
 interface Draft {
+  assistant_tool_access: Record<string, boolean>;
   email: string;
   password: string;
   name: string;
@@ -32,6 +35,7 @@ interface Draft {
 }
 
 const BLANK: Draft = {
+  assistant_tool_access: {},
   email: "",
   password: "",
   name: "",
@@ -48,6 +52,7 @@ const BLANK: Draft = {
 function fromMember(m: OrgMember): Draft {
   return {
     email: m.email,
+    assistant_tool_access: m.assistant_tool_access || {},
     password: "",
     name: m.display_name === "-" ? "" : m.display_name,
     slack_handle: m.slack_handle,
@@ -124,6 +129,7 @@ export function MemberDialog({
         name: draft.name.trim(),
         slack_handle: draft.slack_handle.trim(),
         slack_user_id: draft.slack_user_id.trim(),
+        assistant_tool_access: draft.assistant_tool_access,
         is_owner: draft.is_owner,
         is_steward: draft.is_steward,
         is_other: draft.is_other,
@@ -301,6 +307,7 @@ export function MemberDialog({
             </Field>
           )}
 
+          <AssistantToolAccess value={draft.assistant_tool_access} onChange={(value) => setDraft((current) => ({ ...current, assistant_tool_access: value }))} />
           {error && <FormError>{error}</FormError>}
         </div>
 
