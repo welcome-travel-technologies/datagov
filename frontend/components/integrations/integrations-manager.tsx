@@ -1,6 +1,8 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { IntegrationContent } from "./integration-content";
 import { Workflow, Database, CloudUpload, Bell, Bot } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,6 +17,9 @@ import { api } from "@/lib/api";
 const QK = ["integrations"];
 
 export function IntegrationsManager() {
+  const [tab, setTab] = useState("workflow");
+  const [contentGroup, setContentGroup] = useState("");
+  useEffect(() => { if (new URLSearchParams(window.location.search).get("tab") === "content") setTab("content"); }, []);
   const qc = useQueryClient();
   const onChanged = () => qc.invalidateQueries({ queryKey: QK });
 
@@ -46,9 +51,10 @@ export function IntegrationsManager() {
   const { sources, destinations, hooks } = query.data;
 
   return (
-    <Tabs defaultValue="workflow" className="w-full">
+    <Tabs value={tab} onValueChange={setTab} className="w-full">
       <TabsList className="flex-wrap">
         <Trigger value="workflow" icon={<Workflow className="h-4 w-4" />} label="Workflow" />
+        <Trigger value="content" icon={<Database className="h-4 w-4" />} label="Data & documents" />
         <Trigger
           value="sources"
           icon={<Database className="h-4 w-4" />}
@@ -64,6 +70,7 @@ export function IntegrationsManager() {
         <Trigger value="alerts" icon={<Bell className="h-4 w-4" />} label="Alerts" />
         <Trigger value="bot" icon={<Bot className="h-4 w-4" />} label="Bot" />
       </TabsList>
+      <TabsContent value="content"><IntegrationContent key={contentGroup} initialGroup={contentGroup} /></TabsContent>
 
       <TabsContent value="workflow">
         <WorkflowPanel />
@@ -77,7 +84,7 @@ export function IntegrationsManager() {
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {sources.map((s) => (
-              <SourceCard key={s.id} source={s} onChanged={onChanged} />
+              <SourceCard key={s.id} source={s} onChanged={onChanged} onBrowseContent={() => { setContentGroup(`integration:${s.id}`); setTab("content"); }} />
             ))}
           </div>
         )}

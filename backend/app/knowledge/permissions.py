@@ -15,7 +15,7 @@ def enabled():
 def can_read(org, user):
     if not enabled() or org is None or not getattr(user, 'is_authenticated', False) or not user.is_active:
         return False
-    membership = OrganizationMembership.objects.filter(organization=org, user=user).first()
+    membership = OrganizationMembership.objects.filter(organization=org, user=user, user__is_active=True).first()
     return bool(membership and (membership.is_admin or user.groups.filter(name='Company').exists()))
 
 
@@ -73,7 +73,7 @@ def filter_citations(org, user, citations):
             continue
     versions = {str(v.id): v for v in DocumentVersion.objects.filter(
         id__in=ids, document__in=visible_documents(org, user), status='ready', published_at__isnull=False,
-    ).select_related('document')}
+    ).select_related('document').defer('pages')}
     result, seen = [], set()
     for citation in citations[:100]:
         if not isinstance(citation, dict):

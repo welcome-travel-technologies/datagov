@@ -284,6 +284,8 @@ else:
 # Document Explorer is a private service with its own Python runtime. No service
 # key is serialized into browser configuration; all calls pass through Django.
 DOCUMENT_EXPLORER_ENABLED = os.getenv('DOCUMENT_EXPLORER_ENABLED', 'False').lower() == 'true'
+DOCUMENT_NATIVE_AI_ENABLED = os.getenv('DOCUMENT_NATIVE_AI_ENABLED', 'False').lower() == 'true'
+DOCUMENT_INDEXING_PIPELINE_ENABLED = os.getenv('DOCUMENT_INDEXING_PIPELINE_ENABLED', 'False').lower() == 'true'
 DOCUMENT_EXPLORER_API_URL = os.getenv('DOCUMENT_EXPLORER_API_URL', '')
 DOCUMENT_EXPLORER_API_KEY = os.getenv('DOCUMENT_EXPLORER_API_KEY', '')
 DOCUMENT_EXPLORER_WORKER_TOKEN = os.getenv('DOCUMENT_EXPLORER_WORKER_TOKEN', '')

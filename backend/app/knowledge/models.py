@@ -8,6 +8,12 @@ from django.db.models import Q
 class KnowledgeSource(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey('catalog.Organization', on_delete=models.CASCADE)
+    integration = models.ForeignKey('catalog.IntegrationSource', null=True, blank=True,
+                                    on_delete=models.SET_NULL, related_name='knowledge_collections')
+    # Explicit labels for imported collections, never inferred from shard paths.
+    import_group = models.CharField(max_length=200, blank=True, default='')
+    refresh_paused = models.BooleanField(default=False)
+    pipeline_enabled = models.BooleanField(default=False)
     name = models.CharField(max_length=200)
     kind = models.CharField(max_length=24, choices=[('upload', 'Uploads'), ('snapshot', 'Snapshot')])
     config = models.JSONField(default=dict, blank=True)
@@ -24,7 +30,36 @@ class KnowledgeSource(models.Model):
 
     class Meta:
         ordering = ['name', 'id']
-        constraints = [models.UniqueConstraint(fields=['organization', 'name'], name='knowledge_source_org_name')]
+        constraints = [
+            models.UniqueConstraint(fields=['organization', 'name'], name='knowledge_source_org_name'),
+            models.UniqueConstraint(fields=['integration'], condition=Q(pipeline_enabled=True),
+                                    name='knowledge_one_pipeline_collection'),
+            models.CheckConstraint(condition=Q(pipeline_enabled=False) | Q(integration__isnull=False, kind='upload'),
+                                   name='knowledge_pipeline_requires_connection'),
+        ]
+
+
+class ExtractionArtifact(models.Model):
+    """Durable downstream intent and immutable files from one completed extraction.
+
+    The optional upstream FK can disappear with log retention; upstream_key and
+    manifest retain identity. Indexing retries never need the provider again.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    source = models.ForeignKey(KnowledgeSource, on_delete=models.PROTECT, related_name='artifacts')
+    upstream_run = models.ForeignKey('catalog.SourceRunLog', null=True, on_delete=models.SET_NULL)
+    upstream_key = models.CharField(max_length=100)
+    profile = models.CharField(max_length=80, default='connector-text-v1')
+    manifest = models.JSONField(default=dict)
+    manifest_hash = models.CharField(max_length=64)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    run = models.OneToOneField('IngestionRun', null=True, on_delete=models.SET_NULL, related_name='artifact')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+        constraints = [models.UniqueConstraint(fields=['source', 'upstream_key', 'profile'],
+                                              name='knowledge_artifact_delivery')]
 
 
 class Document(models.Model):
@@ -36,6 +71,7 @@ class Document(models.Model):
     source_type = models.CharField(max_length=40, default='upload')
     source_url = models.URLField(max_length=2000, blank=True, default='')
     current_version = models.ForeignKey('DocumentVersion', null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    current_artifact = models.ForeignKey(ExtractionArtifact, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
     deleted_at = models.DateTimeField(null=True, blank=True)
     deletion_reason = models.CharField(max_length=24, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)

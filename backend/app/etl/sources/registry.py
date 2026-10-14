@@ -41,6 +41,7 @@ class BaseSource(ABC):
     # 'visualization' source, mirroring ETL ordering (warehouse must be
     # reshaped before BI tools read it).
     category: str = 'visualization'
+    capabilities = ('catalog', 'raw_export')
 
     @classmethod
     @abstractmethod
@@ -64,6 +65,15 @@ class BaseSource(ABC):
         inputs (for replay) and the post-transform CSVs (the data that lands
         in BigQuery) are captured together. Default: empty (nothing to archive)."""
         return []
+
+    @classmethod
+    def get_indexing_inputs(cls, etl_dir: str):
+        """Return (identity root, directories, extensions) for text definitions.
+
+        Warehouse records and connector credentials are not indexing inputs.
+        The common artifact writer bounds files and rejects path escapes.
+        """
+        return None
 
     @abstractmethod
     def test(self) -> dict:
@@ -89,6 +99,13 @@ class FabricSource(BaseSource):
     """Microsoft Fabric / Power BI REST API source."""
 
     category = 'visualization'
+    capabilities = BaseSource.capabilities + ('indexing',)
+
+    @classmethod
+    def get_indexing_inputs(cls, etl_dir):
+        from pathlib import Path
+        base = Path(etl_dir) / 'raw_fabric_definitions'
+        return base, [base], {'.tmdl', '.dax'}
 
     def __init__(self, tenant_id: str, client_id: str, client_secret: str,
                  workspace_ids: list):
@@ -192,6 +209,13 @@ class FabricSource(BaseSource):
 
 class DbtSource(BaseSource):
     """dbt project via GitHub repository."""
+    capabilities = BaseSource.capabilities + ('indexing',)
+
+    @classmethod
+    def get_indexing_inputs(cls, etl_dir):
+        from pathlib import Path
+        base = Path(etl_dir) / 'dbt_artifacts' / 'repo'
+        return base, [base / name for name in ('models', 'macros', 'analyses', 'docs', 'snapshots')], {'.sql', '.yml', '.yaml', '.md'}
 
     load_command = 'load_dbt_data'
     category = 'transformation'

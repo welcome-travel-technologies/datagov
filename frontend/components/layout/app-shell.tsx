@@ -7,6 +7,8 @@ import { UserMenu } from "@/components/layout/user-menu";
 import { useBranding } from "@/lib/branding";
 import { LABEL_BY_HREF } from "@/components/layout/nav-config";
 import { cn } from "@/lib/utils";
+import { EvidenceWorkspace } from "@/components/knowledge/evidence-workspace";
+import { useAuth } from "@/lib/auth";
 
 // Routes whose content fills the viewport and manages its own internal
 // scrolling (full-height canvas / chat). The page itself must NOT scroll
@@ -27,7 +29,7 @@ function titleCase(s: string) {
 /** Breadcrumb segments from the pathname, preferring nav labels. */
 function crumbsFor(pathname: string | null): string[] {
   if (!pathname || pathname === "/") return ["Dashboard"];
-  if (pathname.startsWith("/knowledge/documents/")) return ["Document Explorer", "Document"];
+  if (pathname.startsWith("/knowledge/documents/")) return ["Integrations", "Document"];
   // Prefer the full nav label when a known section matches a prefix.
   const known = Object.keys(LABEL_BY_HREF)
     .filter((href) => pathname === href || pathname.startsWith(href + "/"))
@@ -66,6 +68,7 @@ function Topbar() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const bare = pathname?.startsWith("/login");
+  const { user } = useAuth();
   // The public share viewer renders its own full-screen layout — no app chrome.
   const isShare = pathname?.startsWith("/share");
   const fixedHeight = isFixedHeightRoute(pathname);
@@ -85,7 +88,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       ) : (
         <div className="flex h-screen overflow-hidden bg-background">
-          <SideNav />
+          <div className={pathname?.startsWith("/knowledge/documents/") ? "hidden md:block" : "contents"}><SideNav /></div>
           <div className="flex min-w-0 flex-1 flex-col">
             <Topbar />
             {/* overflow-x-hidden: the decorative .welcome-gradient blobs bleed
@@ -96,14 +99,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 so the page is locked (overflow-y-hidden) to suppress the phantom
                 vertical scroll from the blob that bleeds below <main>; ordinary
                 content pages keep overflow-y-auto so long pages scroll. */}
-            <main
+            <EvidenceWorkspace key={user?.id}><main
               className={cn(
                 "welcome-gradient min-h-0 flex-1 overflow-x-hidden px-4 py-5 sm:px-7 sm:py-7",
                 fixedHeight ? "overflow-y-hidden" : "overflow-y-auto",
               )}
             >
               {children}
-            </main>
+            </main></EvidenceWorkspace>
           </div>
         </div>
       )}

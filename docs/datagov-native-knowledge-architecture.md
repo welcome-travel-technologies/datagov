@@ -1,9 +1,47 @@
 # DataGov: native knowledge and integration architecture
 
-Status: proposed architecture, reviewed against the current repositories on 2026-10-13.
-This is a migration plan. The unified integration pipeline, native retrieval tool and shared
-reader described below are not yet implemented. Small metadata-query and shared-status
-cleanup changes accompany this review; they do not change the product's architecture.
+Status: native migration implemented on 2026-10-14; release verification is recorded in
+GitHub Actions. This document describes both the delivered foundation and later extensions.
+
+The application now has explicit connection provenance, reader-safe integration content,
+optional connector indexing, native assistant retrieval, and a shared PDF/text evidence pane.
+Existing catalogs, governance, ETL destinations, schedules and document identities are retained.
+Framework replacement, object-storage migration, typed cross-domain evidence attachments and
+coordinated restore remain separate follow-up work; they are not claimed as delivered here.
+
+### Delivered boundaries and rollout
+
+- `DOCUMENT_NATIVE_AI_ENABLED=true` adds permission-scoped `/v1/search` retrieval to the
+  existing web assistant. The existing catalog/live tools remain registered. Legacy document
+  sessions retain their endpoint. Disabling the flag removes native retrieval, while saved
+  evidence is still checked against current access before display or reuse.
+- `DOCUMENT_INDEXING_PIPELINE_ENABLED=true` enables the optional output dispatcher. An
+  administrator explicitly links an upload/output collection to a Fabric/dbt connection and
+  enables its indexing output. Existing snapshot collections are not automatically converted
+  or re-indexed, which avoids duplicating the already imported corpus.
+- Connectors declare supported text-definition roots through the existing registry. Completed
+  files are frozen under the ETL lock and delivered through the existing leased jobs in bounded
+  batches. DataGov's scheduler owns delivery. Catalog-load failures do not discard extraction;
+  explicit cancellation propagates to downstream work. Retrying older extraction cannot
+  replace evidence published by a newer extraction, including content reverts.
+- The initial text profile supports dbt SQL/YAML/Markdown definitions and Fabric TMDL/DAX.
+  It caps individual text files at 1 MiB and extraction at 10,000 files / 256 MiB, then batches
+  delivery to at most 500 files / 12 MiB. Exceeding a bound records an indexing-stage failure;
+  it never silently indexes a truncated extraction. Extractors do not yet certify complete
+  enumeration, so this output cannot retire missing documents automatically.
+- Source groups use explicit connection IDs or reviewed import labels. The
+  `map_document_collections --mapping-file ... [--apply]` command validates tenant ownership
+  and preserves ACLs, schedules, document/version IDs and run history.
+- Integrations contains Data & documents, uploads, collection access and processing history.
+  Its content endpoint is available to authorized readers; credential/settings endpoints
+  remain admin-only. Old `/knowledge` bookmarks redirect there; document URLs remain stable.
+- The shared reader uses a locally bundled React-PDF/PDF.js text layer, selection, zoom,
+  pagination and exact normalized passage matching. It highlights extracted text too and
+  reports ambiguous/missing matches. It does not claim OCR support. Desktop chat remains
+  usable beside the resizable reader; narrow screens open the canonical document page.
+- The colleague's original checkout and engine baseline are unchanged. No new answer-model
+  test or embedding-profile change is part of this migration. Original source preservation
+  is not a claim of retrieval-quality parity.
 
 ## Recommendation
 

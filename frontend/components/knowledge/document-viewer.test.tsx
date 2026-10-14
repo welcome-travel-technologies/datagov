@@ -3,9 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DocumentViewer } from "./document-viewer";
 import { DocumentCitations } from "./citations";
+import { EvidenceWorkspace } from "./evidence-workspace";
 import type { DocumentDetail } from "@/lib/knowledge-api";
 
 const auth = vi.hoisted(() => ({ user: { id: 7 } }));
+const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
+vi.mock("next/dynamic", () => ({ default: () => (props: { url: string; page: number }) => <div data-testid="pdf-viewer" data-url={props.url} data-page={props.page} /> }));
 vi.mock("@/lib/auth", () => ({ useAuth: () => auth }));
 const fetchMock = vi.fn<typeof fetch>();
 let client: QueryClient;
@@ -26,6 +30,8 @@ function mount(children: React.ReactNode) {
 }
 beforeEach(() => {
   auth.user = { id: 7 };
+  navigation.push.mockReset();
+  vi.stubGlobal("innerWidth", 1600);
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url) => json(url === "/api/knowledge/status/" ? { enabled: true, configured: true, can_manage: false } : doc));
   vi.stubGlobal("fetch", fetchMock);
@@ -37,13 +43,15 @@ describe("authorized document reader", () => {
     mount(<DocumentViewer documentId="doc-1" versionId="version-old" initialPage={2} chunkId="chunk-2" compact />);
     await screen.findByRole("heading", { name: "Travel policy.pdf" });
     expect(fetchMock).toHaveBeenCalledWith("/api/knowledge/documents/doc-1/?version=version-old", expect.objectContaining({ credentials: "include" }));
-    expect(screen.getByTitle("Travel policy.pdf — page 2")).toHaveAttribute("src", "/api/knowledge/documents/doc-1/content/?version=version-old#page=2&view=FitH");
+    expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-url", "/api/knowledge/documents/doc-1/content/?version=version-old");
+    expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-page", "2");
     expect(screen.getByText("Viewing a previous version")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open full page" })).toHaveAttribute("href", "/knowledge/documents/doc-1?version=version-old&page=2#chunk-chunk-2");
     expect(screen.getByRole("link", { name: "Open original source" })).toHaveAttribute("href", "https://company.example/policies/travel");
     expect(screen.getByRole("link", { name: "Open original source" })).toHaveAttribute("rel", "noopener noreferrer");
     fireEvent.click(screen.getByRole("button", { name: "Extracted text" }));
     expect(screen.getAllByText("Hotels are reimbursed up to €150 per night.")).toHaveLength(2);
+    expect(document.querySelector("mark")).toHaveTextContent("Hotels are reimbursed up to €150 per night.");
     expect(screen.queryByTitle("Travel policy.pdf — page 2")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
     expect(screen.getByText("Introduction")).toBeInTheDocument();
@@ -82,12 +90,26 @@ describe("authorized document reader", () => {
 });
 
 describe("answer citations", () => {
-  it("builds a DataGov version/page link and opens its protected reader in a dialog", async () => {
-    mount(<DocumentCitations citations={[{ document_id: "doc-1", version_id: "version-old", chunk_id: "chunk-2", page: 2,
-      title: "Travel policy.pdf", datagov_url: "https://untrusted.example", excerpt: "Hotel reimbursement" }]} />);
+  it("opens the protected reader beside a usable composer and supports resizing", async () => {
+    mount(<EvidenceWorkspace><div><input aria-label="Chat composer" /><DocumentCitations citations={[{ document_id: "doc-1", version_id: "version-old", chunk_id: "chunk-2", page: 2,
+      title: "Travel policy.pdf", datagov_url: "https://untrusted.example", excerpt: "Hotel reimbursement" }]} /></div></EvidenceWorkspace>);
     expect(screen.getByRole("link", { name: "Open Travel policy.pdf in Document Explorer" })).toHaveAttribute("href", "/knowledge/documents/doc-1?version=version-old&page=2#chunk-chunk-2");
     fireEvent.click(screen.getByRole("button", { name: "Preview source 1: Travel policy.pdf" }));
-    await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Cited passage"));
-    expect(screen.getByTitle("Travel policy.pdf — page 2")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("complementary", { name: "Evidence reader" })).toHaveTextContent("Cited passage"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Chat composer"), { target: { value: "A follow-up question" } });
+    expect(screen.getByLabelText("Chat composer")).toHaveValue("A follow-up question");
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowLeft" });
+    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "51");
+    fireEvent.click(screen.getByRole("button", { name: "Close evidence reader" }));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  });
+
+  it("opens canonical evidence links as a full page on narrow screens", () => {
+    vi.stubGlobal("innerWidth", 390);
+    mount(<EvidenceWorkspace><DocumentCitations citations={[{ document_id: "doc-1", version_id: "version-old", chunk_id: "chunk-2", page: 2, title: "Travel policy.pdf" }]} /></EvidenceWorkspace>);
+    fireEvent.click(screen.getByRole("button", { name: "Preview source 1: Travel policy.pdf" }));
+    expect(navigation.push).toHaveBeenCalledWith("/knowledge/documents/doc-1?version=version-old&page=2#chunk-chunk-2");
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
 });

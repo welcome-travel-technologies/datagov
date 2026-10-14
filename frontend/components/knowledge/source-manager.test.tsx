@@ -20,6 +20,8 @@ beforeEach(() => {
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url) => {
     if (url === "/api/org/members/") return json({ members: [{ user_id: 7, display_name: "Alex", email: "alex@example.test" }], available_groups: [] });
+    if (url === "/api/knowledge/connections/") return json({ results: [] });
+    if (url === "/api/knowledge/groups/") return json({ results: [{ id: "uploads", name: "Uploaded documents", document_count: 0, collections: [source] }] });
     return json(source);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -41,8 +43,9 @@ describe("document source controls", () => {
   });
 
   it("surfaces rejected source refreshes without claiming a run was queued", async () => {
-    fetchMock.mockResolvedValue(json({ detail: "This source already has an active run." }, 409));
+    fetchMock.mockImplementation(async () => json({ detail: "This source already has an active run." }, 409));
     mount(<SourceManager sources={[source]} configured />);
+    fireEvent.click(screen.getByText("Collections"));
     fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already has an active run");
     expect(screen.queryByText(/Refresh queued/)).not.toBeInTheDocument();
@@ -60,7 +63,7 @@ describe("document source controls", () => {
     const uploaded = vi.fn();
     fetchMock.mockResolvedValue(json({ unchanged: true, document: { id: "doc-1" } }));
     mount(<UploadDialog open onOpenChange={vi.fn()} sources={[source]} onUploaded={uploaded} />);
-    fireEvent.change(screen.getByLabelText("PDF file"), { target: { files: [new File(["%PDF-1.7"], "policy.pdf", { type: "application/pdf" })] } });
+    fireEvent.change(screen.getByLabelText("Document file"), { target: { files: [new File(["%PDF-1.7"], "policy.pdf", { type: "application/pdf" })] } });
     fireEvent.click(screen.getByRole("button", { name: "Upload and process" }));
     await waitFor(() => expect(uploaded).toHaveBeenCalledWith(true));
   });
@@ -71,7 +74,7 @@ describe("document source controls", () => {
       replacement={{ documentId: "doc-1", sourceId: "source-1", title: "policy.pdf" }} />);
     expect(screen.getByText(/published version stays available/)).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("PDF file"), { target: { files: [new File(["%PDF-1.7 new"], "policy-v2.pdf", { type: "application/pdf" })] } });
+    fireEvent.change(screen.getByLabelText("Document file"), { target: { files: [new File(["%PDF-1.7 new"], "policy-v2.pdf", { type: "application/pdf" })] } });
     fireEvent.click(screen.getByRole("button", { name: "Upload and process" }));
     await waitFor(() => expect(uploaded).toHaveBeenCalled());
     const body = fetchMock.mock.calls[0][1]?.body as FormData;

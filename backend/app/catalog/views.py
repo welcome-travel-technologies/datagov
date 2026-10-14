@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
 from django.core import signing
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q, Count
 from django.utils import timezone
@@ -205,6 +206,9 @@ def _serialize_chat_message(message, session):
             content = 'This answer is no longer available because access to its sources has changed.'
             citations = []
         else:
+            for original, current in zip(citations, allowed):
+                if re.fullmatch(r'E[1-9][0-9]?', str(original.get('citation_id', ''))):
+                    current['citation_id'] = original['citation_id']
             citations = allowed
     return {
         'id': message.id, 'role': 'model' if message.role == 'assistant' else 'user',
@@ -266,6 +270,7 @@ def _get_chatbot_model_for_org(org):
 def build_chatbot_agent_for_org(
     org, user=None, before_tool_call=None, record_call=None, surface='slack',
     chat_session=None,
+    evidence_context=None,
 ):
     """Build a Pydantic AI agent scoped to ``org``.
 
@@ -313,6 +318,7 @@ def build_chatbot_agent_for_org(
         org=org,
         user=user,
         chat_session=chat_session,
+        evidence_context=evidence_context,
         pb_workspace_ids=getattr(org, 'assistant_powerbi_workspace_ids', None) or None,
         bq_dataset_ids=getattr(org, 'assistant_bigquery_dataset_ids', None) or None,
     )
@@ -538,11 +544,12 @@ def run_chat_event_sync(session_id, user_message):
     """
     STATUS_CACHE_KEY = f'chat_status_{session_id}'
     session = None
+    evidence_context = None
 
     def _on_tool_call(tool_name: str, _args: tuple, kwargs: dict) -> None:
         """Write the human-readable status for the tool currently executing."""
         msg = TOOL_STATUS_MESSAGES.get(tool_name, f'Running {tool_name.replace("_", " ")}...')
-        if kwargs.get('query'):
+        if kwargs.get('query') and not getattr(settings, 'DOCUMENT_NATIVE_AI_ENABLED', False):
             msg += f" (query={kwargs['query']!r})"
         cache.set(STATUS_CACHE_KEY, msg, timeout=300)
 
@@ -574,12 +581,24 @@ def run_chat_event_sync(session_id, user_message):
             # restricted document content in Django-Q's generic Task.result.
             return 'Document Explorer answer saved.'
 
-        db_messages = list(session.messages.all().order_by('created_at'))
+        from knowledge.retrieval import EvidenceContext, native_enabled
+        evidence_context = EvidenceContext(org, session.user) if native_enabled(org, session.user) else None
+        db_messages = (list(session.messages.order_by('-created_at', '-pk')[:9])[::-1]
+                       if evidence_context is not None else list(session.messages.all().order_by('created_at')))
             
         formatted_history = []
         for i, msg in enumerate(db_messages):
             if i == len(db_messages) - 1:
                 continue # Skip last user message for history
+            if msg.citations:
+                from knowledge.permissions import filter_citations
+                permitted = filter_citations(org, session.user, msg.citations)
+                if len(permitted) != len(msg.citations) or evidence_context is None:
+                    formatted_history = []
+                    continue
+                if len(evidence_context.remember(permitted)) != len(permitted):
+                    formatted_history = []
+                    continue
             try:
                 parsed = json.loads(msg.content)
                 if isinstance(parsed, dict) and ('parts' in parsed or 'role' in parsed or 'kind' in parsed):
@@ -609,6 +628,7 @@ def run_chat_event_sync(session_id, user_message):
             record_call=debug_log.append,
             surface='web',
             chat_session=session,
+            evidence_context=evidence_context,
         )
 
         # Run agent in a separate thread so we can enforce a hard timeout. A
@@ -634,7 +654,7 @@ def run_chat_event_sync(session_id, user_message):
                     )
                 except UsageLimitExceeded:
                     budget_hit['value'] = True
-                    budget_hit['text'] = _finalize_partial_answer(
+                    budget_hit['text'] = 'I reached the tool budget before completing this answer. Please narrow your question.' if evidence_context is not None else _finalize_partial_answer(
                         chatbot_model_id, run_messages,
                     )
                     return None
@@ -653,7 +673,8 @@ def run_chat_event_sync(session_id, user_message):
                 'answer from %d captured messages.', timeout_seconds, len(snapshot),
             )
             budget_hit['value'] = True
-            budget_hit['text'] = _finalize_partial_answer(chatbot_model_id, snapshot)
+            budget_hit['text'] = ('This answer exceeded its time limit. Please narrow your question.'
+                                 if evidence_context is not None else _finalize_partial_answer(chatbot_model_id, snapshot))
             res = None
 
         debug_payload = build_debug_payload(debug_log)
@@ -667,6 +688,9 @@ def run_chat_event_sync(session_id, user_message):
             )
         else:
             output = (res.output if res else '') or ''
+        citations = []
+        if evidence_context is not None:
+            output, citations = evidence_context.finalize(output)
         if org and org.debug_responses_enabled:
             output += render_debug_section(debug_payload)
 
@@ -679,21 +703,23 @@ def run_chat_event_sync(session_id, user_message):
             role="assistant",
             content=output,
             debug_meta=debug_payload,
+            citations=citations,
         )
 
-        return output
+        return 'Assistant answer saved.' if evidence_context is not None else output
 
     except Exception as e:
-        traceback.print_exc()
+        if evidence_context is None and (session is None or session.mode != 'documents'):
+            traceback.print_exc()
         error_content = f"Sorry, I encountered an error: {str(e)}"
-        if session and session.mode == 'documents':
+        if evidence_context is not None or session and session.mode == 'documents':
             error_content = 'Document Explorer could not complete this request. Please try again or contact your administrator.'
         ChatMessage.objects.create(
             session_id=session_id,
             role="assistant",
             content=error_content,
         )
-        return error_content if session and session.mode == 'documents' else str(e)
+        return error_content if evidence_context is not None or session and session.mode == 'documents' else str(e)
 
     finally:
         # Clear the status key so stale messages don't appear on the next request

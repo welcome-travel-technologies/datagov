@@ -23,6 +23,8 @@ def enqueue(source, key=None, versions=None):
     source = KnowledgeSource.objects.select_for_update().get(pk=source.pk)
     if not source.is_active:
         raise JobConflict('This source is paused.')
+    if source.refresh_paused:
+        raise JobConflict('Refresh is paused for this collection. Existing documents remain available.')
     key = key or f'manual:{uuid.uuid4()}'
     existing = IngestionRun.objects.filter(source=source, idempotency_key=key).first()
     if existing:
@@ -77,7 +79,7 @@ def claim(worker_id):
     # is frozen at enqueue; disabling the source still prevents a claim.
     # The source join only filters eligibility. Locking that joined row here
     # would invert the source -> run order used by source pause/publication.
-    run = IngestionRun.objects.select_for_update(of=('self',), skip_locked=True).filter(status='queued', source__is_active=True).order_by('created_at').first()
+    run = IngestionRun.objects.select_for_update(of=('self',), skip_locked=True).filter(status='queued', source__is_active=True, source__refresh_paused=False).order_by('created_at').first()
     if run is None:
         return None
     if run.attempt and run.source.kind == 'snapshot':

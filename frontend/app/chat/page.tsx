@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { DocumentCitations } from "@/components/knowledge/citations";
 import { knowledgeApi, type DocumentCitation } from "@/lib/knowledge-api";
 import { useAuth } from "@/lib/auth";
+import { useEvidenceReader } from "@/components/knowledge/evidence-workspace";
 
 type ChatMode = "catalog" | "documents";
 
@@ -80,6 +81,7 @@ function clearPending() {
 
 export default function ChatPage() {
   const { user } = useAuth();
+  const reader = useEvidenceReader();
   const [mode, setMode] = useState<ChatMode>("catalog");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -92,6 +94,8 @@ export default function ChatPage() {
   const endRef = useRef<HTMLDivElement>(null);
   const documentStatus = useQuery({ queryKey: ["knowledge", "status", user?.id], queryFn: knowledgeApi.status, enabled: !!user, retry: false, staleTime: 60_000 });
   const documentsAvailable = !!documentStatus.data?.enabled && !!documentStatus.data?.configured;
+  const nativeAi = !!documentStatus.data?.native_ai_enabled;
+  useEffect(() => { if (nativeAi && !activeId && !busy) setMode("catalog"); }, [nativeAi, activeId, busy]);
 
   useEffect(() => {
     if (messages.length === 0 && !status) return;
@@ -275,6 +279,7 @@ export default function ChatPage() {
   }
 
   function reset() {
+    if (nativeAi) setMode("catalog");
     clearPending();
     setActiveTask(null);
     sessionRef.current = null;
@@ -288,23 +293,23 @@ export default function ChatPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="AI Assistant"
-        description={mode === "documents" ? "Ask your documents. Open every source in Document Explorer." : "Ask about measures, columns, reports, lineage and dependencies."}
+        description={nativeAi ? "Ask about your catalog, documents, lineage and live data. Open evidence alongside your conversation." : mode === "documents" ? "Ask your documents and open their sources." : "Ask about measures, columns, reports, lineage and dependencies."}
         actions={
           // Fallback for screens below `lg`, where the History panel (and the
           // "New chat" button it now hosts) is hidden.
-          <Button variant="outline" size="sm" onClick={reset} className="lg:hidden">
+          <Button variant="outline" size="sm" onClick={reset} className={reader?.isOpen ? "" : "lg:hidden"}>
             <Plus className="h-4 w-4" /> New chat
           </Button>
         }
       />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex rounded-lg border border-line bg-card p-1" role="group" aria-label="Assistant mode">
+        {!nativeAi && <div className="inline-flex rounded-lg border border-line bg-card p-1" role="group" aria-label="Assistant mode">
           <Button size="sm" variant={mode === "catalog" ? "secondary" : "ghost"} aria-pressed={mode === "catalog"} disabled={busy || activeId !== null} onClick={() => setMode("catalog")}><MessageSquare /> Catalog</Button>
           <Button size="sm" variant={mode === "documents" ? "secondary" : "ghost"} aria-pressed={mode === "documents"} disabled={busy || activeId !== null || !documentStatus.data?.enabled} onClick={() => setMode("documents")}><FileSearch /> Documents</Button>
-        </div>
-        {mode === "documents" && <Link href="/knowledge" className="text-xs text-brand hover:underline">Browse Document Explorer</Link>}
-        {activeId !== null && <p className="text-xs text-muted-foreground">Start a new chat to change the source.</p>}
+        </div>}
+        {(nativeAi || mode === "documents") && <Link href="/integrations?tab=content" className="text-xs text-brand hover:underline">Browse data & documents</Link>}
+        {activeId !== null && mode === "documents" && nativeAi && <p className="text-xs text-muted-foreground">Earlier document conversation · Start a new chat to use all tools.</p>}
       </div>
       {mode === "documents" && !documentsAvailable && <p role="status" className="mb-3 rounded-lg border border-line bg-panel p-3 text-xs text-muted-foreground">{documentStatus.isPending ? "Checking document search availability…" : "Document search is currently unavailable. Your administrator can check the Document Explorer service."}</p>}
       <div className="flex min-h-0 flex-1 gap-4">
@@ -314,7 +319,7 @@ export default function ChatPage() {
               <div className="flex items-start gap-2.5">
                 <Avatar />
                 <Bubble role="model">
-                  {mode === "documents" ? "What would you like to find in your company documents? I will include sources you can open to check the answer." : "Hello! I'm your Data Governance Assistant. I can help you search for measures, columns, reports, or dependencies."}
+                  {nativeAi ? "Ask about your data, definitions, reports or company documents. I can connect catalog information with supporting evidence and live queries when available." : mode === "documents" ? "What would you like to find in your company documents? I will include sources you can open to check the answer." : "Hello! I'm your Data Governance Assistant. I can help you search for measures, columns, reports, or dependencies."}
                 </Bubble>
               </div>
             )}
@@ -356,7 +361,7 @@ export default function ChatPage() {
           </form>
         </div>
 
-        <aside className="hidden w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-card lg:flex">
+        <aside className={cn("hidden w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-card", !reader?.isOpen && "lg:flex")}>
           <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
             <span className="text-[13px] font-semibold">History</span>
             <Button variant="outline" size="sm" className="h-7 px-2.5" onClick={reset}>

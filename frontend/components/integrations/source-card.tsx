@@ -18,9 +18,11 @@ import { api, getApiErrorMessage, type IntegrationSource } from "@/lib/api";
 export function SourceCard({
   source,
   onChanged,
+  onBrowseContent,
 }: {
   source: IntegrationSource;
   onChanged: () => void;
+  onBrowseContent?: () => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -89,6 +91,7 @@ export function SourceCard({
         <Button size="sm" variant="ghost" onClick={() => setLogsOpen(true)}>
           <ScrollText /> Logs
         </Button>
+        {onBrowseContent && <Button size="sm" variant="ghost" onClick={onBrowseContent}><Database /> Data & documents</Button>}
       </div>
 
       {runMut.isError && (
