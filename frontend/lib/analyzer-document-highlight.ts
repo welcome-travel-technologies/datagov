@@ -1,11 +1,13 @@
-/** A cited passage is marked only when its complete normalized text has one
- * location in the document. Missing or ambiguous text keeps its excerpt as
- * the fallback, rather than highlighting a similar but unrelated sentence. */
+/** Match the original Luccy reader: whole passages first, then a surviving
+ * exact sentence/prefix, then a heading. Every match must have one location,
+ * and the status distinguishes quoted evidence from a navigation fallback. */
 export interface AnalyzerPassage { heading: string; text: string }
+export type AnalyzerPassageMatchStatus = "exact" | "partial" | "heading" | "missing";
 
 export interface HighlightedAnalyzerDocument {
   html: string;
   matchedPassages: number[];
+  matchStatuses: AnalyzerPassageMatchStatus[];
   activeMatched: boolean;
 }
 
@@ -62,7 +64,7 @@ function removeActiveContent(fragment: DocumentFragment) {
   }
 }
 
-function documentText(fragment: DocumentFragment) {
+function documentText(fragment: DocumentFragment, skipHeadings = false) {
   let text = "";
   const spans: TextSpan[] = [];
   const visit = (node: Node) => {
@@ -74,6 +76,7 @@ function documentText(fragment: DocumentFragment) {
     }
     const element = node.nodeType === 1 ? node as Element : null;
     if (element?.hasAttribute("hidden") || element?.getAttribute("aria-hidden") === "true") return;
+    if (skipHeadings && element && /^H[1-6]$/.test(element.tagName)) { text += "\n"; return; }
     const boundary = !!element && (BLOCKS.has(element.tagName) || element.tagName === "BR");
     if (boundary) text += "\n";
     node.childNodes.forEach(visit);
@@ -84,9 +87,8 @@ function documentText(fragment: DocumentFragment) {
 }
 
 /** The engine stores passages as Markdown but renders the document as HTML.
- * Strip recognized formatting only; the entire resulting passage must still
- * match uniquely. Code is protected so literal identifiers and asterisks do
- * not change meaning. Unsupported syntax simply keeps the excerpt fallback. */
+ * Strip recognized formatting only. Code is protected so literal identifiers
+ * and asterisks do not change meaning. Matching never changes document text. */
 function renderedPassageText(text: string, doc: Document) {
   const code: string[] = [];
   let marker = "\ue000";
@@ -134,36 +136,84 @@ export function highlightAnalyzerDocument(
   passages: readonly AnalyzerPassage[],
   activeIndex: number,
 ): HighlightedAnalyzerDocument {
-  if (typeof DOMParser === "undefined") return { html: "", matchedPassages: [], activeMatched: false };
+  const matchStatuses: AnalyzerPassageMatchStatus[] = passages.map(() => "missing");
+  if (typeof DOMParser === "undefined") return { html: "", matchedPassages: [], matchStatuses, activeMatched: false };
   const doc = new DOMParser().parseFromString("<!doctype html><html><body></body></html>", "text/html");
   const template = doc.createElement("template");
   template.innerHTML = bodyHtml;
   const fragment = template.content;
   removeActiveContent(fragment);
-  const { text, spans } = documentText(fragment);
-  const haystack = normalized(text);
-  const ranges: PassageRange[] = [];
-  passages.forEach((passage, index) => {
-    const fullText = passage.text?.trim();
-    // A heading alone is useful only if it is an actual, unique heading.
-    if (!fullText) {
-      const heading = normalized(passage.heading || "").value.trim();
-      if (!heading) return;
-      const headings = Array.from(fragment.querySelectorAll("h1, h2, h3, h4, h5, h6"))
-        .filter((element) => normalized(element.textContent || "").value.trim() === heading);
-      if (headings.length !== 1) return;
-      const matching = spans.filter((span) => headings[0].contains(span.node));
-      if (matching.length) ranges.push({ start: matching[0].start, end: matching[matching.length - 1].end, index });
-      return;
+  const fullIndex = documentText(fragment);
+  const { spans } = fullIndex;
+  const spanByNode = new Map(spans.map((span) => [span.node, span]));
+  const full = { ...fullIndex, normalized: normalized(fullIndex.text) };
+  let withoutHeadings: typeof full | undefined;
+  const headingFreeIndex = () => {
+    if (!withoutHeadings) {
+      const index = documentText(fragment, true);
+      withoutHeadings = { ...index, normalized: normalized(index.text) };
     }
-    const candidates = [fullText, renderedPassageText(fullText, doc)];
-    for (const candidate of candidates) {
-      const needle = normalized(candidate).value.trim();
-      if (!needle) continue;
-      const start = haystack.value.indexOf(needle);
-      if (start < 0 || haystack.value.indexOf(needle, start + 1) >= 0) continue;
-      ranges.push({ start: haystack.starts[start], end: haystack.ends[start + needle.length - 1], index });
-      break;
+    return withoutHeadings;
+  };
+  const ranges: PassageRange[] = [];
+  const recordMatch = (index: typeof full, start: number, end: number, passageIndex: number, status: AnalyzerPassageMatchStatus) => {
+    const previous = ranges.length;
+    // Translate each matched text-node segment back into the full document's
+    // coordinates. Omitted headings stay outside the marks, even when a
+    // passage spans their section boundaries.
+    for (const span of index.spans) {
+      if (span.end <= start || span.start >= end) continue;
+      const first = Math.max(start, span.start) - span.start;
+      const last = Math.min(end, span.end) - span.start;
+      if (!/\S/.test(span.node.data.slice(first, last))) continue;
+      const original = spanByNode.get(span.node)!;
+      ranges.push({ start: original.start + first, end: original.start + last, index: passageIndex });
+    }
+    if (ranges.length === previous) return false;
+    matchStatuses[passageIndex] = status;
+    return true;
+  };
+  const attempt = (candidate: string, passageIndex: number, status: AnalyzerPassageMatchStatus, index = full) => {
+    const needle = normalized(candidate).value.trim();
+    if (needle.length < 3) return false;
+    const haystack = index.normalized;
+    const start = haystack.value.indexOf(needle);
+    if (start < 0 || haystack.value.indexOf(needle, start + 1) >= 0) return false;
+    return recordMatch(index, haystack.starts[start], haystack.ends[start + needle.length - 1], passageIndex, status);
+  };
+  const headings = Array.from(fragment.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+  const titleHeading = fragment.querySelector("h1");
+  passages.forEach((passage, index) => {
+    const fullText = passage.text?.trim() || "";
+    const visible = renderedPassageText(fullText, doc).replace(/\s+/g, " ").trim();
+    const candidates = [fullText, visible];
+    // Retrieved table chunks can repeat the header before a later run of
+    // rows. The original reader also searches those complete rows alone.
+    const tableRows = fullText.split("\n").filter((line) => /^\s*\|/.test(line));
+    if (tableRows.length >= 3 && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(tableRows[1])) {
+      candidates.push(renderedPassageText(tableRows.slice(2).map((line) => line.replace(/(?<!\\)\|/g, " ")).join("\n"), doc));
+    }
+    if (candidates.some((candidate) => attempt(candidate, index, "exact"))) return;
+    // Chunk heading paths are stored separately; a complete passage may span
+    // section headings that are absent from its text.
+    if (visible && candidates.slice(1).some((candidate) => attempt(candidate, index, "exact", headingFreeIndex()))) return;
+
+    const sentences = visible.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.length >= 40)
+      .sort((a, b) => b.length - a.length).slice(0, 6);
+    if (sentences.some((sentence) => attempt(sentence, index, "partial"))) return;
+    const prefix = visible.slice(0, 120).replace(/\s+\S*$/, "");
+    if (prefix.length >= 40 && attempt(prefix, index, "partial")) return;
+
+    const parts = String(passage.heading || "").split(/\s+>\s+/).map((part) => part.trim()).filter(Boolean);
+    // A path's first part is the page title; it is not a fallback section.
+    for (const part of (parts.length > 1 ? parts.slice(1) : parts).reverse()) {
+      const needle = normalized(renderedPassageText(part, doc)).value.trim();
+      const matching = headings.filter((heading) => heading !== titleHeading &&
+        spans.some((span) => heading.contains(span.node)) &&
+        normalized(heading.textContent || "").value.trim() === needle);
+      if (matching.length !== 1) continue;
+      const headingSpans = spans.filter((span) => matching[0].contains(span.node));
+      if (recordMatch(full, headingSpans[0].start, headingSpans[headingSpans.length - 1].end, index, "heading")) return;
     }
   });
 
@@ -190,5 +240,10 @@ export function highlightAnalyzerDocument(
     }
     span.node.replaceWith(replacement);
   }
-  return { html: template.innerHTML, matchedPassages: ranges.map((range) => range.index), activeMatched: anchored };
+  return {
+    html: template.innerHTML,
+    matchedPassages: matchStatuses.flatMap((status, index) => status === "missing" ? [] : [index]),
+    matchStatuses,
+    activeMatched: anchored,
+  };
 }

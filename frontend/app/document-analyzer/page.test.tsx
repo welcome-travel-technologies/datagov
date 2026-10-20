@@ -217,6 +217,7 @@ describe("Document Analyzer page", () => {
     const panel = await screen.findByRole("complementary", { name: "Source document" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(panel).not.toHaveAttribute("aria-modal");
+    expect(within(panel).queryByRole("list")).not.toBeInTheDocument(); // Original reader: controls plus full document, no duplicate excerpt list.
     expect(panel).toHaveFocus();
     expect(await within(panel).findByText("HR › Policies")).toBeInTheDocument();
     expect(within(panel).getByRole("heading", { name: "Travel policy" })).toBeInTheDocument();
@@ -235,7 +236,7 @@ describe("Document Analyzer page", () => {
     expect(first.doc.querySelector("strong mark.analyzer-evidence-active")?.textContent).toBe("\u20ac150");
     expect(Array.from(first.doc.querySelectorAll('mark[data-passage-index="0"]'), (mark) => mark.textContent).join("")).toBe("Hotels up to \u20ac150 a night.");
     expect(first.doc.querySelector('mark[data-passage-index="1"]')?.textContent).toBe("Meals up to \u20ac40.");
-    expect(within(panel).queryByText(/could not be located/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/current version of the document/)).not.toBeInTheDocument();
 
     const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
     try {
@@ -342,20 +343,65 @@ describe("Document Analyzer page", () => {
     expect(objectUrlBlobs.size).toBe(0);
   });
 
-  it("keeps an unmatched cited excerpt visible without marking unrelated document text", async () => {
-    routes({ "/api/document-analyzer/documents/123/?answer=0a1b2c3d": () => json({ ...DOCUMENT, passages: [{ heading: "Hotels", text: "An older hotel policy passage." }] }) });
+  it("shows the original missing-passage message without marking unrelated document text", async () => {
+    routes({ "/api/document-analyzer/documents/123/?answer=0a1b2c3d": () => json({ ...DOCUMENT, passages: [{ heading: "Removed policy", text: "An older hotel policy passage." }] }) });
     mount();
     const stream = await askAndAnswer("What is the hotel limit?");
     stream.send(event("done", 0, ANSWER));
     stream.close();
     fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
     const panel = await screen.findByRole("complementary", { name: "Source document" });
-    expect(await within(panel).findByText("An older hotel policy passage.")).toBeInTheDocument();
-    expect(within(panel).getByText(/could not be located in the document/)).toBeInTheDocument();
+    expect(await within(panel).findByText("This passage isn't in the current version of the document.")).toBeInTheDocument();
     const { frame, doc } = await frameDocument(panel);
     expect(frame.getAttribute("src")).not.toContain("#active-evidence");
     expect(doc.querySelector("mark")).toBeNull();
     expect(doc.body.textContent).toContain("Hotels up to \u20ac150 a night.");
+  });
+
+  it.each([
+    {
+      label: "partial passage",
+      body: "<p>Customers receive a confirmation email after their booking has been approved.</p>",
+      passage: { heading: "", text: "Customers receive a confirmation email after their booking has been approved. An old rule was removed." },
+      note: "Matched part of the passage; the rest may have been rewritten since.",
+      marked: "Customers receive a confirmation email after their booking has been approved.",
+    },
+    {
+      label: "section heading",
+      body: "<h1>Travel policy</h1><h2>Hotels</h2><p>The current hotel rules.</p>",
+      passage: { heading: "Travel policy > Hotels", text: "An old hotel rule was removed." },
+      note: "We couldn't find the exact passage, so we show its section instead.",
+      marked: "Hotels",
+    },
+  ])("explains the original reader's $label fallback", async ({ body, passage, note, marked }) => {
+    routes({ "/api/document-analyzer/documents/123/?answer=0a1b2c3d": () => json({ ...DOCUMENT, body_html: body, passages: [passage] }) });
+    mount();
+    const stream = await askAndAnswer("What is the hotel limit?");
+    stream.send(event("done", 0, ANSWER));
+    stream.close();
+    fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    expect(await within(panel).findByText(note)).toBeInTheDocument();
+    const { doc } = await frameDocument(panel);
+    expect(doc.getElementById("active-evidence")?.textContent).toBe(marked);
+  });
+
+  it("starts at the first located passage and still lets the reader navigate to a missing one", async () => {
+    routes({ "/api/document-analyzer/documents/123/?answer=0a1b2c3d": () => json({ ...DOCUMENT, passages: [
+      { heading: "Removed section", text: "An older rule no longer present." }, DOCUMENT.passages[1],
+    ] }) });
+    mount();
+    const stream = await askAndAnswer("What is the hotel limit?");
+    stream.send(event("done", 0, ANSWER));
+    stream.close();
+    fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    expect(await within(panel).findByText("Passage 2 of 2")).toBeInTheDocument();
+    const { doc } = await frameDocument(panel);
+    expect(doc.getElementById("active-evidence")?.textContent).toBe("Meals up to \u20ac40.");
+    fireEvent.click(within(panel).getByRole("button", { name: "Previous passage" }));
+    expect(within(panel).getByText("Passage 1 of 2")).toBeInTheDocument();
+    expect(within(panel).getByText("This passage isn't in the current version of the document.")).toBeInTheDocument();
   });
 
   it("sends the condensed history, chosen sources and simple style with a follow-up", async () => {

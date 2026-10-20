@@ -10,6 +10,7 @@ describe("analyzer document passage highlighting", () => {
     const result = highlightAnalyzerDocument(body, [passage("Establish Welcome as a trusted partner.\nThe next phase starts now.")], 0);
     const doc = parsed(result.html);
     expect(result.matchedPassages).toEqual([0]);
+    expect(result.matchStatuses).toEqual(["exact"]);
     expect(result.activeMatched).toBe(true);
     expect(doc.querySelector("strong mark")?.textContent).toBe("Welcome");
     expect(Array.from(doc.querySelectorAll("mark"), (mark) => mark.textContent).join("")).toBe("Establish Welcome as a trusted partner.The next phase starts now.");
@@ -25,10 +26,59 @@ describe("analyzer document passage highlighting", () => {
   });
 
   it("keeps unmatched and repeated passages unmarked instead of guessing", () => {
-    const result = highlightAnalyzerDocument("<h2>Strategy</h2><p>Same policy.</p><p>Same policy.</p>", [passage("Same policy."), passage("Different policy.", "Strategy")], 0);
+    const result = highlightAnalyzerDocument("<h2>Strategy</h2><p>Same policy.</p><h2>Strategy</h2><p>Same policy.</p>", [passage("Same policy.", "Strategy"), passage("Different policy.", "Missing section")], 0);
     expect(result.matchedPassages).toEqual([]);
+    expect(result.matchStatuses).toEqual(["missing", "missing"]);
     expect(result.activeMatched).toBe(false);
     expect(parsed(result.html).querySelector("mark")).toBeNull();
+  });
+
+  it("matches whole cross-section passages without marking intervening headings as evidence", () => {
+    const body = "<h1>Company plan</h1><h2>Current phase</h2><p>The first phase is complete.</p><h2>Next phase</h2><p>The second phase starts tomorrow.</p>";
+    const result = highlightAnalyzerDocument(body, [passage("The first phase is complete.\nThe second phase starts tomorrow.", "Company plan > Current phase")], 0);
+    const doc = parsed(result.html);
+    expect(result.matchStatuses).toEqual(["exact"]);
+    expect(result.matchedPassages).toEqual([0]);
+    expect(doc.querySelectorAll("h1 mark, h2 mark")).toHaveLength(0);
+    expect(Array.from(doc.querySelectorAll("p mark"), (mark) => mark.textContent)).toEqual(["The first phase is complete.", "The second phase starts tomorrow."]);
+    expect(doc.getElementById(ACTIVE_EVIDENCE_ID)?.textContent).toBe("The first phase is complete.");
+  });
+
+  it("labels a unique surviving sentence as partial instead of claiming the entire passage matched", () => {
+    const sentence = "The regional operations team reviews every pending request before the weekly planning meeting.";
+    const result = highlightAnalyzerDocument(`<h2>Process</h2><p>${sentence}</p>`, [passage(`An older introduction. ${sentence} A retired closing statement.`, "Process")], 0);
+    expect(result.matchStatuses).toEqual(["partial"]);
+    expect(parsed(result.html).querySelector("mark")?.textContent).toBe(sentence);
+    expect(parsed(result.html).querySelector("h2 mark")).toBeNull();
+  });
+
+  it("labels the surviving leading prefix as partial when no full sentence remains", () => {
+    const start = "The operations team prepares the regional forecast using the latest confirmed bookings and the published destination planning assumptions";
+    const result = highlightAnalyzerDocument(`<p>${start} with a revised ending</p>`, [passage(`${start} with the old ending`)], 0);
+    const marked = parsed(result.html).querySelector("mark")?.textContent || "";
+    expect(result.matchStatuses).toEqual(["partial"]);
+    expect(marked.length).toBeGreaterThanOrEqual(40);
+    expect(marked.length).toBeLessThanOrEqual(120);
+    expect(start.startsWith(marked)).toBe(true);
+  });
+
+  it("refuses repeated partial sentence locations", () => {
+    const sentence = "The regional operations team reviews every pending request before the weekly planning meeting.";
+    const result = highlightAnalyzerDocument(`<p>${sentence}</p><p>${sentence}</p>`, [passage(`A missing introduction. ${sentence} A missing ending.`)], 0);
+    expect(result.matchStatuses).toEqual(["missing"]);
+    expect(result.activeMatched).toBe(false);
+    expect(parsed(result.html).querySelector("mark")).toBeNull();
+  });
+
+  it("labels a unique heading-path fallback and avoids the page title", () => {
+    const body = "<h1>Travel policy</h1><h2>Hotels</h2><p>A revised policy appears here.</p>";
+    const result = highlightAnalyzerDocument(body, [passage("The old excerpt is gone.", "Travel policy > Hotels"), passage("Not present.", "Travel policy")], 0);
+    const doc = parsed(result.html);
+    expect(result.matchStatuses).toEqual(["heading", "missing"]);
+    expect(result.matchedPassages).toEqual([0]);
+    expect(doc.querySelector("h2 mark")?.textContent).toBe("Hotels");
+    expect(doc.querySelector("h1 mark, p mark")).toBeNull();
+    expect(doc.getElementById(ACTIVE_EVIDENCE_ID)?.textContent).toBe("Hotels");
   });
 
   it("matches the visible form of Markdown passages without removing code punctuation", () => {
@@ -50,6 +100,7 @@ describe("analyzer document passage highlighting", () => {
   it("only marks a heading-only passage when the actual heading is unique", () => {
     const result = highlightAnalyzerDocument("<h2>Strategy</h2><p>Strategy changes.</p><h3>Repeated</h3><h3>Repeated</h3>", [passage("", "strategy"), passage("", "Repeated")], 0);
     expect(result.matchedPassages).toEqual([0]);
+    expect(result.matchStatuses).toEqual(["heading", "missing"]);
     expect(parsed(result.html).querySelector("h2 mark")?.textContent).toBe("Strategy");
   });
 
@@ -86,7 +137,7 @@ describe("analyzer document passage highlighting", () => {
   it("returns an empty safe body on the server until client parsing is available", () => {
     vi.stubGlobal("DOMParser", undefined);
     try {
-      expect(highlightAnalyzerDocument("<p>Policy.</p>", [passage("Policy.")], 0)).toEqual({ html: "", matchedPassages: [], activeMatched: false });
+      expect(highlightAnalyzerDocument("<p>Policy.</p>", [passage("Policy.")], 0)).toEqual({ html: "", matchedPassages: [], matchStatuses: ["missing"], activeMatched: false });
     } finally { vi.unstubAllGlobals(); }
   });
 });
