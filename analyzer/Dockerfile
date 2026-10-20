@@ -1,8 +1,7 @@
 # The Document Analyzer: luccy's UNCHANGED RAG app, served live from DataGov's Qdrant.
 #
 # Base: the luccy image, as built from luccy's own serving/deploy/Dockerfile. LUCCY_IMAGE MUST
-# be built from the luccy branch feat/engine-whole-pages: that branch leaves every original
-# luccy file unchanged and adds document_explorer/stitch.py (stitch_document, normalize), the
+# include document_explorer/stitch.py (stitch_document, normalize), now on luccy's main, the
 # shared stitcher this adapter rebuilds whole pages with. The build checks it: a luccy image
 # without the stitcher, or whose luccy code differs from the version pinned in
 # luccy_qdrant/pins.py, fails to build (the RUN below), so a mismatch never reaches a host.
@@ -27,12 +26,15 @@ COPY luccy_qdrant /opt/datagov-analyzer/luccy_qdrant
 # /opt/datagov-analyzer for the adapter, /app for luccy (the image's editable install puts it
 # on the path too; listing it keeps that true for any interpreter flag). luccy's own knobs the
 # live corpus needs: the stemming keyword leg and Qdrant meaning search (both luccy defaults).
-# Two answers at once (luccy's own default of 4 peaked above the analyzer's 6 GiB); a
-# deployment may set its own.
+# Two answers at once, with smaller reranking batches and bounded CPU threads: the
+# original batch of 32 exceeded 6 GiB under concurrent retrieval. Batch 8 preserves
+# the reranker's scores and ordering. A deployment may override these resource settings.
 ENV PYTHONPATH=/opt/datagov-analyzer:/app \
     LUCCY_KW_STEM=1 \
     LUCCY_VECTOR_STORE=qdrant \
     LUCCY_MAX_CONCURRENT_ANSWERS=2 \
+    RERANK_BATCH=8 \
+    OMP_NUM_THREADS=2 \
     SERVING_LOG_DIR=/app/serving/logs
 
 # The pins, the stitcher and the hooks on luccy's app, checked once here (no Qdrant, no key).

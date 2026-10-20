@@ -237,7 +237,7 @@ except e.HTTPError as x: print(x.code, x.read().decode())"
 ```
 
 As a member of the organization, `GET /api/document-analyzer/status/` should say the analyzer
-is available and healthy. The **Document Analyzer** entry then appears in the navigation.
+is available and healthy. Open **Company → Luccy (Beta)** in the navigation.
 
 ## Keep it in sync
 
@@ -551,12 +551,12 @@ Steps:
 
 | Container | Memory |
 |---|---|
-| `analyzer` | luccy measured about 1.7 GiB idle, 3.6 GiB after one answer and 6.7 GiB at peak with four answers at once. Here: `mem_limit: 6g` and two answers at once. |
+| `analyzer` | Limit 6 GiB, two answers at once. The image defaults to `RERANK_BATCH=8` and `OMP_NUM_THREADS=2`: the original batch of 32 exceeded the limit during concurrent retrieval. Smaller batches preserve reranking scores and ordering. |
 | `analyzer-sync` | Limit 4 GiB, only while it runs. |
 | `analyzer-compare` | Limit 2 GiB, only while it runs. |
 | Qdrant | Grows by the keyword collection: one sparse point per chunk, no dense vectors. Check `document-vectors` after the first sync. |
 
-- **The VM has about 14 GiB free**, so the analyzer's 6 GiB fits with room for a sync.
+- **Leave room for the other services.** Check available VM memory before increasing the analyzer's 6 GiB limit or its concurrency.
 - **Answers take 20 to 60 seconds.** Raise `LUCCY_MAX_CONCURRENT_ANSWERS` only with memory to
   spare (the VM release refuses more than 3). Beyond the limit luccy answers "busy".
 - **Logs grow.** luccy writes one JSON record per answer into a day folder of
@@ -627,7 +627,7 @@ analyzer`; on the VM, revert on `main` and release.
 | Symptom | Cause and fix |
 |---|---|
 | `required variable ... is missing a value` | A secret in `.env.analyzer` is empty, or `--env-file .env.documents` is missing. The message names it. |
-| The analyzer image does not build ("refusing to start", pins or `document_explorer.stitch`) | `LUCCY_IMAGE` is not the luccy version the adapter is pinned to, or not built from `feat/engine-whole-pages`. Use that image, or re-review and re-pin the hooks. A running analyzer only warns about pins in its log. |
+| The analyzer image does not build ("refusing to start", pins or `document_explorer.stitch`) | `LUCCY_IMAGE` is not the luccy version the adapter is pinned to, or lacks the shared stitcher now on Luccy's `main`. Use the approved pinned image, or re-review and re-pin the hooks. A running analyzer only warns about pins in its log. |
 | `/health` 503 before the first sync | There is no `luccy_kw` yet. Run `analyzer-sync`. |
 | The sync gets 404 from DataGov | `LUCCY_ENABLED` is not `True`, or `LUCCY_ORGANIZATION_ID` or `LUCCY_SYNC_TOKEN` is not set on DataGov's side, or the token is short or shared (DataGov's log says which). |
 | The sync gets 401 | `LUCCY_SYNC_TOKEN` differs between DataGov and the job. |
