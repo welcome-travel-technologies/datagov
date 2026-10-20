@@ -1,13 +1,11 @@
-"""C5: the evaluation answer arm, comparison-run storage and the admins' comparison API.
+"""C5: the evaluation answer arm and private comparison-run storage.
 Agents run for real with an offline FunctionModel; luccy is a MockTransport."""
 import json
 import re
-from datetime import timedelta
 
 import httpx
 import pytest
 from django.core.management import call_command
-from django.utils import timezone
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
@@ -190,15 +188,16 @@ def test_analyzer_off_or_not_set_up_hides_eval_and_comparisons(evalsetup, luccy,
 @pytest.mark.django_db
 @pytest.mark.parametrize('change', [{'LUCCY_EVAL_TOKEN': 'short-eval-token'}, {'LUCCY_SYNC_TOKEN': TOKEN},
                                     {'LUCCY_API_KEY': TOKEN}])
-def test_a_weak_or_shared_eval_token_closes_only_the_eval_endpoints(evalsetup, luccy, settings, change):
+def test_a_weak_or_shared_eval_token_closes_eval_and_keeps_stored_runs_private(evalsetup, luccy, settings, change):
     AnalyzerComparisonRun.objects.create(organization=evalsetup['org'], run_id='kept', status='done', rows=[1])
     for key, value in change.items():
         setattr(settings, key, value)
     assert harness(settings.LUCCY_EVAL_TOKEN).post(RUNS_URL, {'status': 'done'}, format='json').status_code == 404
     assert harness(settings.LUCCY_EVAL_TOKEN).post(
         ANSWER_URL, {'arm': 'chat_analyzer_only', 'question': 'Q'}, format='json').status_code == 404
-    # The stored runs stay readable for admins.
-    assert browser(evalsetup['admin']).get(f'{LIST_URL}kept/').status_code == 200
+    # Stored runs stay private and intact even when evaluation is unavailable.
+    assert browser(evalsetup['admin']).get(f'{LIST_URL}kept/').status_code == 404
+    assert AnalyzerComparisonRun.objects.get(run_id='kept').rows == [1]
     assert luccy['requests'] == []
 
 
@@ -450,64 +449,21 @@ def runs(evalsetup):
 
 
 @pytest.mark.django_db
-def test_admins_list_runs_newest_first_as_a_plain_array_without_rows(evalsetup, runs):
-    response = browser(evalsetup['admin']).get(LIST_URL)
-    assert response.status_code == 200
-    body = response.json()
-    assert isinstance(body, list)
-    assert [run['run_id'] for run in body] == ['newer', 'older']
-    assert all('rows' not in run for run in body)
-    assert body[0]['params'] == {'arms': ['A']} and body[1]['summary'] == {'questions': 1}
-    assert set(body[0]) == {'run_id', 'status', 'params', 'summary', 'created_at', 'updated_at', 'stale'}
-    assert body[0]['stale'] is False and body[1]['stale'] is False
+@pytest.mark.parametrize('who', [None, 'admin', 'reader', 'plain', 'outsider', 'superuser'])
+@pytest.mark.parametrize('path', ['', 'older/', 'newer/', 'foreign/', 'unknown/', 'a..b/'])
+def test_comparison_browser_routes_are_gone_for_every_user(evalsetup, runs, who, path):
+    user = evalsetup[who] if who else None
+    assert browser(user).get(f'{LIST_URL}{path}').status_code == 404
+    # Removing access does not remove the saved benchmark results.
+    assert AnalyzerComparisonRun.objects.count() == 3
+    runs['older'].refresh_from_db()
+    assert runs['older'].summary == {'questions': 1} and runs['older'].rows == [{'id': 'q1'}]
 
 
 @pytest.mark.django_db
-def test_a_running_run_without_updates_for_thirty_minutes_is_stale(evalsetup, runs):
-    old = timezone.now() - timedelta(minutes=31)
-    AnalyzerComparisonRun.objects.filter(run_id='newer').update(updated_at=old)  # running
-    AnalyzerComparisonRun.objects.filter(run_id='older').update(updated_at=old)  # done: never stale
-    admin = browser(evalsetup['admin'])
-    listed = {run['run_id']: run['stale'] for run in admin.get(LIST_URL).json()}
-    assert listed == {'newer': True, 'older': False}
-    assert admin.get(f'{LIST_URL}newer/').json()['stale'] is True
-    assert admin.get(f'{LIST_URL}older/').json()['stale'] is False
-    AnalyzerComparisonRun.objects.filter(run_id='newer').update(updated_at=timezone.now() - timedelta(minutes=29))
-    assert admin.get(f'{LIST_URL}newer/').json()['stale'] is False
-
-
-@pytest.mark.django_db
-def test_admins_read_one_run_with_its_rows(evalsetup, runs):
-    body = browser(evalsetup['admin']).get(f'{LIST_URL}older/').json()
-    assert body['run_id'] == 'older' and body['rows'] == [{'id': 'q1'}] and body['status'] == 'done'
-    assert browser(evalsetup['admin']).get(f'{LIST_URL}foreign/').status_code == 404
-    assert browser(evalsetup['admin']).get(f'{LIST_URL}unknown/').status_code == 404
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize('path', ['a..b', '..', '-x', 'x' * 129, 'a%20b', '.hidden'])
-def test_the_run_route_only_matches_valid_ids(evalsetup, runs, path):
-    AnalyzerComparisonRun.objects.create(organization=evalsetup['org'], run_id='a..b', status='done')
-    assert browser(evalsetup['admin']).get(f'{LIST_URL}{path}/').status_code == 404
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize('who, status', [('reader', 403), ('plain', 403), ('outsider', 404), ('superuser', 404)])
-def test_only_admins_of_the_bound_organization_see_runs(evalsetup, runs, who, status):
-    assert browser(evalsetup[who]).get(LIST_URL).status_code == status
-    assert browser(evalsetup[who]).get(f'{LIST_URL}older/').status_code == status
-
-
-@pytest.mark.django_db
-def test_runs_are_hidden_without_a_bound_organization_or_sign_in(evalsetup, runs, settings):
-    assert browser(None).get(LIST_URL).status_code in (401, 403)
-    settings.LUCCY_ORGANIZATION_ID = ''
-    assert browser(evalsetup['admin']).get(LIST_URL).status_code == 404
-
-
-@pytest.mark.django_db
-def test_the_eval_token_does_not_open_the_comparison_api(evalsetup, runs):
-    assert harness().get(LIST_URL).status_code in (401, 403)
+@pytest.mark.parametrize('path', ['', 'older/'])
+def test_the_eval_token_does_not_open_a_comparison_browser_route(evalsetup, runs, path):
+    assert harness().get(f'{LIST_URL}{path}').status_code == 404
 
 
 # The runner's summary of a full golden-set run (analyzer/luccy_qdrant/compare): the set's identity,
@@ -531,20 +487,18 @@ GOLDEN_SUMMARY = {
 
 
 @pytest.mark.django_db
-def test_a_golden_set_summary_is_stored_and_served_as_sent(evalsetup, runs):
-    """The new summary fields need no schema: stored as sent, served to admins, and older runs
-    without them (`runs`) are served as they were."""
+def test_a_golden_set_summary_is_stored_privately_as_sent(evalsetup, runs):
+    """The protected runner keeps full metadata and rows without exposing browser endpoints."""
     rows = [{'id': 'sh-001', 'kind': 'single_hop', 'question': 'Starbucks ride?', 'order': ['A', 'C'], 'arms': {},
              'expected_docs_missing': ['4435476587'], 'recorded': 'pass'}]
     body = {'run_id': 'gold-full', 'status': 'done', 'params': {'gold_rows': 121, 'ids': None},
             'summary': GOLDEN_SUMMARY, 'rows': rows}
     assert harness().post(RUNS_URL, body, format='json').status_code == 201
+    stored = AnalyzerComparisonRun.objects.get(run_id='gold-full')
+    assert stored.summary == GOLDEN_SUMMARY and stored.rows == rows and stored.params['gold_rows'] == 121
+    assert runs['older'].summary == {'questions': 1}
     admin = browser(evalsetup['admin'])
-    one = admin.get(f'{LIST_URL}gold-full/').json()
-    assert one['summary'] == GOLDEN_SUMMARY and one['rows'] == rows and one['params']['gold_rows'] == 121
-    listed = {run['run_id']: run for run in admin.get(LIST_URL).json()}
-    assert listed['gold-full']['summary'] == GOLDEN_SUMMARY
-    assert listed['older']['summary'] == {'questions': 1} and admin.get(f'{LIST_URL}older/').status_code == 200
+    assert admin.get(LIST_URL).status_code == admin.get(f'{LIST_URL}gold-full/').status_code == 404
 
 
 # ---- migrations --------------------------------------------------------------------------------

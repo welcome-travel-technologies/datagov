@@ -5,7 +5,6 @@ import {
   citationSource,
   condenseHistory,
   followAnswer,
-  isComparisonHidden,
   isOpenableDocumentId,
   isReservedConversationId,
   newConversationId,
@@ -179,33 +178,6 @@ describe("Document Analyzer API", () => {
     await expect(analyzerApi.document("..")).rejects.toMatchObject({ status: 404 });
     await expect(analyzerApi.document("a/b")).rejects.toMatchObject({ status: 404 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("lists comparison runs, plain or paginated, and opens one by its encoded id", async () => {
-    const run = { run_id: "2026-10-16T10:00", status: "done" };
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(json([run]))
-      .mockResolvedValueOnce(json({ results: [run] }))
-      .mockResolvedValueOnce(json({ ...run, rows: [] }));
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(analyzerApi.comparisons()).resolves.toEqual([run]);
-    await expect(analyzerApi.comparisons()).resolves.toEqual([run]);
-    await expect(analyzerApi.comparison("2026-10-16T10:00")).resolves.toMatchObject({ rows: [] });
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "/api/document-analyzer/comparisons/",
-      "/api/document-analyzer/comparisons/",
-      "/api/document-analyzer/comparisons/2026-10-16T10%3A00/",
-    ]);
-    for (const bad of ["", "..", "a..b", "a/b", "../x"]) await expect(analyzerApi.comparison(bad)).rejects.toMatchObject({ status: 404 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("treats only 403 and 404 from the comparison endpoints as 'hide the view'", () => {
-    expect(isComparisonHidden(new ApiError(403, "Forbidden"))).toBe(true);
-    expect(isComparisonHidden(new ApiError(404, "Not found"))).toBe(true);
-    expect(isComparisonHidden(new ApiError(500, "Boom"))).toBe(false);
-    expect(isComparisonHidden(new TypeError("offline"))).toBe(false);
-    expect(isComparisonHidden(null)).toBe(false);
   });
 
   it("reads the status endpoint", async () => {

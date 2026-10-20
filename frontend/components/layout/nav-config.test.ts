@@ -51,9 +51,13 @@ describe("nav config", () => {
 describe("Luccy (Beta) nav item", () => {
   const analyzer = NAV_GROUPS.find((g) => g.label === "Company")?.items.find((i) => i.href === "/document-analyzer");
   it("sits in the Company group behind its own permission", () => {
-    expect(analyzer).toMatchObject({ label: "Luccy (Beta)", perm: "can_view_document_analyzer" });
+    expect(analyzer).toMatchObject({ label: "Luccy (Beta)", perm: "can_view_document_analyzer", openInNewTab: true });
     expect(analyzer?.orAdmin).toBeFalsy();
     expect(LABEL_BY_HREF["/document-analyzer"]).toBe("Luccy (Beta)");
+  });
+  it("is last in the Company group", () => {
+    const company = NAV_GROUPS.find((g) => g.label === "Company")!;
+    expect(company.items.at(-1)).toBe(analyzer);
   });
   it("is hidden when the permission is false, even for admins", () => {
     expect(canSee(analyzer!, { ...ALL_FALSE, can_view_document_analyzer: false })).toBe(false);

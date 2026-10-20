@@ -1,8 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { ArrowUp, FileSearch, Plus, Sparkles } from "lucide-react";
+import { ArrowUp, FileSearch, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApiError, extractApiErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -250,13 +249,7 @@ export function AnalyzerChat({ userId, status }: { userId: number; status: Analy
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        {status.tool_available ? (
-          <p className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-brand/10 px-2.5 py-1 text-[12px] text-foreground/80">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden="true" />
-            <span>Also in the <Link href="/chat" className="font-medium text-brand hover:underline">AI Assistant</Link> as the &ldquo;Document analyzer&rdquo; tool.</span>
-          </p>
-        ) : <span />}
+      <div className="mb-3 flex justify-end">
         <Button variant="outline" size="sm" onClick={newChat}><Plus className="h-4 w-4" /> New chat</Button>
       </div>
       {status.healthy === false && (

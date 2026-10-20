@@ -30,6 +30,8 @@ export type NavItem = {
   /** When true, `is_admin` also unlocks the item. */
   orAdmin?: boolean;
   orPerm?: keyof MePerms;
+  /** Standalone apps open separately from the DataGov workspace. */
+  openInNewTab?: boolean;
 };
 
 export type NavGroup = { label: string; items: NavItem[] };
@@ -50,10 +52,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/tasks", label: "Task Manager", icon: ClipboardCheck, perm: "can_view_tasks" },
       { href: "/champions", label: "Data Champions", icon: Trophy, perm: "can_view_champions" },
       { href: "/chat", label: "AI Assistant", icon: MessageSquare, perm: "can_view_chat" },
-      { href: "/document-analyzer", label: "Luccy (Beta)", icon: FileSearch, perm: "can_view_document_analyzer" },
       { href: "/powerbi/catalog", label: "PowerBI Catalog", icon: Database, perm: "can_view_powerbi", orAdmin: true },
       { href: "/powerbi/reports", label: "Report Health & Usage", icon: BarChart3, perm: "can_view_reports" },
       { href: "/powerbi/metrics-map", label: "Metrics Map", icon: Sigma, perm: "can_view_powerbi", orAdmin: true },
+      { href: "/document-analyzer", label: "Luccy (Beta)", icon: FileSearch, perm: "can_view_document_analyzer", openInNewTab: true },
     ],
   },
   {

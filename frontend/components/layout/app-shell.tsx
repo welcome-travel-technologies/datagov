@@ -15,7 +15,7 @@ import { useAuth } from "@/lib/auth";
 // vertically: there's nothing to scroll to except the decorative
 // .welcome-gradient blob that bleeds ~10rem below <main> (bottom: -10rem),
 // which would otherwise extend main's scrollable region into empty space.
-const FIXED_HEIGHT_ROUTES = ["/lineage", "/powerbi/metrics-map", "/chat", "/document-analyzer"];
+const FIXED_HEIGHT_ROUTES = ["/lineage", "/powerbi/metrics-map", "/chat"];
 
 function isFixedHeightRoute(pathname: string | null): boolean {
   if (!pathname) return false;
@@ -64,7 +64,7 @@ function Topbar() {
   );
 }
 
-/** Chrome wrapping every page. Hides the sidebar on /login. */
+/** Shared workspace chrome; Luccy has its own authenticated app layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const bare = pathname?.startsWith("/login");
@@ -75,6 +75,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isShare) {
     return <AuthGuard>{children}</AuthGuard>;
+  }
+
+  if (pathname === "/document-analyzer" || pathname?.startsWith("/document-analyzer/")) {
+    return (
+      <AuthGuard>
+        <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background px-4 py-5 sm:px-7 sm:py-7">{children}</main>
+      </AuthGuard>
+    );
   }
 
   return (

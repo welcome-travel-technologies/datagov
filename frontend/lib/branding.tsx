@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -81,6 +82,7 @@ export function useBranding(): EffectiveBranding {
  * nothing — mount once near the app root (inside Auth + Query providers). */
 export function BrandingApplier() {
   const { name, primaryColor, icon } = useBranding();
+  const pathname = usePathname();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -98,8 +100,10 @@ export function BrandingApplier() {
   }, [primaryColor]);
 
   useEffect(() => {
-    document.title = `${name} DataGov`;
-  }, [name]);
+    document.title = pathname === "/document-analyzer" || pathname?.startsWith("/document-analyzer/")
+      ? "Luccy (Beta)"
+      : `${name} DataGov`;
+  }, [name, pathname]);
 
   useEffect(() => {
     if (!icon) return;

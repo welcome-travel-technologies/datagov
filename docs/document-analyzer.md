@@ -1,6 +1,6 @@
 # Document Analyzer
 
-The Document Analyzer runs **luccy**, the colleagues' document question-answering app
+**Luccy (Beta)** is the independent Document Analyzer app. It runs **luccy**, the colleagues' document question-answering app
 ([`welcome-travel-technologies/luccy`](https://github.com/welcome-travel-technologies/luccy)),
 inside DataGov. It answers questions about the company's documents and cites them.
 
@@ -14,6 +14,10 @@ is the only place the documents live.
   The standalone `/document-analyzer` page remains available to authorized members.
   The protected admin comparison still exercises the full chat integration without
   enabling it for users or changing their preferences.
+- **Open the independent app in a new window.** **Luccy (Beta)** is the last entry
+  in the Company menu. It opens with its own title and full-height interface,
+  using the same sign-in and access checks. The comparison is an operator script;
+  it has no frontend, menu item or browser results endpoint.
 - **When chat is enabled, the Document Analyzer answers every document question in DataGov**: on its
   `/document-analyzer` page, in the AI Assistant chat (its only document tool), in earlier
   documents-mode chats and in Slack's `documents:` direct messages. The Document Explorer
@@ -237,7 +241,8 @@ except e.HTTPError as x: print(x.code, x.read().decode())"
 ```
 
 As a member of the organization, `GET /api/document-analyzer/status/` should say the analyzer
-is available and healthy. Open **Company → Luccy (Beta)** in the navigation.
+is available and healthy. Open **Luccy (Beta)** at the bottom of the Company menu;
+the independent app opens in a new window.
 
 ## Keep it in sync
 
@@ -448,31 +453,33 @@ three luccy files (mode 0600) on the VM. None of them is in an image or a releas
 
 The comparison runs luccy's golden set exactly: every one of the 121 questions in luccy's
 `eval/gold/gold_set.jsonl`, asked of luccy and of DataGov, every answer scored with luccy's own
-judge, and the result set next to luccy's own recorded score on the same set. The results are
-stored in DataGov: open `/document-analyzer` and the **Comparison** view.
+judge, and the result set next to luccy's own recorded score on the same set. Run it
+locally with `scripts/compare-luccy.ps1`. It prints the summary in the terminal and
+keeps live-run results in DataGov's private evaluation store. There is no comparison
+frontend or browser list/detail API, including for organization administrators.
 
 - **Arms** (all three run by default): `A` and `A2` (luccy twice, to show its own run-to-run
   spread) and `C` (DataGov chat with only the analyzer tool, the one way DataGov answers
   document questions).
 - **The full golden set, always.** Every row and every kind is asked and scored, warehouse
   questions included, and so are the questions whose expected documents DataGov does not
-  hold: those are listed (per question, `expected_docs_missing`, and under **Expected
-  documents not in DataGov** in the view) so a failure can be explained. Only infrastructure
+  hold: those are listed per question in `expected_docs_missing` so a failure can be
+  explained. Only infrastructure
   failures are left out of the scores. `--ids`, `--kinds`, `--limit` and `--stratified` are
-  for smoke runs only: the summary then says `complete: false` and the view shows **Partial
-  run — not the full golden set**. A run that stops early (the spend cap, an interrupt) is
+  for smoke runs only: the summary then says `complete: false`. A run that stops early
+  (the spend cap, an interrupt) is
   partial too.
 - **Luccy's recorded score is the reference.** It is luccy's quality-gate baseline,
   `eval/gold/baseline.summary.json` (today luccy's run of 28 Sep 2026: 74 of 121 right, fact
   ratio 0.706, judge `gemini-3.5-flash-lite`, gold digest `2670070ea44a`). It ships in the
   luccy image beside the gold set, so the runner reads it where it is
-  (`analyzer/luccy_qdrant/compare/golden.py`); nothing is copied or changed. The view shows it
+  (`analyzer/luccy_qdrant/compare/golden.py`); nothing is copied or changed. The report includes it
   next to A, A2 and C: its score on the same questions, per kind and per question, and how
   many questions A and C flip against it.
 - **"The same set Luccy's recorded score used"** means luccy's own `gold_digest`
   (`eval/gold/run_quality_gate.py`) over the golden set in the image equals the recorded run's
   `gold_digest`: the same questions, expectations and rubric, row for row. When it does not,
-  the view warns and counts the questions edited or added since (from luccy's `row_digests`);
+  the summary counts the questions edited or added since (from luccy's `row_digests`);
   those have no recorded verdict to compare with.
 - **Configuration drift.** The runner builds luccy's current configuration with luccy's own
   functions (`retrieval_knobs`, `prompt_shas`, `stage_clients`), in the same image and with the
@@ -517,7 +524,7 @@ How the arms are compared (`analyzer/luccy_qdrant/compare/metrics.py`):
   listed in the summary (`excluded.infra_error`), the only thing ever left out. An answer that
   came back with the arm's own error counts as a failure.
 - **Dry runs post nothing** by default: `--dry-run` makes no paid call and only prints its
-  summary. Add `--post-dry-run` to store one in the Comparison view (marked as a dry run).
+  summary. Add `--post-dry-run` to store one privately (marked as a dry run).
 
 Steps:
 
@@ -527,7 +534,20 @@ Steps:
 2. Make sure the last sync is current, and that luccy's day cap leaves room: luccy's answers in
    arms A, A2 and C count against `LUCCY_SPEND_DAY_CAP_USD`. Raise it for the day if needed
    (for example to 60) and restart the analyzer.
-3. Try it without paid calls, then run it:
+3. From a local Windows checkout with its Compose stack already configured and running,
+   try it without paid calls, then explicitly enable a live comparison:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts/compare-luccy.ps1
+   powershell -ExecutionPolicy Bypass -File scripts/compare-luccy.ps1 -Live -MaxUsd 40
+   ```
+
+   The script defaults to a free dry run, uses all A/A2/C arms and the full golden set,
+   and starts no services or changes any access settings. It requires the local
+   `.env.documents` and `.env.analyzer` files from the setup above. Results can contain
+   private document-derived text; keep the terminal output within the organization.
+
+   Equivalent commands for other Compose hosts and VM operators:
 
    ```bash
    $C --profile analyzer-jobs run --rm analyzer-compare python -m luccy_qdrant.compare --dry-run
@@ -568,7 +588,7 @@ Steps:
 
 1. **Switch it off, comparisons included.** Set `LUCCY_ENABLED=False` and
    `LUCCY_EVAL_ENABLED=False` (`.env.analyzer`, then `$C up -d web worker`; on the VM in
-   `backend.env`, then release). The page, the navigation entry, the Comparison view and the
+   `backend.env`, then release). The page, the navigation entry and the
    assistant tool disappear, and every analyzer endpoint answers 404: the internal ones too,
    so the sync and the comparison's answer and results endpoints are closed. DataGov then
    answers no document questions: documents-mode chats and Slack's `documents:` say the

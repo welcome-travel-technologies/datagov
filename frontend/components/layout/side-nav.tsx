@@ -29,6 +29,8 @@ function NavLink({
   return (
     <Link
       href={item.href}
+      target={item.openInNewTab ? "_blank" : undefined}
+      rel={item.openInNewTab ? "noopener noreferrer" : undefined}
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={cn(

@@ -19,7 +19,7 @@ analyzer question asked here does not count against the eval user's hourly cap. 
 ``conversation`` field becomes luccy's conversation id (ids starting with "dg" are
 DataGov's own and refused).
 
-The answer reply, shared with the comparison runner and the frontend::
+The answer reply used by the private comparison runner::
 
     {"answer", "judged_answer", "citations", "abstained", "gaps", "tool_calls",
      "verbatim", "tool_error", "error", "latency_s", "cost_usd", "cost_source",
@@ -38,15 +38,10 @@ The answer reply, shared with the comparison runner and the frontend::
   ``cost_detail`` says which part is which: ``{"luccy_usd", "agent_usd",
   "agent_models", "agent_input_tokens", "agent_output_tokens", "note"}``.
 
-``GET comparisons/`` and ``GET comparisons/<run_id>/`` show the stored runs to admins
-of ``LUCCY_ORGANIZATION_ID`` only (404 for anyone outside it, or while the analyzer is
-off or not set up, 403 for its other members). ``params``, ``summary`` and ``rows`` are
-stored and served as the runner sent them: a run of luccy's whole golden set carries
-``gold``, ``complete``, ``luccy_recorded``, ``config_drift`` and
-``expected_docs_missing`` in its summary, and older runs without them are served as they
-were. The list is a plain JSON array, newest first, without the per-question rows. ``stale`` marks a run still ``running`` whose
-last update is over 30 minutes old (its runner most likely died). A run id matches
-``RUN_ID_RE`` and holds no ".."; one the harness leaves out is made as
+Comparison runs stay private: there are no browser list/detail endpoints.
+``params``, ``summary`` and ``rows`` are stored as the protected runner sent them,
+including full golden-set metadata. A run id matches ``RUN_ID_RE`` and holds no
+".."; one the harness leaves out is made as
 ``run-<UTC YYYYMMDDTHHMMSSZ>-<6 hex>``.
 """
 import json
@@ -55,16 +50,15 @@ import math
 import re
 import secrets
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from datetime import timezone as dt_timezone
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.utils import timezone
 from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
-from rest_framework.exceptions import APIException, NotFound, ParseError, PermissionDenied
+from rest_framework.exceptions import APIException, ParseError
 from rest_framework.parsers import BaseParser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from catalog.models import Organization, OrganizationMembership
@@ -82,11 +76,9 @@ MAX_RUN_BYTES = 2 * 1024 * 1024
 MAX_ANSWER_REQUEST_BYTES = 64 * 1024
 MAX_QUESTION_CHARS = 10000
 MAX_ERROR_CHARS = 500
-MAX_LISTED_RUNS = 200
 # The chat arm's turn may run this much longer than its luccy call (LUCCY_STREAM_TIMEOUT).
 EVAL_TURN_EXTRA_SECONDS = 60
 RECORD_TIMEOUT = 30
-STALE_AFTER = timedelta(minutes=30)
 
 
 class TooLarge(APIException):
@@ -372,46 +364,3 @@ def eval_runs(request):
         return Response({'detail': 'This run was created at the same time by another request. Send it again.'},
                         status=409)
     return Response({'run_id': run.run_id}, status=201 if created else 200)
-
-
-def _comparison_org_id(user):
-    """The bound organization's id when ``user`` is one of its admins (superusers are not
-    exempt); NotFound outside it or while the analyzer is off or not set up,
-    PermissionDenied for its other members."""
-    if not (permissions.enabled() and permissions.configured()):
-        raise NotFound()
-    org_id = permissions.organization_id()
-    membership = (OrganizationMembership.objects.filter(organization_id=org_id, user=user, user__is_active=True).first()
-                  if org_id is not None and user.is_active else None)
-    if membership is None:
-        raise NotFound()
-    if not membership.is_admin:
-        raise PermissionDenied('Only organization administrators can see comparison runs.')
-    return org_id
-
-
-def _run_info(run, now):
-    stale = run['status'] == 'running' and run['updated_at'] < now - STALE_AFTER
-    return {'run_id': run['run_id'], 'status': run['status'], 'params': run['params'], 'summary': run['summary'],
-            'created_at': run['created_at'], 'updated_at': run['updated_at'], 'stale': stale}
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def comparisons(request):
-    org_id = _comparison_org_id(request.user)
-    runs = AnalyzerComparisonRun.objects.filter(organization_id=org_id).order_by('-created_at', '-id').values(
-        'run_id', 'status', 'params', 'summary', 'created_at', 'updated_at')[:MAX_LISTED_RUNS]
-    now = timezone.now()
-    return Response([_run_info(run, now) for run in runs])
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def comparison(request, run_id):
-    org_id = _comparison_org_id(request.user)
-    run = AnalyzerComparisonRun.objects.filter(organization_id=org_id, run_id=run_id).values(
-        'run_id', 'status', 'params', 'summary', 'rows', 'created_at', 'updated_at').first()
-    if run is None:
-        raise NotFound()
-    return Response({**_run_info(run, timezone.now()), 'rows': run['rows']})
