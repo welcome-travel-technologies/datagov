@@ -1,0 +1,77 @@
+# Optional: the Document Analyzer (docs/document-analyzer.md). deploy.py adds this file only when
+# deployment.json has "analyzer": {"enabled": true, "logs_volume": "<existing volume>"}; without
+# it a release is exactly what it was. luccy reads the engine's Qdrant (local or managed) and
+# keeps no document data of its own. Each luccy container reads its own env file in shared/
+# and holds only the secrets it needs (deploy.py checks them, ANALYZER_ENV_FILES):
+#   analyzer.env          analyzer          LUCCY_API_KEY, Gemini, Qdrant read-only key
+#   analyzer-sync.env     analyzer-sync     LUCCY_SYNC_TOKEN, Qdrant write key
+#   analyzer-compare.env  analyzer-compare  LUCCY_API_KEY, LUCCY_EVAL_TOKEN, LUCCY_SYNC_TOKEN, Gemini
+#                                           (only for the comparison, LUCCY_EVAL_ENABLED=True)
+x-analyzer: &analyzer
+  image: ${ANALYZER_IMAGE:?}
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "3"}
+
+services:
+  web:
+    environment:
+      LUCCY_API_URL: http://analyzer:8787
+  worker:
+    environment:
+      LUCCY_API_URL: http://analyzer:8787
+  analyzer:
+    <<: *analyzer
+    env_file:
+      - path: ${SHARED_DIR:?}/analyzer.env
+        format: raw
+    # The image's own command: python -m luccy_qdrant.serve, luccy's web app on 8787.
+    environment:
+      PORT: "8787"
+      DATAGOV_URL: http://web:8000
+    # luccy's operational logs only: answer records, feedback and the spend ledger.
+    volumes: ["analyzer-logs:/app/serving/logs"]
+    # No published host port. Healthy once luccy's web process answers /health: 200, or 503
+    # with its reasons (before the first analyzer-sync there is no luccy_kw yet). A release
+    # waits for this; luccy's /health body and DataGov's status page say whether it can answer.
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.error as e, urllib.request as u\ntry: u.urlopen('http://127.0.0.1:8787/health', timeout=8)\nexcept e.HTTPError as x: raise SystemExit(x.code != 503)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 3
+    mem_limit: 6g
+    stop_grace_period: 310s
+    restart: unless-stopped
+  # One-off jobs, run by deploy.py --job (profile analyzer-jobs, so releases never start them).
+  analyzer-sync:
+    <<: *analyzer
+    profiles: [analyzer-jobs]
+    command: [python, -m, luccy_qdrant.sync]
+    env_file:
+      - path: ${SHARED_DIR:?}/analyzer-sync.env
+        format: raw
+    environment:
+      DATAGOV_URL: http://web:8000
+    healthcheck: {disable: true}
+    mem_limit: 4g
+  analyzer-compare:
+    <<: *analyzer
+    profiles: [analyzer-jobs]
+    command: [python, -m, luccy_qdrant.compare]
+    env_file:
+      - path: ${SHARED_DIR:?}/analyzer-compare.env
+        format: raw
+        required: false
+    environment:
+      DATAGOV_URL: http://web:8000
+      LUCCY_URL: http://analyzer:8787
+    healthcheck: {disable: true}
+    mem_limit: 2g
+    # One question takes minutes across five arms; a stop lets the ones in flight finish.
+    stop_grace_period: 600s
+
+volumes:
+  analyzer-logs: {external: true, name: "${ANALYZER_LOGS_VOLUME:?}"}

@@ -18,7 +18,8 @@ start, then dive into the area you need below.
 | [ETL & integrations](etl.md) | Sources (dbt, Power BI/Fabric), the transform/load pipeline, the full workflow, destinations, scheduling, Slack alerts |
 | [Lineage](lineage.md) | Column-level lineage: sqlglot parsing, dbt↔Power BI bridges, edge classification, and the React Flow explorer |
 | [AI assistant](assistant.md) | The async pydantic-ai agent, model selection, tools, feature flags, and safety guardrails |
-| [Document Explorer](document-explorer.md) | Implemented document microservices, DataGov scheduling and permissions, private PDF storage, chat citations, Slack setup, verification and deployment |
+| [Document Explorer](document-explorer.md) | The document engine that indexes and stores documents (ingestion, extraction, chunking, embeddings in Qdrant), DataGov scheduling and permissions, the library, private PDF storage, verification and deployment |
+| [Document Analyzer](document-analyzer.md) | luccy's unchanged RAG app, which answers every document question in DataGov (chat, documents mode, Slack, its page) from the Document Explorer's Qdrant: architecture, setup and sync, Azure enablement, security (internal-route layers, who holds which secret, the read-only Qdrant key, only open collections synced), the luccy vs DataGov comparison and its method, sizing and rollback |
 | [Azure deployment](azure-deployment.md) | Automatic main-branch releases, VM/ACR setup, independent engine updates, persistent storage, Qdrant placement and recovery |
 | [Document Explorer integration plan](rag-integration-plan.md) | Historical upstream audit and broader roadmap, including connector expansion, migration and acceptance criteria |
 | [Governance & access control](governance.md) | Ownership, status workflow, tasks, audit trail, and the per-page access model |

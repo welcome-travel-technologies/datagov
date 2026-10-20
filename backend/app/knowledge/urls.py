@@ -1,9 +1,11 @@
 from django.urls import path
 from . import views
 from . import integrations
+from . import overview
 
 urlpatterns = [
     path('status/', views.status),
+    path('integrations/overview/', overview.integrations_overview),
     path('groups/', integrations.content_groups),
     path('connections/', integrations.connections),
     path('indexing-outputs/', integrations.indexing_outputs),

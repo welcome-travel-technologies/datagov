@@ -109,7 +109,7 @@ export function safeSourceUrl(value: string | null | undefined): string | null {
 }
 
 export const knowledgeApi = {
-  status: () => request<{ enabled: boolean; configured: boolean; can_manage: boolean; native_ai_enabled?: boolean }>("/knowledge/status/"),
+  status: () => request<{ enabled: boolean; configured: boolean; can_manage: boolean }>("/knowledge/status/"),
   groups: () => request<{ results: ContentGroup[]; can_manage: boolean }>("/knowledge/groups/"),
   connections: () => request<{ results: { id: number; name: string; provider: string; capabilities: string[] }[] }>("/knowledge/connections/"),
   indexingOutputs: () => request<{ results: { id: string; source_name: string; upstream_key: string; profile: string; status: string; error: string; created_at: string; run_id: string | null }[] }>("/knowledge/indexing-outputs/"),

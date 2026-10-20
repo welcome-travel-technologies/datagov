@@ -2,7 +2,6 @@ import hashlib
 import json
 import shutil
 
-import httpx
 import pytest
 from django.utils import timezone
 
@@ -10,8 +9,7 @@ from catalog.models import IntegrationSource, SourceRunLog
 from knowledge.jobs import JobConflict, enqueue
 from knowledge.models import Document, DocumentVersion, ExtractionArtifact, IngestionRun, KnowledgeSource
 from knowledge.pipeline import capture_extraction, cancel_indexing_output, dispatch_pending
-from knowledge.retrieval import EvidenceContext, REVOKED_ANSWER
-from knowledge.tests.test_document_explorer import setup, publish, citation, claim, completion
+from knowledge.tests.test_document_explorer import setup, publish, claim, completion
 
 pytestmark = pytest.mark.django_db
 
@@ -120,36 +118,6 @@ def test_busy_pipeline_retains_durable_intent_and_disabled_pipeline_is_noop(setu
     existing.status = 'succeeded'
     existing.save()
     assert dispatch_pending() == 1
-
-
-def test_native_search_binds_scope_and_revalidates_all_evidence(setup, settings, monkeypatch):
-    settings.DOCUMENT_NATIVE_AI_ENABLED = True
-    version, _, _ = publish(setup)
-    evidence = EvidenceContext(setup['org'], setup['user'])
-    calls = []
-    def post(client, url, **kwargs):
-        calls.append((url, kwargs['json']))
-        return httpx.Response(200, json={'citations': [{**citation(version), 'excerpt': 'FORGED', 'source_url': 'https://evil.test'}]})
-    monkeypatch.setattr(httpx.Client, 'post', post)
-    result = evidence.search_evidence('refund rules')
-    assert calls[0][0].endswith('/v1/search')
-    assert calls[0][1]['allowed_versions'] == [str(version.id)]
-    assert result['citations'][0]['citation_id'] == 'E1'
-    assert result['citations'][0]['excerpt'] != 'FORGED'
-    setup['source'].allowed_users.remove(setup['user'])
-    assert evidence.finalize('Protected paraphrase') == (REVOKED_ANSWER, [])
-    assert evidence.remember(result['citations']) == []
-
-
-def test_native_search_rejects_extra_versions_and_private_provider_errors(setup, settings, monkeypatch):
-    settings.DOCUMENT_NATIVE_AI_ENABLED = True
-    version, _, _ = publish(setup)
-    evidence = EvidenceContext(setup['org'], setup['user'])
-    monkeypatch.setattr(httpx.Client, 'post', lambda *a, **k: httpx.Response(200, json={
-        'citations': [{**citation(version), 'version_id': 'other-tenant'}]}))
-    assert evidence.search_evidence('test')['citations'] == []
-    monkeypatch.setattr(httpx.Client, 'post', lambda *a, **k: httpx.Response(503, text='PRIVATE TOKEN'))
-    assert 'PRIVATE' not in str(evidence.search_evidence('test'))
 
 
 def test_explicit_upstream_cancellation_stops_pending_output(setup, settings, tmp_path):

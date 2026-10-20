@@ -3,17 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Send, Plus, Sparkles, MessageSquare, Trash2, FileSearch } from "lucide-react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/page-header";
-import { Markdown } from "@/components/markdown";
+import { AssistantMessage } from "@/components/document-analyzer/assistant-message";
 import { Button } from "@/components/ui/button";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { DocumentCitations } from "@/components/knowledge/citations";
-import { knowledgeApi, type DocumentCitation } from "@/lib/knowledge-api";
-import { useAuth } from "@/lib/auth";
+import type { DocumentCitation } from "@/lib/knowledge-api";
+import type { ChatAnalyzerMeta } from "@/lib/document-analyzer-api";
 import { useEvidenceReader } from "@/components/knowledge/evidence-workspace";
 
+// Every new chat is "catalog": the one assistant, which asks the Document Analyzer
+// about documents. "documents" only reopens an earlier document-only conversation.
 type ChatMode = "catalog" | "documents";
 
 interface Msg {
@@ -21,6 +22,8 @@ interface Msg {
   content: string;
   citations?: DocumentCitation[];
   metadata?: Record<string, unknown>;
+  /** Set by the API on a verbatim Document Analyzer answer; null otherwise. */
+  analyzer?: ChatAnalyzerMeta | null;
 }
 
 interface SessionRef {
@@ -80,7 +83,6 @@ function clearPending() {
 }
 
 export default function ChatPage() {
-  const { user } = useAuth();
   const reader = useEvidenceReader();
   const [mode, setMode] = useState<ChatMode>("catalog");
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -92,10 +94,6 @@ export default function ChatPage() {
   const [activeTask, setActiveTask] = useState<PendingTask | null>(null);
   const sessionRef = useRef<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const documentStatus = useQuery({ queryKey: ["knowledge", "status", user?.id], queryFn: knowledgeApi.status, enabled: !!user, retry: false, staleTime: 60_000 });
-  const documentsAvailable = !!documentStatus.data?.enabled && !!documentStatus.data?.configured;
-  const nativeAi = !!documentStatus.data?.native_ai_enabled;
-  useEffect(() => { if (nativeAi && !activeId && !busy) setMode("catalog"); }, [nativeAi, activeId, busy]);
 
   useEffect(() => {
     if (messages.length === 0 && !status) return;
@@ -136,8 +134,6 @@ export default function ChatPage() {
           /* leave chat as-is; the poller reloads messages on completion */
         });
       setActiveTask(pending);
-    } else if (new URLSearchParams(window.location.search).get("mode") === "documents") {
-      setMode("documents");
     }
   }, []);
 
@@ -220,7 +216,7 @@ export default function ChatPage() {
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || busy || mode === "documents" && !documentsAvailable) return;
+    if (!text || busy) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setBusy(true);
@@ -279,7 +275,7 @@ export default function ChatPage() {
   }
 
   function reset() {
-    if (nativeAi) setMode("catalog");
+    setMode("catalog");
     clearPending();
     setActiveTask(null);
     sessionRef.current = null;
@@ -293,7 +289,7 @@ export default function ChatPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title="AI Assistant"
-        description={nativeAi ? "Ask about your catalog, documents, lineage and live data. Open evidence alongside your conversation." : mode === "documents" ? "Ask your documents and open their sources." : "Ask about measures, columns, reports, lineage and dependencies."}
+        description="Ask about your catalog, documents, lineage and live data. Open evidence alongside your conversation."
         actions={
           // Fallback for screens below `lg`, where the History panel (and the
           // "New chat" button it now hosts) is hidden.
@@ -304,14 +300,9 @@ export default function ChatPage() {
       />
 
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        {!nativeAi && <div className="inline-flex rounded-lg border border-line bg-card p-1" role="group" aria-label="Assistant mode">
-          <Button size="sm" variant={mode === "catalog" ? "secondary" : "ghost"} aria-pressed={mode === "catalog"} disabled={busy || activeId !== null} onClick={() => setMode("catalog")}><MessageSquare /> Catalog</Button>
-          <Button size="sm" variant={mode === "documents" ? "secondary" : "ghost"} aria-pressed={mode === "documents"} disabled={busy || activeId !== null || !documentStatus.data?.enabled} onClick={() => setMode("documents")}><FileSearch /> Documents</Button>
-        </div>}
-        {(nativeAi || mode === "documents") && <Link href="/integrations?tab=content" className="text-xs text-brand hover:underline">Browse data & documents</Link>}
-        {activeId !== null && mode === "documents" && nativeAi && <p className="text-xs text-muted-foreground">Earlier document conversation · Start a new chat to use all tools.</p>}
+        <Link href="/integrations?tab=content" className="text-xs text-brand hover:underline">Browse data & documents</Link>
+        {activeId !== null && mode === "documents" && <p className="text-xs text-muted-foreground">Earlier document conversation · Start a new chat to use all tools.</p>}
       </div>
-      {mode === "documents" && !documentsAvailable && <p role="status" className="mb-3 rounded-lg border border-line bg-panel p-3 text-xs text-muted-foreground">{documentStatus.isPending ? "Checking document search availability…" : "Document search is currently unavailable. Your administrator can check the Document Explorer service."}</p>}
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
@@ -319,7 +310,7 @@ export default function ChatPage() {
               <div className="flex items-start gap-2.5">
                 <Avatar />
                 <Bubble role="model">
-                  {nativeAi ? "Ask about your data, definitions, reports or company documents. I can connect catalog information with supporting evidence and live queries when available." : mode === "documents" ? "What would you like to find in your company documents? I will include sources you can open to check the answer." : "Hello! I'm your Data Governance Assistant. I can help you search for measures, columns, reports, or dependencies."}
+                  Ask about your data, definitions, reports or company documents. I can connect catalog information with supporting evidence and live queries when available.
                 </Bubble>
               </div>
             )}
@@ -327,7 +318,7 @@ export default function ChatPage() {
               <div key={i} className={cn("flex items-start gap-2.5", m.role === "user" && "flex-row-reverse")}>
                 {m.role === "model" ? <Avatar /> : null}
                 <Bubble role={m.role}>
-                  {m.role === "model" ? <Markdown>{m.content}</Markdown> : m.content}
+                  {m.role === "model" ? <AssistantMessage content={m.content} analyzer={m.analyzer} /> : m.content}
                   {m.role === "model" && !!m.citations?.length && <DocumentCitations citations={m.citations} />}
                 </Bubble>
               </div>
@@ -350,12 +341,12 @@ export default function ChatPage() {
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={busy || mode === "documents" && !documentsAvailable}
+              disabled={busy}
               aria-label={mode === "documents" ? "Ask a question about your documents" : "Ask about your DataGov"}
               placeholder={mode === "documents" ? "Ask a question about your documents…" : "Ask about your DataGov"}
               className="h-10 flex-1 rounded-lg border border-input bg-panel px-3 text-[13px] outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
             />
-            <Button type="submit" variant="brand" size="icon" disabled={busy || !input.trim() || mode === "documents" && !documentsAvailable} aria-label="Send">
+            <Button type="submit" variant="brand" size="icon" disabled={busy || !input.trim()} aria-label="Send">
               <Send className="h-4 w-4" />
             </Button>
           </form>

@@ -8,6 +8,8 @@ import { useAuth } from "@/lib/auth";
 import { knowledgeApi, type KnowledgeSource, type SourceInput } from "@/lib/knowledge-api";
 import { sourceGroups } from "@/lib/integrations/source-groups";
 import { SourceCard } from "@/components/integrations/source-card";
+import { useFocusGroup } from "@/components/integrations/focus-group";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,9 +20,11 @@ import { KnowledgeError } from "./shared";
 
 const selectClass = "h-9 w-full rounded-lg border border-input bg-panel px-3 text-[13px] outline-none focus:ring-1 focus:ring-ring";
 
-export function SourceManager({ sources, configured, connections = [], onBrowse, onWorkflow, documentsEnabled = true }: {
+/** `focusGroup`: the group an overview link asked for (`?group=`); its access
+ *  settings open and it scrolls into view once. */
+export function SourceManager({ sources, configured, connections = [], onBrowse, onWorkflow, documentsEnabled = true, focusGroup }: {
   sources: KnowledgeSource[]; configured: boolean; connections?: IntegrationSource[];
-  onBrowse?: (group: string) => void; onWorkflow?: () => void; documentsEnabled?: boolean;
+  onBrowse?: (group: string) => void; onWorkflow?: () => void; documentsEnabled?: boolean; focusGroup?: string;
 }) {
   const { user } = useAuth();
   const groups = useQuery({ queryKey: ["knowledge", "groups", user?.id], queryFn: knowledgeApi.groups, retry: false, enabled: documentsEnabled });
@@ -30,7 +34,8 @@ export function SourceManager({ sources, configured, connections = [], onBrowse,
   const [notice, setNotice] = useState("");
   const changed = () => { void qc.invalidateQueries({ queryKey: ["integrations"] }); void qc.invalidateQueries({ queryKey: ["knowledge"] }); void qc.invalidateQueries({ queryKey: ["workflow-status"] }); };
   const grouped = sourceGroups(connections, groups.data?.results ?? []);
-  return <div className="space-y-4">
+  const container = useFocusGroup(focusGroup, grouped.map((group) => group.id));
+  return <div ref={container} className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="max-w-2xl text-[13px] text-muted-foreground">Connect systems, choose content and manage access. Schedules and processing live in Workflow.</p>
       {documentsEnabled && <div className="flex gap-2"><Button variant="outline" size="sm" disabled={!configured} onClick={() => setUpload(true)}><Upload /> Upload documents</Button><Button variant="brand" size="sm" onClick={() => setEditing("new")}><Plus /> Add content source</Button></div>}
@@ -39,7 +44,7 @@ export function SourceManager({ sources, configured, connections = [], onBrowse,
     {groups.isLoading && <LoadingState label="Loading sources…" />}
     {groups.isError && <KnowledgeError message="Document sources could not be loaded." retry={() => { void groups.refetch(); }} />}
     {!groups.isPending && !groups.isError && !grouped.length && <EmptyState title="Create your first source" hint="Add an upload collection or import a prepared snapshot." icon={<FolderInput className="h-8 w-8" />} />}
-    {grouped.map((group) => <section key={group.id} className="overflow-hidden rounded-xl border border-line bg-card">
+    {grouped.map((group) => <section key={group.id} data-group-key={group.id} className={cn("scroll-mt-4 overflow-hidden rounded-xl border border-line bg-card", focusGroup === group.id && "border-brand/60 ring-1 ring-brand/30")}>
       {group.connection ? <SourceCard source={group.connection} onChanged={changed} onBrowseContent={() => onBrowse?.(group.id)} /> : <div className="flex flex-wrap items-center justify-between gap-3 p-5"><div><h3 className="text-sm font-semibold">{group.name}</h3><p className="mt-1 text-xs text-muted-foreground">{group.provider === "upload" ? "Files uploaded to DataGov" : "Imported snapshots · refresh reprocesses the prepared import, not the live provider"}</p></div><Button size="sm" variant="outline" onClick={() => onBrowse?.(group.id)}><Database /> Browse content</Button></div>}
       <details className="border-t border-line">
         <summary className="cursor-pointer px-5 py-3 text-xs font-medium">{group.collections.length} collections · {group.document_count.toLocaleString()} documents · Access & settings</summary>

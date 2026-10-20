@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import re
+import time
 import traceback
 import uuid
 from collections.abc import Mapping
@@ -182,13 +183,13 @@ def _get_org_for_session(session):
 
 
 def _chat_session_accessible(session):
+    # Documents-mode sessions open like any other: their stored DataGov sources are
+    # re-checked per message (``_serialize_chat_message``) and every new answer comes
+    # from the Document Analyzer, which checks its own access.
     if not session or not session.user.is_active:
         return False
     org = _get_org_for_session(session)
     if session.organization_id:
-        if session.mode == 'documents':
-            from knowledge.permissions import can_read
-            return can_read(org, session.user)
         return org is not None
     return session.mode == 'catalog' and not OrganizationMembership.objects.filter(
         user=session.user,
@@ -199,6 +200,8 @@ def _serialize_chat_message(message, session):
     content = _extract_parts_text(message.content) or message.content
     citations = message.citations or []
     if citations:
+        # Only replies written before the Document Analyzer answered every document
+        # question carry DataGov sources; they still show only while readable.
         from knowledge.permissions import filter_citations
         allowed = filter_citations(_get_org_for_session(session), session.user, citations)
         if len(allowed) != len(citations):
@@ -210,9 +213,15 @@ def _serialize_chat_message(message, session):
                 if re.fullmatch(r'E[1-9][0-9]?', str(original.get('citation_id', ''))):
                     current['citation_id'] = original['citation_id']
             citations = allowed
+    analyzer = None
+    if message.role == 'assistant':
+        from document_analyzer.assistant import analyzer_meta
+        # {"verbatim", "ref"} when the Document Analyzer took part; the frontend reads
+        # this rather than recognising the answer's footer text.
+        analyzer = analyzer_meta(message.debug_meta)
     return {
         'id': message.id, 'role': 'model' if message.role == 'assistant' else 'user',
-        'content': content, 'citations': citations,
+        'content': content, 'citations': citations, 'analyzer': analyzer,
     }
 
 
@@ -270,7 +279,8 @@ def _get_chatbot_model_for_org(org):
 def build_chatbot_agent_for_org(
     org, user=None, before_tool_call=None, record_call=None, surface='slack',
     chat_session=None,
-    evidence_context=None,
+    analyzer_turn=None,
+    tool_policy=None,
 ):
     """Build a Pydantic AI agent scoped to ``org``.
 
@@ -282,18 +292,30 @@ def build_chatbot_agent_for_org(
     callers use it to build the ``debug_meta`` payload persisted with each
     chat message.
 
-    ``surface`` is 'web' or 'slack' (default); it is threaded through for
-    back-compat but no longer changes tool behaviour.
+    ``surface`` is 'web' or 'slack' (default). Only 'web' gets the Document
+    Analyzer tool, because a Slack thread's audience may lack access to its
+    corpus (Slack asks it only in a verified DM: ``slack_views``); otherwise it
+    does not change tool behaviour.
 
     ``chat_session`` is accepted for backwards-compatible callers and unused.
+
+    ``analyzer_turn`` (a ``document_analyzer.assistant.ChatTurn``) threads the web
+    chat's turn into the Document Analyzer tool: the user's exact words, the luccy
+    conversation id and the earlier turns.
+
+    ``tool_policy`` replaces the member's stored tool policy for this one agent
+    (``{group: bool}`` over ``TOOL_GROUPS``); nothing is saved. Only the Document
+    Analyzer evaluation passes it.
 
     The front-loaded catalog context is scoped to the org's selected PowerBI
     workspaces / BigQuery datasets (``assistant_powerbi_workspace_ids`` /
     ``assistant_bigquery_dataset_ids``); ``getattr`` defaults keep this working
     before the settings migration is applied.
     """
-    from .services.assistant_tools import member_policy
-    policy = member_policy(org, user)
+    from .services.assistant_tools import TOOL_GROUPS, member_policy
+    if tool_policy is not None:
+        tool_policy = {key: tool_policy.get(key) is True for key in TOOL_GROUPS}
+    policy = tool_policy if tool_policy is not None else member_policy(org, user)
     powerbi_client = _get_powerbi_client_for_org(org) if policy['powerbi'] and policy['powerbi_live'] else None
     bigquery_client = _get_bigquery_client_for_org(org) if policy['bigquery'] else None
     dbt_enabled = policy['dbt'] and _get_dbt_enabled_for_org(org)
@@ -306,6 +328,16 @@ def build_chatbot_agent_for_org(
     if powerbi_tools_enabled and org is not None:
         from .services.workspaces import resolve_default_workspaces_for_org
         workspace_scope = resolve_default_workspaces_for_org(user, org)
+    document_analyzer = None
+    if policy['analyzer'] and surface == 'web':
+        # Web chat only: a Slack thread's audience may lack access to the corpus.
+        # None unless the feature is on, bound to this org, and the user has access;
+        # an analyzer problem leaves the tool out instead of failing the turn.
+        try:
+            from document_analyzer.assistant import tool_for
+            document_analyzer = tool_for(org, user, turn=analyzer_turn)
+        except Exception as exc:
+            logger.warning('Document Analyzer tool left out of this turn (%s).', type(exc).__name__)
     return get_agent(
         powerbi_client=powerbi_client,
         bigquery_client=bigquery_client,
@@ -320,9 +352,10 @@ def build_chatbot_agent_for_org(
         org=org,
         user=user,
         chat_session=chat_session,
-        evidence_context=evidence_context,
+        document_analyzer=document_analyzer,
         pb_workspace_ids=getattr(org, 'assistant_powerbi_workspace_ids', None) or None,
         bq_dataset_ids=getattr(org, 'assistant_bigquery_dataset_ids', None) or None,
+        tool_policy=tool_policy,
     )
 
 
@@ -365,6 +398,7 @@ TOOL_STATUS_MESSAGES = {
     'get_dbt_bigquery_lineage':   'Tracing dbt ↔ BigQuery lineage...',
     'get_dbt_upstream_tree':      'Walking dbt upstream lineage tree...',
     'get_lineage':                'Tracing data lineage...',
+    'ask_document_analyzer':      'Asking the Document Analyzer...',
     'bigquery_execute_query':     'Running read-only BigQuery query...',
     'bigquery_get_table_schema':  'Fetching BigQuery table schema...',
     'bigquery_list_datasets':     'Listing BigQuery datasets...',
@@ -531,6 +565,220 @@ def _finalize_partial_answer(model_identifier, partial_messages):
         return ''
 
 
+def run_agent_turn(org, user, user_message, formatted_history, *,
+                   before_tool_call=None, chat_session=None, analyzer_turn=None, tool_policy=None,
+                   timeout_seconds=None, debug_section=True):
+    """Run one web-chat agent turn and finalize its reply, exactly as the chat worker
+    stores it. Shared by ``run_chat_event_sync`` and the Document Analyzer evaluation.
+
+    Returns ``{'content', 'debug_meta', 'tool_calls', 'verbatim',
+    'run_messages'}``: ``tool_calls`` names every tool call the turn made, in order
+    (over every attempt), ``verbatim`` says the reply is the Document Analyzer's own
+    answer (see ``ChatTurn.verbatim_reply``, decided on the last attempt's calls), and
+    ``run_messages`` are the messages of the agent run that produced the reply (None
+    when it was cut short by its budget or time limit).
+    Raises when the agent fails; the worker turns that into its error message.
+
+    ``timeout_seconds`` replaces the organization's chat timeout and
+    ``debug_section=False`` never appends the debug section (both for the evaluation).
+    """
+    chatbot_model_id = _get_chatbot_model_for_org(org)
+
+    debug_log: list = []
+
+    from .services.debug_render import build_debug_payload, render_debug_section
+
+    # ── Agent (context-first: front-loaded catalog + per-integration
+    # schema/run tools; PowerBI live values via
+    # get_pb_measure_schema → powerbi_run_dax_query) ────────────
+    agent = build_chatbot_agent_for_org(
+        org,
+        user=user,
+        before_tool_call=before_tool_call,
+        record_call=debug_log.append,
+        surface='web',
+        chat_session=chat_session,
+        analyzer_turn=analyzer_turn,
+        tool_policy=tool_policy,
+    )
+
+    # Run agent in a separate thread so we can enforce a hard timeout. A
+    # per-run UsageLimits cap bounds pathological tool-call loops; if it
+    # fires, we capture what was gathered and synthesise a partial answer
+    # rather than surfacing an error or running to the wall-clock timeout.
+    budget_hit = {'value': False, 'text': ''}
+    # Share the captured run messages out of the worker thread so a
+    # wall-clock timeout (which abandons that thread mid-run) can still
+    # synthesise a partial answer from whatever was gathered.
+    captured = {'messages': None}
+    # Where the current attempt's tool calls start in ``debug_log``.
+    attempt = {'start': 0}
+
+    def _attempt():
+        # A retry (transient model error) is a fresh agent run: it starts the
+        # Document Analyzer's turn over, so its first call asks the user's words again.
+        attempt['start'] = len(debug_log)
+        if analyzer_turn is not None:
+            analyzer_turn.begin_attempt()
+        return agent.run_sync(
+            user_message,
+            message_history=formatted_history,
+            usage_limits=_agent_usage_limits(),
+        )
+
+    def _run_agent():
+        with capture_run_messages() as run_messages:
+            captured['messages'] = run_messages
+            try:
+                return retry_transient_llm_errors(_attempt)
+            except UsageLimitExceeded:
+                budget_hit['value'] = True
+                budget_hit['text'] = _finalize_partial_answer(chatbot_model_id, run_messages)
+                return None
+
+    timeout_seconds = timeout_seconds or getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS
+    if analyzer_turn is not None:
+        # Its calls never outlast the agent run.
+        analyzer_turn.set_budget(timeout_seconds)
+    try:
+        res = _run_with_timeout(_run_agent, timeout_seconds)
+    except TimeoutError:
+        # Hard wall-clock timeout. Rather than surfacing a bare "took too
+        # long" error, fall back to a best-effort answer built from the
+        # messages captured up to the last completed step (same path as the
+        # tool-budget cap). The abandoned worker thread is left to wind down.
+        snapshot = list(captured['messages'] or [])
+        logger.warning(
+            'Agent run hit the %ss wall-clock timeout; finalising a partial '
+            'answer from %d captured messages.', timeout_seconds, len(snapshot),
+        )
+        budget_hit['value'] = True
+        budget_hit['text'] = _finalize_partial_answer(chatbot_model_id, snapshot)
+        res = None
+
+    # A snapshot: an abandoned (timed-out) run may still append.
+    calls = list(debug_log)
+    debug_payload = build_debug_payload(calls)
+
+    if budget_hit['value']:
+        output = budget_hit['text'] or (
+            "I gathered a lot but couldn't fully finish this question within "
+            "its time and tool budget. Please narrow it — e.g. name a "
+            "specific report, measure, or workspace — and I'll answer "
+            "precisely."
+        )
+    else:
+        output = (res.output if res else '') or ''
+    tool_calls = [str(call.get('tool') or '') for call in calls]
+    # Document Analyzer only, and it answered: store its answer exactly as written,
+    # with its sources and footer, instead of the agent's wording. Only the last
+    # attempt's calls count: an earlier attempt's reply was never finished.
+    last_attempt = tool_calls[attempt['start']:]
+    verbatim = analyzer_turn.verbatim_reply(last_attempt) if analyzer_turn is not None else None
+    if verbatim is not None:
+        output = verbatim
+    if debug_section and org and org.debug_responses_enabled and verbatim is None:
+        # Not after a verbatim answer, whose footer must stay its last line.
+        output += render_debug_section(debug_payload)
+    if analyzer_turn is not None:
+        analyzer_turn.merge_debug(debug_payload, verbatim is not None)
+    run_messages = None
+    if res is not None and not budget_hit['value']:
+        try:
+            run_messages = list(res.new_messages())
+        except Exception:
+            run_messages = None
+    return {'content': output, 'debug_meta': debug_payload,
+            'tool_calls': tool_calls, 'verbatim': verbatim is not None, 'run_messages': run_messages}
+
+
+# The earlier chat messages the Document Analyzer may see in one turn.
+ANALYZER_HISTORY_MESSAGES = 8
+
+
+def _analyzer_turn(session, org, user_message, messages=()):
+    """The Document Analyzer's view of this web-chat turn (a ``ChatTurn``): the user's
+    exact words, the session's luccy conversation id (``chat_conversation``: an HMAC of
+    the session, so no one can name another chat's thread) and the chat's earlier turns.
+    None unless the analyzer serves this organization, and None (logged) when anything
+    about it fails: an analyzer problem never breaks a chat turn.
+
+    ``messages`` are the earlier messages the agent's own history kept
+    (``run_chat_event_sync`` drops both at any reply with DataGov sources, which only
+    the former native document search wrote). Of the
+    last ``ANALYZER_HISTORY_MESSAGES``, only the
+    user's own and the analyzer's earlier verbatim answers (marked so in ``debug_meta``,
+    never recognised by their text, without the sources list and footer DataGov added)
+    become earlier turns, and only once the analyzer is asked. Every other reply is
+    DataGov's (other tools, other collections) and never goes to luccy.
+    """
+    try:
+        from document_analyzer import assistant
+        from document_analyzer import permissions as analyzer_permissions
+        from document_analyzer.views import chat_conversation
+        from .services.assistant_tools import member_policy
+        if not analyzer_permissions.org_available(org) or not member_policy(org, session.user)['analyzer']:
+            return None
+        recent = [message for message in messages if message.role in ('user', 'assistant')]
+        recent = recent[-ANALYZER_HISTORY_MESSAGES:]
+
+        def earlier():
+            turns = []
+            for message in recent:
+                text = _extract_parts_text(message.content) or message.content
+                if message.role == 'user':
+                    turns.append({'who': 'you', 'text': text})
+                elif (assistant.analyzer_meta(message.debug_meta) or {}).get('verbatim'):
+                    turns.append({'who': 'luccy', 'text': assistant.reply_text(text)})
+            return turns
+        return assistant.ChatTurn(user_message, conversation=chat_conversation(session), earlier=earlier)
+    except Exception as exc:
+        logger.warning('Document Analyzer left out of this chat turn (%s).', type(exc).__name__)
+        return None
+
+
+def _documents_mode_allowed(org, user):
+    """A new documents-mode chat needs the Document Analyzer, which answers it: on, bound
+    to ``org``, usable by ``user`` and not switched off in their tool policy."""
+    from document_analyzer.assistant import tool_for
+    from .services.assistant_tools import member_policy
+    return bool(org is not None and member_policy(org, user)['analyzer'] and tool_for(org, user) is not None)
+
+
+def _documents_timeout(org):
+    """Documents mode's time limit: the organization's chat timeout, raised to fit one
+    Document Analyzer call (``LUCCY_TOOL_TIMEOUT``) and the margin it keeps."""
+    from document_analyzer.assistant import AGENT_MARGIN_SECONDS
+    return max(getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS,
+               int(settings.LUCCY_TOOL_TIMEOUT) + AGENT_MARGIN_SECONDS)
+
+
+def _documents_via_analyzer(session, org, user_message):
+    """Documents mode, answered by the Document Analyzer (luccy's own pipeline) alone:
+    ``(content, debug_meta)`` as a chat turn that used only the analyzer stores it. The
+    content is luccy's answer verbatim, else the analyzer's own message saying why it
+    could not answer (off, no access, busy, unreachable)."""
+    from document_analyzer import assistant
+    earlier = list(session.messages.order_by('created_at', 'pk'))[:-1]     # the last is this question
+    turn = _analyzer_turn(session, org, user_message, messages=earlier)
+    if turn is None:
+        return assistant.NO_ACCESS, {}
+    # Its calls never outlast the worker's own limit (``chat_api_view``).
+    turn.set_budget(_documents_timeout(org))
+    try:
+        tool = assistant.tool_for(org, session.user, turn)
+        if tool is None:
+            return assistant.NO_ACCESS, {}
+        result = tool.ask_document_analyzer(user_message)
+        output = turn.verbatim_reply([assistant.TOOL_NAME])
+    except Exception as exc:
+        logger.warning('Document Analyzer could not answer in documents mode (%s).', type(exc).__name__)
+        result, output = {}, None
+    if output is not None:
+        return output, turn.merge_debug({}, True)
+    return (result or {}).get('message') or assistant.UNAVAILABLE, turn.merge_debug({}, False)
+
+
 def run_chat_event_sync(session_id, user_message):
     """
     Module-level function required by Django Q to run background tasks.
@@ -546,12 +794,11 @@ def run_chat_event_sync(session_id, user_message):
     """
     STATUS_CACHE_KEY = f'chat_status_{session_id}'
     session = None
-    evidence_context = None
 
     def _on_tool_call(tool_name: str, _args: tuple, kwargs: dict) -> None:
         """Write the human-readable status for the tool currently executing."""
         msg = TOOL_STATUS_MESSAGES.get(tool_name, f'Running {tool_name.replace("_", " ")}...')
-        if kwargs.get('query') and not getattr(settings, 'DOCUMENT_NATIVE_AI_ENABLED', False):
+        if kwargs.get('query'):
             msg += f" (query={kwargs['query']!r})"
         cache.set(STATUS_CACHE_KEY, msg, timeout=300)
 
@@ -567,40 +814,29 @@ def run_chat_event_sync(session_id, user_message):
 
         org = _get_org_for_session(session)
         if session.mode == 'documents':
-            from knowledge.chat import answer_document_question
-            cache.set(STATUS_CACHE_KEY, 'Searching your documents...', timeout=300)
-            answer = answer_document_question(org, session.user, user_message, session=session)
-            # This is already the grounded final answer. Do not rewrite it with
-            # the catalog model or send evidence to another provider.
-            output = answer['answer']
-            ChatMessage.objects.create(
-                session=session, role='assistant', content=output,
-                citations=answer.get('citations', []),
-                debug_meta={'abstained': answer.get('abstained', False),
-                            'gaps': answer.get('gaps', [])},
-            )
+            # Answered by the Document Analyzer alone, stored verbatim: never rewritten
+            # by the catalog model.
+            cache.set(STATUS_CACHE_KEY, TOOL_STATUS_MESSAGES['ask_document_analyzer'], timeout=300)
+            output, debug_meta = _documents_via_analyzer(session, org, user_message)
+            ChatMessage.objects.create(session=session, role='assistant', content=output, debug_meta=debug_meta)
             # Queue administrators need job status, not another copy of
             # restricted document content in Django-Q's generic Task.result.
-            return 'Document Explorer answer saved.'
+            return 'Document Analyzer answer saved.'
 
-        from knowledge.retrieval import EvidenceContext, native_enabled
-        evidence_context = EvidenceContext(org, session.user) if native_enabled(org, session.user) else None
-        db_messages = (list(session.messages.order_by('-created_at', '-pk')[:9])[::-1]
-                       if evidence_context is not None else list(session.messages.all().order_by('created_at')))
-            
+        db_messages = list(session.messages.all().order_by('created_at'))
+
         formatted_history = []
+        # The same messages for the Document Analyzer, dropped at the same replies.
+        analyzer_messages = []
         for i, msg in enumerate(db_messages):
             if i == len(db_messages) - 1:
                 continue # Skip last user message for history
             if msg.citations:
-                from knowledge.permissions import filter_citations
-                permitted = filter_citations(org, session.user, msg.citations)
-                if len(permitted) != len(msg.citations) or evidence_context is None:
-                    formatted_history = []
-                    continue
-                if len(evidence_context.remember(permitted)) != len(permitted):
-                    formatted_history = []
-                    continue
+                # Only the former native document search stored DataGov sources on a
+                # reply: it, and everything before it, stays out of the history.
+                formatted_history, analyzer_messages = [], []
+                continue
+            analyzer_messages.append(msg)
             try:
                 parsed = json.loads(msg.content)
                 if isinstance(parsed, dict) and ('parts' in parsed or 'role' in parsed or 'kind' in parsed):
@@ -614,87 +850,12 @@ def run_chat_event_sync(session_id, user_message):
                     formatted_history.append(ModelResponse(parts=[TextPart(content=msg.content)]))
 
         org = _get_org_for_session(session)
-        chatbot_model_id = _get_chatbot_model_for_org(org)
-
-        debug_log: list = []
-
-        from .services.debug_render import build_debug_payload, render_debug_section
-
-        # ── Agent (context-first: front-loaded catalog + per-integration
-        # schema/run tools; PowerBI live values via
-        # get_pb_measure_schema → powerbi_run_dax_query) ────────────
-        agent = build_chatbot_agent_for_org(
-            org,
-            user=session.user,
+        turn = run_agent_turn(
+            org, session.user, user_message, formatted_history,
             before_tool_call=_on_tool_call,
-            record_call=debug_log.append,
-            surface='web',
             chat_session=session,
-            evidence_context=evidence_context,
+            analyzer_turn=_analyzer_turn(session, org, user_message, analyzer_messages),
         )
-
-        # Run agent in a separate thread so we can enforce a hard timeout. A
-        # per-run UsageLimits cap bounds pathological tool-call loops; if it
-        # fires, we capture what was gathered and synthesise a partial answer
-        # rather than surfacing an error or running to the wall-clock timeout.
-        budget_hit = {'value': False, 'text': ''}
-        # Share the captured run messages out of the worker thread so a
-        # wall-clock timeout (which abandons that thread mid-run) can still
-        # synthesise a partial answer from whatever was gathered.
-        captured = {'messages': None}
-
-        def _run_agent():
-            with capture_run_messages() as run_messages:
-                captured['messages'] = run_messages
-                try:
-                    return retry_transient_llm_errors(
-                        lambda: agent.run_sync(
-                            user_message,
-                            message_history=formatted_history,
-                            usage_limits=_agent_usage_limits(),
-                        )
-                    )
-                except UsageLimitExceeded:
-                    budget_hit['value'] = True
-                    budget_hit['text'] = 'I reached the tool budget before completing this answer. Please narrow your question.' if evidence_context is not None else _finalize_partial_answer(
-                        chatbot_model_id, run_messages,
-                    )
-                    return None
-
-        timeout_seconds = getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS
-        try:
-            res = _run_with_timeout(_run_agent, timeout_seconds)
-        except TimeoutError:
-            # Hard wall-clock timeout. Rather than surfacing a bare "took too
-            # long" error, fall back to a best-effort answer built from the
-            # messages captured up to the last completed step (same path as the
-            # tool-budget cap). The abandoned worker thread is left to wind down.
-            snapshot = list(captured['messages'] or [])
-            logger.warning(
-                'Agent run hit the %ss wall-clock timeout; finalising a partial '
-                'answer from %d captured messages.', timeout_seconds, len(snapshot),
-            )
-            budget_hit['value'] = True
-            budget_hit['text'] = ('This answer exceeded its time limit. Please narrow your question.'
-                                 if evidence_context is not None else _finalize_partial_answer(chatbot_model_id, snapshot))
-            res = None
-
-        debug_payload = build_debug_payload(debug_log)
-
-        if budget_hit['value']:
-            output = budget_hit['text'] or (
-                "I gathered a lot but couldn't fully finish this question within "
-                "its time and tool budget. Please narrow it — e.g. name a "
-                "specific report, measure, or workspace — and I'll answer "
-                "precisely."
-            )
-        else:
-            output = (res.output if res else '') or ''
-        citations = []
-        if evidence_context is not None:
-            output, citations = evidence_context.finalize(output)
-        if org and org.debug_responses_enabled:
-            output += render_debug_section(debug_payload)
 
         # Candidate disambiguation is stateless: the agent/tool never persists
         # flow_state. If the user clicks a candidate, the selected-context
@@ -703,25 +864,27 @@ def run_chat_event_sync(session_id, user_message):
         ChatMessage.objects.create(
             session=session,
             role="assistant",
-            content=output,
-            debug_meta=debug_payload,
-            citations=citations,
+            content=turn['content'],
+            debug_meta=turn['debug_meta'],
         )
 
-        return 'Assistant answer saved.' if evidence_context is not None else output
+        # Like documents mode: no copy of document content in Django-Q's Task.result.
+        return 'Assistant answer saved.' if 'ask_document_analyzer' in turn['tool_calls'] else turn['content']
 
     except Exception as e:
-        if evidence_context is None and (session is None or session.mode != 'documents'):
+        documents = session is not None and session.mode == 'documents'
+        if not documents:
             traceback.print_exc()
         error_content = f"Sorry, I encountered an error: {str(e)}"
-        if evidence_context is not None or session and session.mode == 'documents':
-            error_content = 'Document Explorer could not complete this request. Please try again or contact your administrator.'
+        if documents:
+            from document_analyzer.assistant import UNAVAILABLE
+            error_content = UNAVAILABLE
         ChatMessage.objects.create(
             session_id=session_id,
             role="assistant",
             content=error_content,
         )
-        return error_content if evidence_context is not None or session and session.mode == 'documents' else str(e)
+        return error_content if documents else str(e)
 
     finally:
         # Clear the status key so stale messages don't appear on the next request
@@ -761,13 +924,9 @@ def chat_api_view(request):
                 return JsonResponse({'error': 'An unambiguous organization is required.'}, status=403)
             org = memberships[0].organization if memberships else None
             mode = requested_mode or 'catalog'
-            if mode == 'documents':
-                from django.conf import settings
-                from knowledge.permissions import can_read
-                if not getattr(settings, 'DOCUMENT_EXPLORER_ENABLED', False):
-                    return JsonResponse({'error': 'Document Explorer is not enabled.'}, status=503)
-                if not can_read(org, user):
-                    return JsonResponse({'error': 'Document Explorer access is required.'}, status=403)
+            if mode == 'documents' and not _documents_mode_allowed(org, user):
+                from document_analyzer.assistant import NO_ACCESS
+                return JsonResponse({'error': NO_ACCESS}, status=403)
             title = user_message[:40] + "..." if len(user_message) > 40 else user_message
             session = ChatSession.objects.create(user=user, title=title, organization=org, mode=mode)
 
@@ -778,11 +937,10 @@ def chat_api_view(request):
         org = _get_org_for_session(session)
         chat_timeout = getattr(org, 'chat_timeout_seconds', None) or AGENT_TIMEOUT_SECONDS
         if session.mode == 'documents':
-            from django.conf import settings
-            # The private document service has its own bounded HTTP budget.
-            # Do not let a shorter catalog timeout kill the worker before the
-            # service can return or its client can persist a graceful failure.
-            chat_timeout = max(chat_timeout, settings.DOCUMENT_EXPLORER_ANSWER_TIMEOUT + 10)
+            # The Document Analyzer's own call budget (LUCCY_TOOL_TIMEOUT): a shorter
+            # catalog timeout must not kill the worker before it can store luccy's
+            # answer or its own "could not answer".
+            chat_timeout = _documents_timeout(org)
         hard_timeout = chat_timeout + 30
         lock_timeout = max(CHAT_SESSION_LOCK_TIMEOUT_SECONDS, hard_timeout + 60)
 
@@ -862,8 +1020,9 @@ def get_chat_task_status(request, task_id):
         if task:
             if task.success:
                 latest = session.messages.filter(role='assistant').order_by('-created_at', '-id').first()
-                result = _serialize_chat_message(latest, session)['content'] if latest else ''
-                return JsonResponse({'status': 'completed', 'result': result})
+                serialized = _serialize_chat_message(latest, session) if latest else None
+                return JsonResponse({'status': 'completed', 'result': serialized['content'] if serialized else '',
+                                     'analyzer': serialized['analyzer'] if serialized else None})
             else:
                 # Even on Django-Q failure the worker wrote an error message to the DB
                 return JsonResponse({'status': 'failed', 'error': 'Task failed'})

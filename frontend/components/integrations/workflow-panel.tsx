@@ -43,7 +43,8 @@ import { cn } from "@/lib/utils";
 
 const QK = ["workflow-status"];
 
-export function WorkflowPanel() {
+/** `focusGroup`: the source group to open in Source flows (`?group=` from the overview). */
+export function WorkflowPanel({ focusGroup }: { focusGroup?: string } = {}) {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: QK });
 
@@ -69,7 +70,7 @@ export function WorkflowPanel() {
 
   return (
     <div className="space-y-4">
-      <WorkflowSources />
+      <WorkflowSources focusGroup={focusGroup} />
       <details className="rounded-xl border border-line bg-card" open={needsAttention || undefined}>
       <summary className="cursor-pointer p-4 text-sm font-semibold">Catalog pipeline & schedule · {describeSchedule(data.schedule)}</summary>
       <Card>

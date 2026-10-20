@@ -1,6 +1,6 @@
 # Document Explorer
 
-Document Explorer adds document ingestion, a searchable library, grounded document chat, and protected citation links to DataGov. The implementation uses a separate Python engine service and worker; DataGov remains responsible for scheduling, authorization, source configuration, job state, and conversations.
+Document Explorer adds document ingestion and indexing, a library to browse and view documents, and protected document links to DataGov. Its engine **indexes and stores** documents: it extracts, chunks and embeds them into Qdrant. It does not answer questions: the [Document Analyzer](document-analyzer.md) answers every document question in DataGov (the AI Assistant chat, earlier documents-mode chats, Slack and its own page), reading the chunks this engine stores. The implementation uses a separate Python engine service and worker; DataGov remains responsible for scheduling, authorization, source configuration and job state.
 
 The original repository audit and phased design are in [the integration plan](rag-integration-plan.md). The colleague's repository remains separate. Its existing API and standalone pipelines are preserved; DataGov calls the new private `document_explorer` API.
 
@@ -8,26 +8,22 @@ The original repository audit and phased design are in [the integration plan](ra
 
 ```mermaid
 flowchart LR
-    Browser[DataGov library and chat] --> Web[DataGov Django API]
-    Slack[Verified Slack events] --> Web
+    Browser[DataGov library] --> Web[DataGov Django API]
     Scheduler[DataGov Django-Q scheduler] --> DB[(DataGov PostgreSQL)]
     Web --> DB
     Web --> Originals[(Private originals)]
-    Web --> API[Document API]
     Worker[Document worker] -->|claim, heartbeat, publish| Web
     Worker -->|download authorized job input| Web
     Worker --> Artifacts[(Versioned text and index artifacts)]
     Worker --> Vectors[(Qdrant)]
-    API --> Artifacts
-    API --> Vectors
     Worker --> Provider[Embedding provider]
-    API --> Provider
+    Analyzer[Document Analyzer] -->|reads chunks| Vectors
 ```
 
 | Component | Owns |
 |---|---|
 | DataGov web and Django-Q | Organization and source permissions, schedules, leased runs, document/version metadata, private downloads, chat history, Slack identity mapping |
-| Document API | Retrieval restricted to the organization and exact allowed versions; grounded synthesis and structured evidence |
+| Document API | The engine's `/v1/search` and `/v1/answer` and its health check. DataGov no longer calls them; they stay for engine compatibility |
 | Document worker | PDF/text extraction, chunking, redaction, embeddings, immutable indexing, processing progress |
 | Qdrant | Persistent vector points scoped by organization and version |
 | Private file volumes | Original uploads, immutable extracted/index artifacts, and operator-managed import manifests |
@@ -50,10 +46,10 @@ The DataGov scheduler, source ACLs, PostgreSQL records, private download endpoin
 
 1. Open **Document Explorer** and create an upload source or an imported snapshot source. Organization administrators manage sources, schedules, runs, and uploads. Sources are restricted to the creator by default; explicitly select readers/groups or organization access.
 2. Upload a text-based PDF (up to 20 MiB), UTF-8 text, or Markdown. The run view reports queued/processing/completed states and failures. Scanned PDFs without extractable text are marked `needs_ocr` instead of pretending to be searchable.
-3. Select **Documents** in the existing chat. Answers retain structured evidence, and follow-up questions use bounded authorized conversation history.
-4. Open a citation to view the saved version, extracted passage, and PDF page. Copy its DataGov URL to Slack or elsewhere. Login preserves version/page/chunk navigation; the link grants no additional permissions.
+3. Ask the AI Assistant: the Document Analyzer answers document questions there once it is on and synced (see its runbook).
+4. Open a document link to view the saved version, extracted passage, and PDF page. Copy its DataGov URL to Slack or elsewhere. Login preserves version/page/chunk navigation; the link grants no additional permissions.
 
-Existing standalone Confluence, Jira, Drive, dbt, Power BI and GitHub ingesters are not exposed as live DataGov connectors in this release. Their normalized output can be imported through the snapshot contract below. Live provider synchronization, attachment download, and provider ACL mapping require separate adapters and credentials. OCR is not included. Catalog and Documents are explicit chat modes; automatic blending is not implemented.
+Existing standalone Confluence, Jira, Drive, dbt, Power BI and GitHub ingesters are not exposed as live DataGov connectors in this release. Their normalized output can be imported through the snapshot contract below. Live provider synchronization, attachment download, and provider ACL mapping require separate adapters and credentials. OCR is not included.
 
 ## Snapshot contract
 
@@ -109,13 +105,12 @@ For a standalone Django deployment, copy the Document Explorer variables from [b
 - A worker claims a job and receives a rotating lease token. Heartbeats extend the lease. Cancellation and expired attempts cannot publish; stale worker callbacks are rejected.
 - Expired leases retry up to three attempts. Terminal failures are visible in DataGov; administrators can retry failed/partial runs. Repeating an upload or completion with the same idempotency key/body does not duplicate publication.
 - Published version contents are immutable. Failed replacements keep the old version active, and a retry of an older failed upload cannot replace a newer published upload.
-- The model is called once per answer request; an ambiguous timeout is not blindly retried. Service failures return a safe user message without exposing provider errors or keys.
 
 ## Permissions and Slack
 
-All library and download requests require an active organization membership and the relevant application access. A source's reader ACL applies before retrieval and again before returning or reopening evidence. Administrators can manage sources but do not automatically bypass a restricted source's reader list. Saved chat answers with revoked evidence are redacted on subsequent reads.
+All library and download requests require an active organization membership and the relevant application access. A source's reader ACL applies to listing, viewing and downloading. Administrators can manage sources but do not automatically bypass a restricted source's reader list. Chat answers saved before the Document Analyzer answered every document question keep their DataGov citations; one whose evidence was revoked is redacted on subsequent reads.
 
-Slack requests require `SLACK_SIGNING_SECRET`, timestamp/HMAC validation, a unique organization workspace binding, and a verified matching bot token. Configure the workspace in Integrations and the stable Slack member ID in the organization member dialog. Mapping requires an active linked DataGov account; clearing the field removes the mapping. Member removal also clears that organization's mapping while preserving governance ownership records. Only a mapped direct-message request prefixed with `/documents` or `documents:` can return document answers. Channel requests and unmapped identities receive a generic DataGov link. DataGov URLs point to the protected viewer; no public file links or attachments are sent. Slack sending has not been exercised against a live workspace as part of local verification.
+Slack requests require `SLACK_SIGNING_SECRET`, timestamp/HMAC validation, a unique organization workspace binding, and a verified matching bot token. Configure the workspace in Integrations and the stable Slack member ID in the organization member dialog. Mapping requires an active linked DataGov account; clearing the field removes the mapping. Member removal also clears that organization's mapping while preserving governance ownership records. Only a mapped direct-message request prefixed with `/documents` or `documents:` is answered, by the Document Analyzer and only for a member who may use it; the answer lists its sources' links as the analyzer's page does. Channel requests and unmapped identities receive a generic DataGov link. No files or attachments are sent. Slack sending has not been exercised against a live workspace as part of local verification.
 
 ## Operations and limits
 
@@ -123,11 +118,13 @@ Back up DataGov PostgreSQL, `document_originals`, `document_artifacts`, `documen
 
 The API health endpoint checks required configuration and Qdrant. The worker health check checks its own recent heartbeat; monitor failed runs and queue age in addition to container health. The engine does not validate provider credentials by making a paid call at startup.
 
-Limits are 5,000 allowed versions per query and 10,000 question characters. The engine uses a persistent per-organization SQLite FTS5/BM25 index with at most 512 distinct keyword terms. Both keyword and vector retrieval filter the allowed versions and return at most 40 candidates each. Candidate text is loaded from authorized immutable manifests; its safety budget is 20,000 chunks or 10 million text/index characters, independently of total corpus size. The worker reconciles existing manifests into the lexical index without re-embedding. SQLite DELETE journaling supports the API's read-only artifact mount. Include lexical sidecars in consistent artifact backups, or rebuild them from manifests. PDF extraction is capped at 2,000 pages, with 10,000 chunks and 5 million combined page/chunk text characters per published document. Worker result JSON is bounded at 32 MiB. The engine checks publication limits before embedding each document. Retrieval quality evaluation against representative, permissioned production questions remains necessary as sources change.
+The worker also keeps a per-organization SQLite FTS5 index beside the manifests for the engine's own search endpoint; include these sidecars in consistent artifact backups, or rebuild them from manifests. PDF extraction is capped at 2,000 pages, with 10,000 chunks and 5 million combined page/chunk text characters per published document. Worker result JSON is bounded at 32 MiB. The engine checks publication limits before embedding each document. Answer quality is measured on the Document Analyzer (its comparison run).
 
 Existing DataGov GCS raw exports can supply complete initial snapshots. Prefer the latest successful export per source, verify its object generation/checksum and archive integrity, and normalize dbt model/schema definitions and Power BI semantic models/report structure. Exclude repository caches, binary rendering assets and transactional row exports from the document corpus. Keep stable source boundaries beneath the 1,000-document and completion-size limits, restrict initial sources to explicitly authorized organization users, then enqueue through the normal ingestion job API. An imported snapshot is a point-in-time export; configuring a schedule to reindex that file does not itself refresh it from GCS.
 
 ## Verification
+
+This is the record of the first release, when the engine also answered document chat. Document answering has since moved to the Document Analyzer (tests in `backend/app/document_analyzer/tests`).
 
 Local verification uses disposable PostgreSQL and Qdrant, private temporary document volumes, and an explicit test-only engine launcher that substitutes deterministic embeddings and answer generation. Production entry points cannot enable those adapters through an environment flag. No real connector corpus, live Slack messages, paid provider calls, or production database was used.
 

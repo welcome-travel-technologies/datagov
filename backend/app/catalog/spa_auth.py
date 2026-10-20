@@ -22,6 +22,7 @@ Django templates gate on (see catalog/access.py), so the SPA sidebar matches the
 server-rendered app exactly.
 """
 import json
+import logging
 
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.forms import PasswordChangeForm
@@ -32,6 +33,8 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from .access import ASSIGNABLE_GROUPS, is_org_admin, resolve_org
 from .frontend_views import get_access_groups_qs, get_user_permissions
 from .models import Organization, OrganizationMembership
+
+logger = logging.getLogger(__name__)
 
 # Every page-view flag the React sidebar reads (mirrors catalog/access.py keys).
 _PERM_KEYS = [
@@ -53,10 +56,20 @@ _PERM_KEYS = [
 
 def _me_payload(user):
     if not user.is_authenticated:
-        return {"is_authenticated": False, "perms": {k: False for k in _PERM_KEYS}}
+        return {"is_authenticated": False,
+                "perms": {**{k: False for k in _PERM_KEYS}, "can_view_document_analyzer": False}}
 
     perms = get_user_permissions(user)
     perms_out = {k: bool(perms[k]) for k in _PERM_KEYS}
+    # Not a group page flag: the analyzer is bound to one organization, so its own
+    # rule decides. Always explicit, because the sidebar shows a missing key, and
+    # False when that rule fails: an analyzer problem never breaks /api/me.
+    try:
+        from document_analyzer.permissions import can_use
+        perms_out["can_view_document_analyzer"] = can_use(user)
+    except Exception as exc:
+        logger.warning("Document Analyzer access check failed (%s).", type(exc).__name__)
+        perms_out["can_view_document_analyzer"] = False
 
     org = None
     mem = (

@@ -9,6 +9,7 @@
 import { getCookie } from "@/lib/utils";
 import type { CanvasDoc } from "@/lib/metrics-canvas/types";
 import type { DocumentCitation } from "@/lib/knowledge-api";
+import type { ChatAnalyzerMeta } from "@/lib/document-analyzer-api";
 
 const BASE = "/api";
 
@@ -614,7 +615,8 @@ export interface MePerms {
   can_view_dbt: boolean;
   can_view_integrations: boolean;
   can_view_org_settings: boolean;
-  [k: string]: boolean;
+  can_view_document_analyzer?: boolean;
+  [k: string]: boolean | undefined;
 }
 
 export interface User {
@@ -1553,7 +1555,7 @@ export const api = {
     taskStatus: (taskId: string) =>
       request<{ status: string; current_status?: string }>(`/chat/task/${taskId}/`),
     messages: (sessionId: number) =>
-      request<{ id?: number; role: string; content: string; citations?: DocumentCitation[]; metadata?: Record<string, unknown> }[]>(`/chat/sessions/${sessionId}/messages/`),
+      request<{ id?: number; role: string; content: string; citations?: DocumentCitation[]; metadata?: Record<string, unknown>; analyzer?: ChatAnalyzerMeta | null }[]>(`/chat/sessions/${sessionId}/messages/`),
     sessions: () =>
       request<{ id: number; title: string; updated_at: string; mode?: "catalog" | "documents" }[]>("/chat/sessions/"),
     delete: (sessionId: number) =>

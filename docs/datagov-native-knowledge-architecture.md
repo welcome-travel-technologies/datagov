@@ -11,10 +11,10 @@ coordinated restore remain separate follow-up work; they are not claimed as deli
 
 ### Delivered boundaries and rollout
 
-- `DOCUMENT_NATIVE_AI_ENABLED=true` adds permission-scoped `/v1/search` retrieval to the
-  existing web assistant. The existing catalog/live tools remain registered. Legacy document
-  sessions retain their endpoint. Disabling the flag removes native retrieval, while saved
-  evidence is still checked against current access before display or reuse.
+- Native assistant retrieval (`DOCUMENT_NATIVE_AI_ENABLED`, `search_evidence` over `/v1/search`)
+  was delivered here and later removed: the [Document Analyzer](document-analyzer.md) answers
+  every document question. Saved evidence is still checked against current access before
+  display, and a saved reply with DataGov evidence never reaches a later turn's history.
 - `DOCUMENT_INDEXING_PIPELINE_ENABLED=true` enables the optional output dispatcher. An
   administrator explicitly links an upload/output collection to a Fabric/dbt connection and
   enables its indexing output. Existing snapshot collections are not automatically converted
@@ -55,7 +55,9 @@ preferences. Empty overrides retain existing defaults. User Settings may only up
 requester's preferences, never administrator grants or another member. Organization capability
 flags and existing data ACLs still apply. Disallowed providers contribute neither tools nor
 front-loaded context; execution rechecks member policy, including asynchronous functions.
-Document mode also checks this policy. Mapped Slack accounts and MCP keys use the same member
+Document mode also checks this policy. The documents tool is the Document Analyzer
+(`analyzer`); migration `0069_documents_tool_is_analyzer` turned a blocked `documents` group into a
+blocked `analyzer`. Mapped Slack accounts and MCP keys use the same member
 policy; an unmapped Slack author has no callable assistant tools until linked to a DataGov user.
 This controls future assistant tool use, not visibility of previously saved chat answers or
 normal governance/catalog pages. No permissions are automatically revoked by this migration.
@@ -179,6 +181,10 @@ Separate pausing synchronization from revoking content access. Existing inactive
 must remain inaccessible during that migration; a new pause control must not restore them.
 
 ## Native AI and evidence
+
+Superseded: this design was delivered and later replaced by the
+[Document Analyzer](document-analyzer.md), which answers every document question. It is kept
+for its reasoning.
 
 Keep the current Pydantic AI agent and its catalog, dbt, Power BI and BigQuery tools. Add a
 bounded `search_evidence` provider using the engine's `/v1/search` contract. Resolve the user,

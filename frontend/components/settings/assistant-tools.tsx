@@ -7,8 +7,9 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { LoadingState } from "@/components/ui/misc";
 
+// "analyzer" is the documents tool: the Document Analyzer answers every document question.
 export const ASSISTANT_TOOLS: Record<string, string> = {
-  documents: "Document search", powerbi: "Power BI catalog", dbt: "dbt catalog",
+  analyzer: "Documents", powerbi: "Power BI catalog", dbt: "dbt catalog",
   bigquery: "BigQuery schema", lineage: "Catalog lineage",
   powerbi_live: "Live Power BI queries", bigquery_live: "Live BigQuery queries",
 };
@@ -28,7 +29,7 @@ export function AssistantTools() {
     <p className="text-xs text-muted-foreground">Choose which tools the assistant may use for you. Your administrator controls access; document permissions still apply.</p>
     {query.isPending && <LoadingState label="Loading tools…" />}
     {query.isError && <p role="alert" className="text-sm text-err">Tools could not be loaded.</p>}
-    {query.data?.tools.map((tool) => <label key={tool.id} className="flex items-start justify-between gap-4 border-b border-line py-2 last:border-0"><span><span className="text-sm font-medium">{tool.label}</span><span className="mt-1 block text-xs text-muted-foreground">{!tool.allowed ? "Disabled by your administrator" : !tool.available ? "Not enabled for this organization" : tool.selected && !tool.effective ? "Enable its catalog tool first" : tool.description}</span></span><Switch aria-label={tool.label} checked={tool.allowed && tool.available && tool.selected} disabled={save.isPending || !tool.allowed || !tool.available} onCheckedChange={(checked) => save.mutate({ id: tool.id, checked })} /></label>)}
+    {query.data?.tools.map((tool) => <label key={tool.id} className="flex items-start justify-between gap-4 border-b border-line py-2 last:border-0"><span><span className="text-sm font-medium">{tool.label}</span><span className="mt-1 block text-xs text-muted-foreground">{tool.id === "analyzer" && !tool.available ? tool.description : !tool.allowed ? "Disabled by your administrator" : !tool.available ? "Not enabled for this organization" : tool.selected && !tool.effective ? "Enable its catalog tool first" : tool.description}</span></span><Switch aria-label={tool.label} checked={tool.allowed && tool.available && tool.selected} disabled={save.isPending || !tool.allowed || !tool.available} onCheckedChange={(checked) => save.mutate({ id: tool.id, checked })} /></label>)}
     {save.isError && <p role="alert" className="text-sm text-err">{getApiErrorMessage(save.error, "Tool preferences could not be saved.")}</p>}
   </CardContent></Card>;
 }

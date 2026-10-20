@@ -151,6 +151,21 @@ Storage names, Compose project, registry and local/managed topology are recorded
 
 Back up **PostgreSQL + document originals + engine artifacts + import manifests + Qdrant** consistently. PostgreSQL and originals remain required even if Qdrant is managed. Retain versions needed by saved citations, monitor disk use, failed jobs, queue age, provider errors and worker activity. The scheduler container currently has process readiness only; service health is not a full synthetic ingestion check. Set up periodic restore drills and controlled image/log retention; the deployer deliberately performs no automatic pruning.
 
+## Optional: the Document Analyzer
+
+The [Document Analyzer](document-analyzer.md) (luccy answering from the engine's Qdrant) is
+**off by default**: a release renders and runs exactly what it did before until
+`deployment.json` holds `"analyzer": {"enabled": true, "logs_volume": "<volume>"}` and the
+repository variables `ANALYZER_IMAGE_ENABLED` and `LUCCY_IMAGE` are set. Its runbook covers the
+three luccy env files, the read-only Qdrant key and the release checks. Its one-off jobs run
+on the VM, as root, against the current release:
+
+```bash
+python3 /opt/datagov/current/deploy.py --job backfill-ordinals
+python3 /opt/datagov/current/deploy.py --job analyzer-sync
+python3 /opt/datagov/current/deploy.py --job analyzer-compare --dry-run   # then without --dry-run
+```
+
 ## Existing colleague index and fresh ingestion
 
 The agreed rollout can download/import documents again and build a **fresh** Document Explorer collection. Keep the colleague's system available until new document counts, access scopes, citations and sample answers are verified. There is no need to modify their running Qdrant as part of deployment.

@@ -27,13 +27,13 @@ afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); });
 
 describe("organization member Slack identity", () => {
   it("preserves existing tool access and submits an administrator change with the member", async () => {
-    mount({ ...member, assistant_tool_access: { documents: false } });
+    mount({ ...member, assistant_tool_access: { analyzer: false } });
     fireEvent.click(screen.getByText("AI tool access"));
-    expect(screen.getByRole("switch", { name: "Allow Document search" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow Documents" })).not.toBeChecked();
     fireEvent.click(screen.getByRole("switch", { name: "Allow dbt catalog" }));
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(saved).toHaveBeenCalledOnce());
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).assistant_tool_access).toEqual({ documents: false, dbt: false });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).assistant_tool_access).toEqual({ analyzer: false, dbt: false });
   });
   it("loads the existing mapping and sends an edited stable ID separately from the display handle", async () => {
     mount();

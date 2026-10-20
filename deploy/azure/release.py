@@ -15,6 +15,9 @@ import subprocess
 import tempfile
 import time
 
+# The app release's deployment bundle; deploy.py copies the same files (BUNDLE_FILES).
+BUNDLE = ("deploy.py", "compose.yml", "compose.qdrant.yml", "compose.analyzer.yml")
+
 
 def manifest_from_env(component, env):
     if env.get("GITHUB_REF") != "refs/heads/main":
@@ -23,6 +26,9 @@ def manifest_from_env(component, env):
     if not re.fullmatch(r"[a-z0-9.-]+\.azurecr\.io", registry):
         raise ValueError("Invalid ACR login server")
     keys = {"backend": "datagov-backend", "frontend": "datagov-frontend", "gateway": "datagov-gateway"} if component == "app" else {"engine": "document-explorer"}
+    if component == "app" and env.get("ANALYZER_DIGEST"):
+        # Only when CI built the optional Document Analyzer image (ANALYZER_IMAGE_ENABLED).
+        keys["analyzer"] = "datagov-document-analyzer"
     images = {}
     for key, repository in keys.items():
         digest = env[key.upper() + "_DIGEST"]
@@ -39,8 +45,7 @@ def manifest_from_env(component, env):
 
 
 def remote_script(manifest, bundle=None):
-    files = {name: (bundle / name).read_text(encoding="utf-8") for name in
-             ("deploy.py", "compose.yml", "compose.qdrant.yml")} if bundle else {}
+    files = {name: (bundle / name).read_text(encoding="utf-8") for name in BUNDLE} if bundle else {}
     payload = base64.b64encode(gzip.compress(json.dumps({"manifest": manifest, "files": files}).encode())).decode()
     # The payload is encoded data, never shell syntax; no runtime secrets are sent.
     return "set -eu\numask 077\npython3 - <<'DATAGOV_PY'\n" + f"""import base64,gzip,json,pathlib,subprocess,tempfile
@@ -50,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix='datagov-release-') as scratch:
     manifest=folder/'manifest.json'
     manifest.write_text(json.dumps(payload['manifest']))
     for name,content in payload['files'].items():
-        if name not in ('deploy.py','compose.yml','compose.qdrant.yml'):
+        if name not in {BUNDLE!r}:
             raise SystemExit('Invalid deployment bundle')
         (folder/name).write_text(content)
     controller=folder/'deploy.py' if payload['files'] else pathlib.Path('/opt/datagov/current/deploy.py')
