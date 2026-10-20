@@ -18,7 +18,7 @@ const ANSWER = {
 };
 const DOCUMENT = {
   id: "123", title: "Travel policy", source: "Confluence · HR", modified: "2026-09-29", url: PAGE_URL, path: ["HR", "Policies"],
-  body_html: "<h1>Travel policy</h1><p>Hotels up to €150.</p><script>window.parent.hacked = true</script>",
+  body_html: '<h1>Travel policy</h1><h2>Hotels</h2><p>Hotels up to <strong>\u20ac150</strong> a night.</p><h2>Meals</h2><p>Meals up to \u20ac40.</p><script>window.parent.hacked = true</script>',
   passages: [{ heading: "Hotels", text: "Hotels up to €150 a night." }, { heading: "Meals", text: "Meals up to €40." }],
 };
 
@@ -34,6 +34,13 @@ const IN_CHAT = { ignore: "script, style, [role=status]" };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
 const fetchMock = vi.fn<typeof fetch>();
+const objectUrlBlobs = new Map<string, Blob>();
+const createObjectURL = vi.fn((blob: Blob) => {
+  const url = `blob:http://localhost/source-document-${createObjectURL.mock.calls.length}`;
+  objectUrlBlobs.set(url, blob);
+  return url;
+});
+const revokeObjectURL = vi.fn((url: string) => { objectUrlBlobs.delete(url); });
 let client: QueryClient;
 let streams: ReturnType<typeof controllableStream>[];
 function mount() {
@@ -59,6 +66,27 @@ const askCalls = () => fetchMock.mock.calls.filter(([url]) => String(url) === "/
 const askBody = (call = 0) => JSON.parse(askCalls()[call][1]?.body as string);
 const askSignal = (call = 0) => askCalls()[call][1]?.signal as AbortSignal;
 
+async function frameDocument(panel: HTMLElement) {
+  const frame = await within(panel).findByTitle("Travel policy: page text");
+  const url = frame.getAttribute("src")!.split("#")[0];
+  const blob = objectUrlBlobs.get(url);
+  expect(blob).toBeInstanceOf(Blob);
+  const html = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob!);
+  });
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  fireEvent.load(frame);
+  if (doc.getElementById("active-evidence")) {
+    await waitFor(() => expect(frame).toHaveAttribute("src", `${url}#active-evidence`));
+  } else {
+    expect(frame).toHaveAttribute("src", url);
+  }
+  return { frame, url, html, doc };
+}
+
 async function askAndAnswer(question: string) {
   const box = await screen.findByRole("textbox", { name: "Ask about company docs, metrics, decisions" });
   fireEvent.change(box, { target: { value: question } });
@@ -72,8 +100,16 @@ beforeEach(() => {
   streams = [];
   localStorage.clear();
   fetchMock.mockReset();
+  createObjectURL.mockClear();
+  revokeObjectURL.mockClear();
+  objectUrlBlobs.clear();
   routes();
   vi.stubGlobal("fetch", fetchMock);
+  const BrowserURL = URL;
+  vi.stubGlobal("URL", class extends BrowserURL {
+    static createObjectURL = createObjectURL;
+    static revokeObjectURL = revokeObjectURL;
+  });
 });
 afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); localStorage.clear(); window.history.replaceState(null, "", "/"); });
 
@@ -167,7 +203,7 @@ describe("Document Analyzer page", () => {
     expect(saved.turns[0]).toMatchObject({ question: "What is the hotel limit?", pending: false, answer: { log: "0a1b2c3d", checking: false } });
   });
 
-  it("opens cited documents in a sandboxed panel from a chip or a link in the answer", async () => {
+  it("opens cited documents beside chat with highlighted evidence in a sandboxed frame", async () => {
     mount();
     const stream = await askAndAnswer("What is the hotel limit?");
     stream.send(event("stage", 0, { stage: "starting", job: "job-1" }) + event("done", 1, ANSWER));
@@ -175,35 +211,63 @@ describe("Document Analyzer page", () => {
 
     const link = await screen.findByRole("link", { name: "the travel policy" });
     expect(fireEvent.click(link, { ctrlKey: true })).toBe(true);   // Ctrl-click keeps the browser default
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Source document" })).not.toBeInTheDocument();
     expect(fireEvent.click(link)).toBe(false);                      // a plain click opens the panel instead
 
-    const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText("HR › Policies")).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "Travel policy" })).toBeInTheDocument();
-    expect(within(dialog).getByText("modified 2026-09-29")).toBeInTheDocument();
-    expect(within(dialog).getByRole("link", { name: /Open source/ })).toHaveAttribute("href", PAGE_URL);
-    expect(within(dialog).getByText("Passage 1 of 2")).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Next passage" }));
-    expect(within(dialog).getByText("Passage 2 of 2")).toBeInTheDocument();
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(panel).not.toHaveAttribute("aria-modal");
+    expect(panel).toHaveFocus();
+    expect(await within(panel).findByText("HR › Policies")).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "Travel policy" })).toBeInTheDocument();
+    expect(within(panel).getByText("modified 2026-09-29")).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: /Open source/ })).toHaveAttribute("href", PAGE_URL);
+    expect(within(panel).getByText("Passage 1 of 2")).toBeInTheDocument();
+    const unloadedFrame = await within(panel).findByTitle("Travel policy: page text");
+    expect(unloadedFrame.getAttribute("src")).not.toContain("#active-evidence");
+    const first = await frameDocument(panel);
+    expect(first.frame).toHaveAttribute("sandbox", "");
+    expect(first.frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(first.frame).not.toHaveAttribute("srcdoc");
+    expect(first.frame.getAttribute("src")).toBe(`${first.url}#active-evidence`);
+    expect(first.doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content")).toBe("default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+    expect(first.doc.querySelector("script")).toBeNull();
+    expect(first.doc.querySelector("strong mark.analyzer-evidence-active")?.textContent).toBe("\u20ac150");
+    expect(Array.from(first.doc.querySelectorAll('mark[data-passage-index="0"]'), (mark) => mark.textContent).join("")).toBe("Hotels up to \u20ac150 a night.");
+    expect(first.doc.querySelector('mark[data-passage-index="1"]')?.textContent).toBe("Meals up to \u20ac40.");
+    expect(within(panel).queryByText(/could not be located/)).not.toBeInTheDocument();
+
+    const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
+    try {
+      fireEvent.load(first.frame);
+      fireEvent.load(first.frame);
+      expect(scheduled).not.toHaveBeenCalled();
+      expect(first.frame).toHaveAttribute("src", `${first.url}#active-evidence`);
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+    } finally { scheduled.mockRestore(); }
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Next passage" }));
+    expect(within(panel).getByText("Passage 2 of 2")).toBeInTheDocument();
+    const second = await frameDocument(panel);
+    expect(second.doc.getElementById("active-evidence")?.textContent).toBe("Meals up to \u20ac40.");
+    expect(revokeObjectURL).toHaveBeenCalledWith(first.url);
     // luccy's n/j p/k keys work wherever focus is in the panel, Close included.
-    const close = within(dialog).getByRole("button", { name: "Close the document panel" });
+    const close = within(panel).getByRole("button", { name: "Close the document panel" });
     fireEvent.keyDown(close, { key: "n" });
-    expect(within(dialog).getByText("Passage 1 of 2")).toBeInTheDocument();
+    expect(within(panel).getByText("Passage 1 of 2")).toBeInTheDocument();
     fireEvent.keyDown(close, { key: "k" });
-    expect(within(dialog).getByText("Passage 2 of 2")).toBeInTheDocument();
+    expect(within(panel).getByText("Passage 2 of 2")).toBeInTheDocument();
     fireEvent.keyDown(close, { key: "n", ctrlKey: true });
-    expect(within(dialog).getByText("Passage 2 of 2")).toBeInTheDocument();
-    const frame = within(dialog).getByTitle("Travel policy: page text");
-    expect(frame).toHaveAttribute("sandbox", "");
-    expect(frame.getAttribute("srcdoc")).toContain("<p>Hotels up to €150.</p>");
-    expect(frame.getAttribute("srcdoc")).toContain("default-src 'none'");
+    expect(within(panel).getByText("Passage 2 of 2")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/document-analyzer/documents/123/?answer=0a1b2c3d", expect.anything());
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Close the document panel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Source document" })).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Ask about company docs, metrics, decisions" })).toHaveFocus();
+    expect(objectUrlBlobs.size).toBe(0);
     fireEvent.click(screen.getByRole("button", { name: "Travel policy" }));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("complementary", { name: "Source document" })).toBeInTheDocument();
   });
 
   it("shows a retry when a document cannot be opened", async () => {
@@ -213,9 +277,85 @@ describe("Document Analyzer page", () => {
     stream.send(event("done", 0, ANSWER));
     stream.close();
     fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText("This document isn't available any more. It may have been removed or not added yet.")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    expect(await within(panel).findByText("This document isn't available any more. It may have been removed or not added yet.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("keeps the document open and its frame stable while the reader asks a follow-up", async () => {
+    mount();
+    const stream = await askAndAnswer("What is the hotel limit?");
+    stream.send(event("done", 0, ANSWER));
+    stream.close();
+    fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    const initial = await frameDocument(panel);
+    const created = createObjectURL.mock.calls.length;
+    const revoked = revokeObjectURL.mock.calls.length;
+    const box = screen.getByRole("textbox", { name: "Ask about company docs, metrics, decisions" });
+    expect(box).not.toBeDisabled();
+
+    act(() => box.focus());
+    fireEvent.click(box);
+    fireEvent.change(box, { target: { value: "And meals?" } });
+    fireEvent.keyDown(box, { key: "n" });
+    fireEvent.keyDown(box, { key: "p" });
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(within(panel).getByText("Passage 1 of 2")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Source document" })).toBe(panel);
+    expect(box).toHaveFocus();
+    expect(createObjectURL).toHaveBeenCalledTimes(created);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(revoked);
+    expect(within(panel).getByTitle("Travel policy: page text")).toBe(initial.frame);
+    expect(initial.frame).toHaveAttribute("src", `${initial.url}#active-evidence`);
+
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(askBody(1).question).toBe("And meals?");
+    expect(screen.getByRole("complementary", { name: "Source document" })).toBe(panel);
+    expect(createObjectURL).toHaveBeenCalledTimes(created);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(revoked);
+    streams[1].send(event("done", 0, { ...ANSWER, answer: "Meals have their own limit.", citations: [], log: "1a2b3c4d" }));
+    streams[1].close();
+    expect(await screen.findByText("Meals have their own limit.")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Source document" })).toBe(panel);
+    expect(createObjectURL).toHaveBeenCalledTimes(created);
+
+    fireEvent.keyDown(within(panel).getByRole("button", { name: "Close the document panel" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Source document" })).not.toBeInTheDocument());
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(revokeObjectURL).toHaveBeenCalledWith(initial.url);
+    expect(objectUrlBlobs.size).toBe(0);
+  });
+
+  it("revokes the document's Blob URL when leaving the app", async () => {
+    const view = mount();
+    const stream = await askAndAnswer("What is the hotel limit?");
+    stream.send(event("done", 0, ANSWER));
+    stream.close();
+    fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    const { url } = await frameDocument(panel);
+    expect(objectUrlBlobs.has(url)).toBe(true);
+    view.unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith(url);
+    expect(objectUrlBlobs.size).toBe(0);
+  });
+
+  it("keeps an unmatched cited excerpt visible without marking unrelated document text", async () => {
+    routes({ "/api/document-analyzer/documents/123/?answer=0a1b2c3d": () => json({ ...DOCUMENT, passages: [{ heading: "Hotels", text: "An older hotel policy passage." }] }) });
+    mount();
+    const stream = await askAndAnswer("What is the hotel limit?");
+    stream.send(event("done", 0, ANSWER));
+    stream.close();
+    fireEvent.click(await screen.findByRole("button", { name: "Travel policy" }));
+    const panel = await screen.findByRole("complementary", { name: "Source document" });
+    expect(await within(panel).findByText("An older hotel policy passage.")).toBeInTheDocument();
+    expect(within(panel).getByText(/could not be located in the document/)).toBeInTheDocument();
+    const { frame, doc } = await frameDocument(panel);
+    expect(frame.getAttribute("src")).not.toContain("#active-evidence");
+    expect(doc.querySelector("mark")).toBeNull();
+    expect(doc.body.textContent).toContain("Hotels up to \u20ac150 a night.");
   });
 
   it("sends the condensed history, chosen sources and simple style with a follow-up", async () => {

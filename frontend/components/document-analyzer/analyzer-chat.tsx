@@ -114,7 +114,13 @@ export function AnalyzerChat({ userId, status }: { userId: number; status: Analy
   const adopted = useRef<Thread | null>(null);
   const streamRef = useRef<{ id: string; controller: AbortController } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const readerWasOpen = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (readerWasOpen.current && !panel) inputRef.current?.focus();
+    readerWasOpen.current = !!panel;
+  }, [panel]);
 
   const allSources: AnalyzerSource[] = ANALYZER_SOURCES.filter((s) => !status.sources?.length || status.sources.includes(s));
   const activeSources = allSources.filter((s) => thread.sources.includes(s));
@@ -248,103 +254,105 @@ export function AnalyzerChat({ userId, status }: { userId: number; status: Analy
   const lastSourceOn = activeSources.length <= 1;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-3 flex justify-end">
-        <Button variant="outline" size="sm" onClick={newChat}><Plus className="h-4 w-4" /> New chat</Button>
-      </div>
-      {status.healthy === false && (
-        <p className="mb-3 rounded-lg border border-line bg-warn/10 p-3 text-xs text-foreground/80">
-          The Document Analyzer isn&apos;t responding right now. Questions may fail; please try again in a few minutes.
-        </p>
-      )}
-
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
-          {thread.turns.length === 0 && (
-            <div className="mx-auto max-w-lg py-8 text-center">
-              <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-xl bg-brand text-white"><FileSearch className="h-5 w-5" /></div>
-              <h2 className="text-[15px] font-semibold">Ask about company knowledge</h2>
-              <p className="mt-2 text-[13px] text-muted-foreground">
-                It reads Confluence, Jira, GitHub, the dbt and Power BI definitions and Google Drive to answer questions about
-                strategy, processes, metrics and past decisions — with citations. Click any citation to open the document and
-                the passages it was cited for.
-              </p>
-            </div>
-          )}
-          {thread.turns.map((turn) => <TurnView key={turn.id} turn={turn} onOpen={openCitation} onFeedback={setFeedback} />)}
-          <div ref={endRef} />
+    <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", panel && "hidden lg:flex")}>
+        <div className="mb-3 flex justify-end">
+          <Button variant="outline" size="sm" onClick={newChat}><Plus className="h-4 w-4" /> New chat</Button>
         </div>
-        <div role="status" aria-live="polite" className="sr-only">{liveText}</div>
+        {status.healthy === false && (
+          <p className="mb-3 rounded-lg border border-line bg-warn/10 p-3 text-xs text-foreground/80">
+            The Document Analyzer isn&apos;t responding right now. Questions may fail; please try again in a few minutes.
+          </p>
+        )}
 
-        <form
-          className="border-t border-line p-3"
-          onSubmit={(event) => { event.preventDefault(); ask(); }}
-        >
-          <textarea
-            ref={inputRef}
-            value={draft}
-            rows={2}
-            maxLength={10000}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                ask();
-              }
-            }}
-            aria-label="Ask about company docs, metrics, decisions"
-            placeholder={busy ? BUSY_PLACEHOLDER : PLACEHOLDER}
-            className="block max-h-[200px] min-h-[44px] w-full resize-none rounded-lg border border-input bg-panel px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-ring"
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div role="group" aria-label="Sources searched" className="flex flex-wrap items-center gap-1">
-              {allSources.map((source) => {
-                const on = activeSources.includes(source);
-                // The last one stays focusable and says why it won't switch off.
-                const last = on && lastSourceOn;
-                return (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
+            {thread.turns.length === 0 && (
+              <div className="mx-auto max-w-lg py-8 text-center">
+                <div className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-xl bg-brand text-white"><FileSearch className="h-5 w-5" /></div>
+                <h2 className="text-[15px] font-semibold">Ask about company knowledge</h2>
+                <p className="mt-2 text-[13px] text-muted-foreground">
+                  It reads Confluence, Jira, GitHub, the dbt and Power BI definitions and Google Drive to answer questions about
+                  strategy, processes, metrics and past decisions — with citations. Click any citation to open the document and
+                  the passages it was cited for.
+                </p>
+              </div>
+            )}
+            {thread.turns.map((turn) => <TurnView key={turn.id} turn={turn} onOpen={openCitation} onFeedback={setFeedback} />)}
+            <div ref={endRef} />
+          </div>
+          <div role="status" aria-live="polite" className="sr-only">{liveText}</div>
+
+          <form
+            className="border-t border-line p-3"
+            onSubmit={(event) => { event.preventDefault(); ask(); }}
+          >
+            <textarea
+              ref={inputRef}
+              value={draft}
+              rows={2}
+              maxLength={10000}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  ask();
+                }
+              }}
+              aria-label="Ask about company docs, metrics, decisions"
+              placeholder={busy ? BUSY_PLACEHOLDER : PLACEHOLDER}
+              className="block max-h-[200px] min-h-[44px] w-full resize-none rounded-lg border border-input bg-panel px-3 py-2 text-[13px] outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div role="group" aria-label="Sources searched" className="flex flex-wrap items-center gap-1">
+                {allSources.map((source) => {
+                  const on = activeSources.includes(source);
+                  // The last one stays focusable and says why it won't switch off.
+                  const last = on && lastSourceOn;
+                  return (
+                    <button
+                      key={source}
+                      type="button"
+                      aria-pressed={on}
+                      aria-disabled={last || undefined}
+                      aria-describedby={last ? "analyzer-last-source" : undefined}
+                      title={last ? undefined : on ? `Stop searching ${SOURCE_LABELS[source]}` : `Search ${SOURCE_LABELS[source]}`}
+                      onClick={() => toggleSource(source)}
+                      className={cn(
+                        "h-7 rounded-full border px-2.5 text-[11.5px] font-medium transition-colors",
+                        on ? "border-brand/40 bg-brand/10 text-foreground" : "border-line text-faint line-through hover:text-muted-foreground",
+                        last && "cursor-not-allowed",
+                      )}
+                    >
+                      {SOURCE_LABELS[source]}
+                    </button>
+                  );
+                })}
+                {lastSourceOn && <span id="analyzer-last-source" className="px-1 text-[11px] text-faint">{LAST_SOURCE_HINT}</span>}
+              </div>
+              <div role="group" aria-label="Answer style" className="inline-flex rounded-full border border-line p-0.5">
+                {([["", "Standard"], ["plain", "Simple words"]] as const).map(([value, label]) => (
                   <button
-                    key={source}
+                    key={label}
                     type="button"
-                    aria-pressed={on}
-                    aria-disabled={last || undefined}
-                    aria-describedby={last ? "analyzer-last-source" : undefined}
-                    title={last ? undefined : on ? `Stop searching ${SOURCE_LABELS[source]}` : `Search ${SOURCE_LABELS[source]}`}
-                    onClick={() => toggleSource(source)}
+                    aria-pressed={thread.style === value}
+                    title={value === "plain" ? "Short sentences and everyday words. Same facts." : "Full answers with all the detail"}
+                    onClick={() => setThread((t) => ({ ...t, style: value }))}
                     className={cn(
-                      "h-7 rounded-full border px-2.5 text-[11.5px] font-medium transition-colors",
-                      on ? "border-brand/40 bg-brand/10 text-foreground" : "border-line text-faint line-through hover:text-muted-foreground",
-                      last && "cursor-not-allowed",
+                      "h-6 rounded-full px-2.5 text-[11.5px] font-medium transition-colors",
+                      thread.style === value ? "bg-foreground/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {SOURCE_LABELS[source]}
+                    {label}
                   </button>
-                );
-              })}
-              {lastSourceOn && <span id="analyzer-last-source" className="px-1 text-[11px] text-faint">{LAST_SOURCE_HINT}</span>}
+                ))}
+              </div>
+              <Button type="submit" variant="brand" size="sm" className="ml-auto" disabled={busy || !draft.trim()}>
+                Ask <ArrowUp aria-hidden="true" />
+              </Button>
             </div>
-            <div role="group" aria-label="Answer style" className="inline-flex rounded-full border border-line p-0.5">
-              {([["", "Standard"], ["plain", "Simple words"]] as const).map(([value, label]) => (
-                <button
-                  key={label}
-                  type="button"
-                  aria-pressed={thread.style === value}
-                  title={value === "plain" ? "Short sentences and everyday words. Same facts." : "Full answers with all the detail"}
-                  onClick={() => setThread((t) => ({ ...t, style: value }))}
-                  className={cn(
-                    "h-6 rounded-full px-2.5 text-[11.5px] font-medium transition-colors",
-                    thread.style === value ? "bg-foreground/[0.08] text-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <Button type="submit" variant="brand" size="sm" className="ml-auto" disabled={busy || !draft.trim()}>
-              Ask <ArrowUp aria-hidden="true" />
-            </Button>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
       <DocumentPanel target={panel} onClose={() => setPanel(null)} />
     </div>

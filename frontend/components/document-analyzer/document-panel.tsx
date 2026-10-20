@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, ExternalLink, FileText, X } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/misc";
 import { ApiError } from "@/lib/api";
 import { safeSourceUrl } from "@/lib/knowledge-api";
 import { cn } from "@/lib/utils";
+import { ACTIVE_EVIDENCE_ID, highlightAnalyzerDocument } from "@/lib/analyzer-document-highlight";
 import {
   analyzerApi,
   citationSource,
@@ -20,7 +20,7 @@ import {
 export interface PanelTarget { citation: AnalyzerCitation; answerId: string | null }
 
 // The page body lives in a sandboxed frame with no scripts and no same-origin
-// access; this sheet and its CSP are all it gets. Links open nowhere (popups
+// access; this reader and its CSP are all it gets. Links open nowhere (popups
 // are blocked by the sandbox): "Open source" is the way to the original.
 const FRAME_CSS = `
   :root { color-scheme: light; }
@@ -37,9 +37,13 @@ const FRAME_CSS = `
   blockquote { border-left: 3px solid #e3e1dc; padding-left: 10px; color: #5f5b55; }
   img { max-width: 100%; height: auto; }
   hr { border: 0; border-top: 1px solid #e3e1dc; }
+  mark.analyzer-evidence { background: #C9EBD9; color: inherit; border-radius: 5px; padding: 2px 3px; margin: 0 -1px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  mark.analyzer-evidence-active { outline: 1px solid #79b99a; outline-offset: 1px; scroll-margin-block: 24px; animation: evidence-pulse 2.4s ease-out; }
+  @keyframes evidence-pulse { from { box-shadow: 0 0 0 4px #79b99a80; } to { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { mark.analyzer-evidence-active { animation: none; } }
 `;
 
-/** The `srcDoc` of the page-body frame: luccy's HTML under a no-network CSP. */
+/** The source frame's HTML under a no-network CSP. */
 export function documentFrameHtml(bodyHtml: string): string {
   return '<!doctype html><html><head><meta charset="utf-8">' +
     "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">" +
@@ -56,20 +60,22 @@ function errorMessage(error: unknown) {
   return "The Document Analyzer can't be reached right now. Check your internet connection and try again.";
 }
 
-/** Right-hand sheet (full screen on a phone) showing one cited document. */
+/** Docked source reader; closing it is explicit, and the chat stays usable beside it. */
 export function DocumentPanel({ target, onClose }: { target: PanelTarget | null; onClose: () => void }) {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (target) panelRef.current?.focus(); }, [target]);
+  if (!target) return null;
   return (
-    <Dialog open={!!target} onOpenChange={(open) => { if (!open) onClose(); }}>
-      {target && (
-        <DialogContent
-          hideClose
-          aria-describedby={undefined}
-          className="left-auto right-0 top-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-full translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none p-0 sm:max-w-xl sm:rounded-l-xl lg:max-w-2xl"
-        >
-          <DocumentView key={`${target.citation.id}|${target.answerId ?? ""}`} target={target} onClose={onClose} />
-        </DialogContent>
-      )}
-    </Dialog>
+    <aside
+      ref={panelRef}
+      tabIndex={-1}
+      aria-label="Source document"
+      data-analyzer-document-panel
+      onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); onClose(); } }}
+      className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-line bg-card outline-none lg:w-[42vw] lg:max-w-2xl lg:flex-none"
+    >
+      <DocumentView key={`${target.citation.id}|${target.answerId ?? ""}`} target={target} onClose={onClose} />
+    </aside>
   );
 }
 
@@ -105,7 +111,7 @@ function DocumentView({ target, onClose }: { target: PanelTarget; onClose: () =>
           <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" aria-label="Close the document panel" onClick={onClose}><X /></Button>
         </div>
         {!!doc?.path?.length && <p className="truncate text-xs text-muted-foreground">{doc.path.join(" › ")}</p>}
-        <DialogTitle className="text-base leading-snug">{title}</DialogTitle>
+        <h2 className="text-base font-semibold leading-snug">{title}</h2>
         {doc?.modified && <p className="text-xs text-muted-foreground">modified {doc.modified}</p>}
       </header>
       {query.isPending ? (
@@ -131,18 +137,20 @@ function DocumentView({ target, onClose }: { target: PanelTarget; onClose: () =>
 }
 
 function DocumentBody({ doc, title }: { doc: AnalyzerDocument; title: string }) {
-  const passages = Array.isArray(doc.passages) ? doc.passages.filter((p) => p && (p.text || p.heading)) : [];
+  const passages = useMemo(() => Array.isArray(doc.passages) ? doc.passages.filter((p) => p && (p.text || p.heading)) : [], [doc.passages]);
   const [current, setCurrent] = useState(0);
   const items = useRef<(HTMLLIElement | null)[]>([]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const highlighted = useMemo(() => highlightAnalyzerDocument(doc.body_html || "", passages, current), [doc.body_html, passages, current]);
+  const frameHtml = useMemo(() => documentFrameHtml(highlighted.html), [highlighted.html]);
   useEffect(() => { items.current[current]?.scrollIntoView?.({ block: "nearest" }); }, [current]);
   const count = passages.length;
   const step = (delta: number) => { if (count) setCurrent((i) => (i + delta + count) % count); };
 
-  // luccy's n/j and p/k keys step through the cited passages from anywhere in
-  // the open panel (focus starts on Close, outside this body). Keys typed into
-  // the sandboxed page frame stay inside it.
+  // Passage shortcuts apply inside this reader, leaving the chat's keyboard alone.
   useEffect(() => {
     if (count < 2) return;
+    const panel = bodyRef.current?.closest<HTMLElement>("[data-analyzer-document-panel]");
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
       const target = event.target as HTMLElement | null;
@@ -152,12 +160,12 @@ function DocumentBody({ doc, title }: { doc: AnalyzerDocument; title: string }) 
       event.preventDefault();
       setCurrent((i) => (i + delta + count) % count);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    panel?.addEventListener("keydown", onKey);
+    return () => panel?.removeEventListener("keydown", onKey);
   }, [count]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
       <section aria-label="Cited passages" className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold" aria-live="polite">
@@ -187,16 +195,36 @@ function DocumentBody({ doc, title }: { doc: AnalyzerDocument; title: string }) 
             ))}
           </ol>
         )}
+        {count > 0 && !highlighted.activeMatched && <p className="mt-2 text-xs text-muted-foreground">This passage could not be located in the document. Its cited excerpt is shown above.</p>}
       </section>
       <div className="min-h-0 flex-1 p-3 sm:p-4">
-        <iframe
-          sandbox=""
-          srcDoc={documentFrameHtml(doc.body_html || "")}
-          title={`${title}: page text`}
-          referrerPolicy="no-referrer"
-          className="h-full min-h-[280px] w-full rounded-md border border-line bg-white"
-        />
+        <DocumentFrame html={frameHtml} active={highlighted.activeMatched} title={`${title}: page text`} />
       </div>
     </div>
   );
+}
+
+/** Navigate to the fragment after layout so Chrome reliably scrolls the sandbox. */
+function DocumentFrame({ html, active, title }: { html: string; active: boolean; title: string }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    const objectUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [html, active]);
+  return url ? (
+    <iframe
+      sandbox=""
+      src={url}
+      onLoad={() => {
+        const fragment = `#${ACTIVE_EVIDENCE_ID}`;
+        if (active && !url.endsWith(fragment)) {
+          requestAnimationFrame(() => setUrl((current) => current === url ? url + fragment : current));
+        }
+      }}
+      title={title}
+      referrerPolicy="no-referrer"
+      className="h-full min-h-[180px] w-full rounded-md border border-line bg-white"
+    />
+  ) : <LoadingState label="Preparing the document…" />;
 }
