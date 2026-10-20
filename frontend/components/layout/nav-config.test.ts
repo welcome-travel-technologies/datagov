@@ -48,12 +48,12 @@ describe("nav config", () => {
   });
 });
 
-describe("Document Analyzer nav item", () => {
+describe("Luccy (Beta) nav item", () => {
   const analyzer = NAV_GROUPS.find((g) => g.label === "Company")?.items.find((i) => i.href === "/document-analyzer");
   it("sits in the Company group behind its own permission", () => {
-    expect(analyzer).toMatchObject({ label: "Document Analyzer", perm: "can_view_document_analyzer" });
+    expect(analyzer).toMatchObject({ label: "Luccy (Beta)", perm: "can_view_document_analyzer" });
     expect(analyzer?.orAdmin).toBeFalsy();
-    expect(LABEL_BY_HREF["/document-analyzer"]).toBe("Document Analyzer");
+    expect(LABEL_BY_HREF["/document-analyzer"]).toBe("Luccy (Beta)");
   });
   it("is hidden when the permission is false, even for admins", () => {
     expect(canSee(analyzer!, { ...ALL_FALSE, can_view_document_analyzer: false })).toBe(false);
