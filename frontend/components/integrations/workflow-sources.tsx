@@ -16,8 +16,11 @@ import { Input } from "@/components/ui/input";
 import { LoadingState } from "@/components/ui/misc";
 import { isActiveStatus } from "@/components/ui/run-status";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { useFocusGroup } from "./focus-group";
 
-export function WorkflowSources() {
+/** `focusGroup`: the group an overview link asked for (`?group=`), opened and scrolled to once. */
+export function WorkflowSources({ focusGroup }: { focusGroup?: string } = {}) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const changed = () => { void qc.invalidateQueries({ queryKey: ["integrations"] }); void qc.invalidateQueries({ queryKey: ["knowledge"] }); void qc.invalidateQueries({ queryKey: ["workflow-status"] }); };
@@ -34,16 +37,17 @@ export function WorkflowSources() {
     mutationFn: async ({ source, patch }: { source: KnowledgeSource; patch?: { refresh_paused?: boolean; pipeline_enabled?: boolean } }) => patch ? knowledgeApi.updateSource(source.id, patch) : knowledgeApi.syncSource(source.id),
     onSuccess: (_, variables) => { changed(); setNotice(variables.patch ? "Workflow updated." : "Processing queued. Follow it in document runs below."); },
   });
+  const grouped = sourceGroups(integrations.data?.sources ?? [], groups.data?.results ?? []);
+  const container = useFocusGroup(focusGroup, grouped.map((group) => group.id));
   if (integrations.isPending) return <LoadingState label="Loading workflow sources…" />;
   if (integrations.isError) return <KnowledgeError message="Workflow sources could not be loaded." retry={() => { void integrations.refetch(); }} />;
-  const grouped = sourceGroups(integrations.data?.sources ?? [], groups.data?.results ?? []);
   const needsAttention = runs.data?.results.some((run) => isActiveStatus(run.status) || ["failed", "partial"].includes(run.status));
-  return <div className="space-y-4">
+  return <div ref={container} className="space-y-4">
     <div><h3 className="text-sm font-semibold">Source flows</h3><p className="mt-1 text-xs text-muted-foreground">Expand a source to manage its schedules and processing. Catalog runs and document indexing report their own progress.</p></div>
     {notice && <p role="status" className="text-sm text-brand">{notice}</p>}
     {action.isError && <KnowledgeError message={getApiErrorMessage(action.error, "The workflow could not be updated.")} />}
     {(sources.isError || groups.isError || status.isError) && <KnowledgeError message="Document workflow settings could not be loaded." retry={changed} />}
-    {grouped.map((group) => <details key={group.id} className="rounded-xl border border-line bg-card">
+    {grouped.map((group) => <details key={group.id} data-group-key={group.id} className={cn("scroll-mt-4 rounded-xl border border-line bg-card", focusGroup === group.id && "border-brand/60 ring-1 ring-brand/30")}>
       <summary className="cursor-pointer p-4"><span className="inline-flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 text-sm"><strong>{group.name}</strong><ArrowRight aria-hidden className="h-4 w-4 text-faint" /><span className="text-xs text-muted-foreground">{group.connection ? "Extract & update catalog" : group.provider === "upload" ? "Upload files" : "Read imported snapshot"}</span><ArrowRight aria-hidden className="h-4 w-4 text-faint" /><span className="text-xs text-muted-foreground">{workflowOutputLabel(group)}</span><span className="text-xs text-brand">{group.document_count.toLocaleString()} documents</span></span></summary>
       <div className="space-y-3 border-t border-line p-4">
         {group.connection && <SourceCard source={group.connection} mode="workflow" onChanged={changed} />}

@@ -17,10 +17,48 @@ import time
 import urllib.error
 import urllib.request
 
-BUNDLE_FILES = ("deploy.py", "compose.yml", "compose.qdrant.yml")
+BUNDLE_FILES = ("deploy.py", "compose.yml", "compose.qdrant.yml", "compose.analyzer.yml")
 APP_KEYS = {"backend", "frontend", "gateway"}
+# The Document Analyzer image; CI builds it only while ANALYZER_IMAGE_ENABLED is true.
+OPTIONAL_APP_KEYS = {"analyzer"}
 REPOSITORIES = {"backend": "datagov-backend", "frontend": "datagov-frontend",
-                "gateway": "datagov-gateway", "engine": "document-explorer"}
+                "gateway": "datagov-gateway", "engine": "document-explorer",
+                "analyzer": "datagov-document-analyzer"}
+VOLUME_NAME = r"[A-Za-z0-9][A-Za-z0-9_.-]+"
+# Private machine routes that must answer 404 from the public edge in every spelling: nginx
+# blocks them case-insensitively, the frontend never proxies an "internal" segment in any
+# case, Django refuses them when proxied.
+INTERNAL_PROBES = (
+    "/api/knowledge/internal/jobs/claim/",
+    "/API/KNOWLEDGE/INTERNAL/jobs/claim/",
+    "/Api/Knowledge/Internal/jobs/claim/",
+    "/api/document-analyzer/internal/documents/",
+    "/API/DOCUMENT-ANALYZER/INTERNAL/documents/",
+    "/Api/Document-Analyzer/Internal/documents/",
+)
+ANALYZER_TOKENS = ("LUCCY_API_KEY", "LUCCY_SYNC_TOKEN", "LUCCY_EVAL_TOKEN")
+# Every luccy container reads its own env file in shared/ and holds only the secrets it needs
+# (docs/document-analyzer.md, "Who holds which secret"); the others must stay out of it.
+ANALYZER_SECRETS = ANALYZER_TOKENS + ("SERVING_GEMINI_API_KEY", "LUCCY_QDRANT_API_KEY", "LUCCY_QDRANT_SYNC_API_KEY")
+ANALYZER_ENV_FILES = {
+    # analyzer: answers DataGov's questions; reads Qdrant with the read-only key.
+    "analyzer.env": ("LUCCY_API_KEY", "SERVING_GEMINI_API_KEY", "LUCCY_QDRANT_API_KEY"),
+    # analyzer-sync: reads DataGov's export, writes the luccy keys and luccy_kw with the write key.
+    "analyzer-sync.env": ("LUCCY_SYNC_TOKEN", "LUCCY_QDRANT_SYNC_API_KEY"),
+    # analyzer-compare: asks luccy and DataGov, reads the export, judges with Gemini. No Qdrant.
+    # Only for the comparison (LUCCY_EVAL_ENABLED=True in backend.env); otherwise not needed.
+    "analyzer-compare.env": ("LUCCY_API_KEY", "LUCCY_EVAL_TOKEN", "LUCCY_SYNC_TOKEN", "SERVING_GEMINI_API_KEY"),
+}
+EVAL_ONLY = ("LUCCY_EVAL_TOKEN", "analyzer-compare.env")
+# One-off jobs for an operator or a timer (deploy.py --job NAME); never part of a release.
+JOBS = {
+    # The engine's chunk-order backfill: the analyzer and whole-page evidence need it once.
+    "backfill-ordinals": ["exec", "-T", "document-worker", "python", "-m", "document_explorer.ordinals", "backfill"],
+    "analyzer-sync": ["--profile", "analyzer-jobs", "run", "--rm", "--no-deps", "-T", "analyzer-sync"],
+    "analyzer-compare": ["--profile", "analyzer-jobs", "run", "--rm", "--no-deps", "-T", "analyzer-compare"],
+}
+# Options the comparison accepts on the VM (e.g. --dry-run --limit=10); plain tokens, no shell.
+COMPARE_OPTION = r"[A-Za-z0-9=._,:-]+"
 
 
 def image_ref(value, registry, component):
@@ -40,7 +78,9 @@ def validate_manifest(data, registry):
         raise ValueError("Release sequence must be a positive GitHub run ID")
     if not re.fullmatch(r"[a-f0-9]{40}", data["revision"]):
         raise ValueError("Release revision must be a full Git commit")
-    if set(data["images"]) != (APP_KEYS if component == "app" else {"engine"}):
+    images = set(data["images"])
+    if images != (APP_KEYS if component == "app" else {"engine"}) and not (
+            component == "app" and images == APP_KEYS | OPTIONAL_APP_KEYS):
         raise ValueError("Incomplete component image set")
     for key, value in data["images"].items():
         image_ref(value, registry, key)
@@ -64,8 +104,32 @@ def validate_config(config):
     if set(config["volumes"]) != {"static", "media", "originals", "artifacts", "imports", "vectors"}:
         raise ValueError("All persistent volumes must be explicitly named")
     names = list(config["volumes"].values())
-    if len(set(names)) != len(names) or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]+", n) for n in names):
+    analyzer = analyzer_settings(config)
+    if analyzer:
+        names.append(analyzer["logs_volume"])
+    if len(set(names)) != len(names) or any(not isinstance(n, str) or not re.fullmatch(VOLUME_NAME, n) for n in names):
         raise ValueError("Volume names must be distinct valid Docker volume names")
+
+
+def analyzer_settings(config):
+    """The optional Document Analyzer's settings, or None when it is off.
+
+    Off unless deployment.json holds {"analyzer": {"enabled": true, "logs_volume": "<volume>"}}.
+    A missing key or "enabled": false leaves every release exactly as it was. It is not part
+    of the recorded topology: it keeps no document data (it reads the engine's Qdrant), only
+    luccy's operational logs in a volume the operator creates."""
+    value = config.get("analyzer")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or "enabled" not in value or not set(value) <= {"enabled", "logs_volume"}:
+        raise ValueError('analyzer must be {"enabled": true|false, "logs_volume": "<volume name>"}')
+    if type(value["enabled"]) is not bool:
+        raise ValueError("analyzer.enabled must be a JSON boolean")
+    if not value["enabled"]:
+        return None
+    if not isinstance(value.get("logs_volume"), str) or not re.fullmatch(VOLUME_NAME, value["logs_volume"]):
+        raise ValueError("An enabled analyzer needs logs_volume, an existing Docker volume name")
+    return value
 
 
 def read_env(path):
@@ -107,14 +171,94 @@ def validate_secrets(shared, config):
         raise ValueError("Add the private worker callback host web to DJANGO_ALLOWED_HOSTS")
     if backend.get("DOCUMENT_EXPLORER_ENABLED") != "True":
         raise ValueError("Enable Document Explorer for this deployment")
+    qdrant = None
     if config["local_qdrant"]:
         qdrant = read_env(shared / "qdrant.env")
         if engine.get("QDRANT_URL") != "http://document-vectors:6333":
             raise ValueError("Local Qdrant URL does not match the private service")
         if len(engine.get("QDRANT_API_KEY", "")) < 24 or engine["QDRANT_API_KEY"] != qdrant.get("QDRANT__SERVICE__API_KEY"):
             raise ValueError("Local Qdrant keys are missing or mismatched")
+        # Optional: a key that may search but never write (Qdrant answers 403 to any change).
+        read_only = qdrant.get("QDRANT__SERVICE__READ_ONLY_API_KEY", "")
+        if read_only and (len(read_only) < 24 or read_only == engine["QDRANT_API_KEY"]):
+            raise ValueError("QDRANT__SERVICE__READ_ONLY_API_KEY in qdrant.env must be a different random key of 24+ characters")
     elif not engine.get("QDRANT_URL", "").startswith("https://") or not engine.get("QDRANT_API_KEY"):
         raise ValueError("Managed Qdrant requires HTTPS and its API key")
+    if analyzer_settings(config):
+        validate_analyzer_secrets(shared, backend, engine, qdrant)
+
+
+def evaluation_enabled(backend):
+    return backend.get("LUCCY_EVAL_ENABLED", "").lower() == "true"
+
+
+def validate_analyzer_secrets(shared, backend, engine, qdrant=None):
+    """Only when deployment.json enables the analyzer. Each luccy container has its own env
+    file (ANALYZER_ENV_FILES) with only the secrets it needs; backend.env holds DataGov's copy
+    of the tokens. The eval token and analyzer-compare.env are checked only while the
+    comparison is on (LUCCY_EVAL_ENABLED). qdrant is qdrant.env with local Qdrant, None with
+    managed Qdrant."""
+    evaluation = evaluation_enabled(backend)
+    needed = [key for key in ANALYZER_TOKENS if evaluation or key not in EVAL_ONLY]
+    for key in needed:
+        if len(backend.get(key, "")) < 32:
+            raise ValueError(f"Missing or short {key} in backend.env (openssl rand -hex 32)")
+    tokens = {backend[key] for key in needed}
+    if len(tokens) != len(needed):
+        raise ValueError(f"{', '.join(needed)} must differ")
+    if tokens & {backend.get(key) for key in ("SECRET_KEY", "DOCUMENT_EXPLORER_API_KEY", "DOCUMENT_EXPLORER_WORKER_TOKEN")}:
+        raise ValueError("Use new random values for the analyzer, not existing DataGov keys")
+    if not backend.get("LUCCY_ORGANIZATION_ID", "").isdigit():
+        raise ValueError("Set LUCCY_ORGANIZATION_ID in backend.env to the numeric DataGov organization id")
+    files = {}
+    for name in ANALYZER_ENV_FILES:
+        if name in EVAL_ONLY and not evaluation:
+            continue
+        if not (shared / name).is_file():
+            raise ValueError(f"The analyzer is enabled in deployment.json, but shared/{name} is missing"
+                             + (" (needed while LUCCY_EVAL_ENABLED=True)" if name in EVAL_ONLY else ""))
+        files[name] = read_env(shared / name)
+    serving, sync = files["analyzer.env"], files["analyzer-sync.env"]
+    # Qdrant: the sync writes with the engine's key; the analyzer searches with the read-only
+    # key when qdrant.env sets one (it must then), otherwise with the engine's key. A managed
+    # cluster's read-only key cannot be checked here: luccy's /health reports a refused key.
+    write = engine.get("QDRANT_API_KEY")
+    read_only = (qdrant or {}).get("QDRANT__SERVICE__READ_ONLY_API_KEY", "")
+    if sync.get("LUCCY_QDRANT_SYNC_API_KEY") != write:
+        raise ValueError("LUCCY_QDRANT_SYNC_API_KEY in analyzer-sync.env must be the engine's QDRANT_API_KEY (the sync writes)")
+    if read_only and serving.get("LUCCY_QDRANT_API_KEY") != read_only:
+        raise ValueError("LUCCY_QDRANT_API_KEY in analyzer.env must be QDRANT__SERVICE__READ_ONLY_API_KEY from qdrant.env")
+    if qdrant is not None and not read_only and serving.get("LUCCY_QDRANT_API_KEY") != write:
+        raise ValueError("LUCCY_QDRANT_API_KEY in analyzer.env must be the engine's QDRANT_API_KEY, "
+                         "or set QDRANT__SERVICE__READ_ONLY_API_KEY in qdrant.env and use that")
+    known = {**{key: backend.get(key) for key in ANALYZER_TOKENS}, "LUCCY_QDRANT_SYNC_API_KEY": write,
+             "LUCCY_QDRANT_API_KEY": serving.get("LUCCY_QDRANT_API_KEY"),
+             "SERVING_GEMINI_API_KEY": serving.get("SERVING_GEMINI_API_KEY")}
+    for name, values in files.items():
+        needs = ANALYZER_ENV_FILES[name]
+        for key in needs:
+            if not values.get(key):
+                raise ValueError(f"Set {key} in {name}")
+            if key in ANALYZER_TOKENS and values[key] != backend.get(key):
+                raise ValueError(f"{key} differs between backend.env and {name}")
+        others = [key for key in ANALYZER_SECRETS if key not in needs]
+        if any(key in values for key in others):
+            raise ValueError(f"{name} may hold only {', '.join(needs)}; remove {', '.join(k for k in others if k in values)}")
+        # The same secret under another name counts too (the engine's key may serve both roles).
+        foreign = {known[key] for key in others} - {known[key] for key in needs} - {None, ""}
+        if foreign & set(values.values()):
+            raise ValueError(f"{name} holds another analyzer container's secret under a different name")
+    for name, values in (("analyzer.env", serving), ("analyzer-sync.env", sync)):
+        if values.get("LUCCY_QDRANT_URL") != engine.get("QDRANT_URL"):
+            raise ValueError(f"LUCCY_QDRANT_URL in {name} must be the engine's QDRANT_URL")
+        chunks = values.get("LUCCY_LIVE_CHUNKS_COLLECTION", values.get("DOCUMENT_EXPLORER_COLLECTION", "document_explorer_v1"))
+        if chunks != engine.get("DOCUMENT_EXPLORER_COLLECTION", "document_explorer_v1"):
+            raise ValueError(f"{name} must name the engine's chunk collection (DOCUMENT_EXPLORER_COLLECTION in engine.env)")
+    # Optional: the image's default is 2.
+    if serving.get("LUCCY_MAX_CONCURRENT_ANSWERS", "2") not in {"1", "2", "3"}:
+        raise ValueError("LUCCY_MAX_CONCURRENT_ANSWERS in analyzer.env must be 1, 2 or 3 (the analyzer has 6 GiB)")
+    if evaluation and not backend.get("LUCCY_EVAL_USER_ID", "").isdigit():
+        raise ValueError("LUCCY_EVAL_ENABLED needs LUCCY_EVAL_USER_ID, a DataGov user id, in backend.env")
 
 
 def topology(config):
@@ -161,7 +305,27 @@ def compose_environment(config, state, shared):
                PUBLIC_HOST=config["public_host"], GATEWAY_BIND=config["gateway_bind"])
     env.update({key.upper() + "_IMAGE": value for key, value in state["images"].items()})
     env.update({key.upper() + "_VOLUME": value for key, value in config["volumes"].items()})
+    analyzer = analyzer_settings(config)
+    if analyzer:
+        env["ANALYZER_LOGS_VOLUME"] = analyzer["logs_volume"]
     return env
+
+
+def compose_files(config, folder):
+    """compose.yml, plus the local Qdrant and the analyzer overlays when they are configured."""
+    files = [folder / "compose.yml"]
+    if config["local_qdrant"]:
+        files.append(folder / "compose.qdrant.yml")
+    if analyzer_settings(config):
+        files.append(folder / "compose.analyzer.yml")
+    return files
+
+
+def compose_command(config, folder):
+    command = ["docker", "compose", "--project-name", config["project"], "--env-file", os.devnull]
+    for path in compose_files(config, folder):
+        command.extend(["-f", str(path)])
+    return command
 
 
 @contextlib.contextmanager
@@ -172,7 +336,7 @@ def release_lock(root):
         yield
 
 
-def rollout(compose, component, local_qdrant, run):
+def rollout(compose, component, local_qdrant, run, analyzer=False, note=print):
     if local_qdrant and component == "app":
         run(compose + ["up", "-d", "--wait", "--wait-timeout", "120", "document-vectors"])
     if component == "app":
@@ -182,6 +346,14 @@ def rollout(compose, component, local_qdrant, run):
             run(compose + ["run", "--rm", "--no-deps", "web", "python", "manage.py", *command])
         run(compose + ["up", "-d", "--wait", "--wait-timeout", "300",
                        "web", "frontend", "nginx", "worker", "document-api", "document-worker"])
+        if analyzer:
+            # After DataGov is back: luccy loads its models before /health turns 200 (its
+            # health check allows 300 s), so a slow analyzer never holds DataGov down. A
+            # failed one never fails the release either: DataGov is already serving.
+            try:
+                run(compose + ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "600", "analyzer"])
+            except (RuntimeError, subprocess.SubprocessError):
+                note("analyzer not healthy; DataGov release complete")
     else:
         run(compose + ["stop", "-t", "90", "document-worker", "document-api"])
         run(compose + ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "300",
@@ -205,7 +377,7 @@ def verify_public_routes(host, open_url=None, sleep=time.sleep):
     checks = (("/login", 200, "html"), ("/knowledge", 200, "html"),
               ("/api/branding/", 200, "json"),
               ("/api/knowledge/documents/", 403, "json"),
-              ("/api/knowledge/internal/jobs/claim/", 404, None))
+              *((path, 404, None) for path in INTERNAL_PROBES))
     results = []
     for path, expected, body_type in checks:
         for attempt in range(4):
@@ -275,6 +447,79 @@ def registry_login(config, env, log, run, token_file=None):
         token_file.unlink(missing_ok=True)
 
 
+def without_analyzer(config):
+    """deployment.json as if the analyzer were off, for one release or job."""
+    return {key: value for key, value in config.items() if key != "analyzer"}
+
+
+def check_analyzer_release(state, compose_dir):
+    if "analyzer" not in state["images"]:
+        raise ValueError("The analyzer is enabled in deployment.json, but no app release has published its "
+                         "image yet: set the repository variable ANALYZER_IMAGE_ENABLED and release DataGov")
+    if not (compose_dir / "compose.analyzer.yml").is_file():
+        raise ValueError("The analyzer is enabled in deployment.json, but the current app release predates "
+                         "it: release DataGov once before enabling the analyzer")
+
+
+@contextlib.contextmanager
+def job_lock(root, name):
+    """One run of each job at a time; a timer that fires during a long run skips its turn."""
+    import fcntl  # Linux only, like release_lock.
+    with (root / f".job-{name}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
+def run_job(root, name, options=(), run=subprocess.run):
+    """Run one of JOBS against the last successful release, for an operator or a timer.
+
+    It never starts, stops or recreates a release's services: one-off containers only
+    (`run --rm --no-deps`), or a command inside the running document worker (`exec`).
+    Only analyzer-compare takes options, passed to `python -m luccy_qdrant.compare`."""
+    if name not in JOBS:
+        raise ValueError("Unknown job")
+    if options and name != "analyzer-compare":
+        raise ValueError("Only analyzer-compare takes options")
+    if any(not re.fullmatch(COMPARE_OPTION, option) for option in options):
+        raise ValueError("Invalid comparison option")
+    shared = root / "shared"
+    config = json.loads((shared / "deployment.json").read_text())
+    validate_config(config)
+    validate_secrets(shared, config)
+    if (root / "pending.json").exists():
+        raise ValueError("A release is unfinished (pending.json): resolve it before running jobs")
+    state = json.loads((root / "state.json").read_text())
+    if state["topology"] != topology(config):
+        raise ValueError("deployment.json no longer matches the deployed topology")
+    compose_dir = Path(state["app_release"])
+    compose_dir.relative_to(root / "releases")
+    if analyzer_settings(config):
+        try:
+            check_analyzer_release(state, compose_dir)
+        except ValueError:
+            if name.startswith("analyzer-"):
+                raise
+            config = without_analyzer(config)       # other jobs never wait on the analyzer
+    elif name.startswith("analyzer-"):
+        raise ValueError('The analyzer is off: set "analyzer": {"enabled": true, ...} in deployment.json and release')
+    if name == "analyzer-compare":
+        backend = read_env(shared / "backend.env")
+        if backend.get("LUCCY_EVAL_ENABLED", "").lower() != "true":
+            raise ValueError("The comparison needs LUCCY_EVAL_ENABLED=True and LUCCY_EVAL_USER_ID in backend.env, released")
+    command = compose_command(config, compose_dir) + JOBS[name]
+    if options:
+        command += ["python", "-m", "luccy_qdrant.compare", *options]
+    with job_lock(root, name) as acquired:
+        if not acquired:
+            print(f"{name} is already running; skipped", flush=True)
+            return 0
+        return run(command, env=compose_environment(config, state, shared), check=False).returncode
+
+
 def apply(root, manifest, bundle=None, registry_token_file=None):
     config = json.loads((root / "shared/deployment.json").read_text())
     validate_config(config)
@@ -299,11 +544,16 @@ def apply(root, manifest, bundle=None, registry_token_file=None):
                 shutil.copyfile(bundle / name, release_dir / name)
         compose_dir = Path(state["app_release"])
         compose_dir.relative_to(root / "releases")
+        analyzer = analyzer_settings(config)
+        if analyzer:
+            try:
+                check_analyzer_release(state, compose_dir)
+            except ValueError as problem:
+                # The analyzer is optional: release DataGov without it rather than refuse.
+                print(f"WARNING: analyzer skipped in this release: {problem}", flush=True)
+                config, analyzer = without_analyzer(config), None
         env = compose_environment(config, state, root / "shared")
-        compose = ["docker", "compose", "--project-name", config["project"], "--env-file", "/dev/null",
-                   "-f", str(compose_dir / "compose.yml")]
-        if config["local_qdrant"]:
-            compose.extend(["-f", str(compose_dir / "compose.qdrant.yml")])
+        compose = compose_command(config, compose_dir)
         log_path = release_dir / "deploy.log"
         print(f"Release {manifest['component']} {manifest['revision']}; private log: {log_path}", flush=True)
         with log_path.open("a") as log, tempfile.TemporaryDirectory(prefix="datagov-auth-") as auth:
@@ -316,6 +566,11 @@ def apply(root, manifest, bundle=None, registry_token_file=None):
                 if completed.returncode:
                     raise RuntimeError(f"Release command failed; inspect private log: {log_path}")
 
+            def note(message):
+                log.write(message + "\n")
+                log.flush()
+                print(message, flush=True)
+
             version = subprocess.check_output(["docker", "compose", "version", "--short"], text=True).strip()
             numbers = re.match(r"v?(\d+)\.(\d+)", version)
             if not numbers or tuple(map(int, numbers.groups())) < (2, 30):
@@ -324,14 +579,18 @@ def apply(root, manifest, bundle=None, registry_token_file=None):
             for key, name in config["volumes"].items():
                 if key != "vectors" or config["local_qdrant"]:
                     run(["docker", "volume", "inspect", "--format", "{{.Name}}", name])
+            if analyzer:
+                run(["docker", "volume", "inspect", "--format", "{{.Name}}", analyzer["logs_volume"]])
             registry_login(config, env, log, run, registry_token_file)
             services = ["document-api", "document-worker"] if manifest["component"] == "engine" else [
                 "web", "worker", "frontend", "nginx", "document-api", "document-worker"]
             if config["local_qdrant"] and manifest["component"] == "app":
                 services.append("document-vectors")
+            if analyzer and manifest["component"] == "app":
+                services.append("analyzer")
             run(compose + ["pull", *services])
             atomic_json(pending_path, manifest)
-            rollout(compose, manifest["component"], config["local_qdrant"], run)
+            rollout(compose, manifest["component"], config["local_qdrant"], run, analyzer=bool(analyzer), note=note)
             log.write("Public HTTPS checks: " + json.dumps(verify_public_routes(config["public_host"])) + "\n")
             log.flush()
             if current:
@@ -348,18 +607,29 @@ def apply(root, manifest, bundle=None, registry_token_file=None):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--root", type=Path, default=Path("/opt/datagov"))
-    parser.add_argument("--manifest", type=Path, required=True)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--manifest", type=Path)
+    action.add_argument("--job", choices=sorted(JOBS),
+                        help="Run a one-off job against the current release (docs/document-analyzer.md); "
+                             "analyzer-compare passes further options to the comparison")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--registry-token-file", type=Path,
                         help="Manual release only: privately transferred short-lived ACR credentials; consumed on login")
-    args = parser.parse_args()
+    args, options = parser.parse_known_args()
+    if options and args.job != "analyzer-compare":
+        parser.error("unrecognized arguments: " + " ".join(options))
     os.umask(0o077)
     try:
-        apply(args.root.resolve(strict=True), json.loads(args.manifest.read_text()), args.bundle, args.registry_token_file)
+        if args.job:
+            code = run_job(args.root.resolve(strict=True), args.job, options)
+        else:
+            apply(args.root.resolve(strict=True), json.loads(args.manifest.read_text()), args.bundle, args.registry_token_file)
+            code = 0
     except (ValueError, KeyError, OSError, RuntimeError, subprocess.SubprocessError) as error:
-        raise SystemExit(f"Deployment failed: {error}") from None
+        raise SystemExit(f"{'Job' if args.job else 'Deployment'} failed: {error}") from None
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":

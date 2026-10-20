@@ -87,6 +87,9 @@ services:
     image: qdrant/qdrant:v1.19.1
     environment:
       QDRANT__SERVICE__API_KEY: ${DOCUMENT_EXPLORER_QDRANT_KEY:?Set a private Qdrant key}
+      # Optional: a second key that may search but never write (Qdrant answers 403 to any
+      # change), for the Document Analyzer. Empty is treated as unset: Qdrant behaves as before.
+      QDRANT__SERVICE__READ_ONLY_API_KEY: ${DOCUMENT_EXPLORER_QDRANT_READ_ONLY_KEY:-}
       QDRANT__TELEMETRY_DISABLED: "true"
     volumes:
       - document_vectors:/qdrant/storage

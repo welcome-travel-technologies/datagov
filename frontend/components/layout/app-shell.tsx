@@ -15,7 +15,7 @@ import { useAuth } from "@/lib/auth";
 // vertically: there's nothing to scroll to except the decorative
 // .welcome-gradient blob that bleeds ~10rem below <main> (bottom: -10rem),
 // which would otherwise extend main's scrollable region into empty space.
-const FIXED_HEIGHT_ROUTES = ["/lineage", "/powerbi/metrics-map", "/chat"];
+const FIXED_HEIGHT_ROUTES = ["/lineage", "/powerbi/metrics-map", "/chat", "/document-analyzer"];
 
 function isFixedHeightRoute(pathname: string | null): boolean {
   if (!pathname) return false;

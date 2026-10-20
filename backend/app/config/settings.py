@@ -88,6 +88,7 @@ INSTALLED_APPS = [
     'theme',
     'catalog',
     'knowledge.apps.KnowledgeConfig',
+    'document_analyzer.apps.DocumentAnalyzerConfig',
 ]
 
 # OAuth 2.1 authorization server for the MCP endpoint (docs/mcp-server-plan.md M5).
@@ -168,6 +169,8 @@ CACHES = {
 }
 
 MIDDLEWARE = [
+    # First: internal endpoints refuse anything that came through a proxy.
+    'catalog.middleware.InternalEndpointGuardMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -283,8 +286,9 @@ else:
 # Password validation
 # Document Explorer is a private service with its own Python runtime. No service
 # key is serialized into browser configuration; all calls pass through Django.
+# It indexes and stores documents; the Document Analyzer (LUCCY_* below) answers
+# every document question.
 DOCUMENT_EXPLORER_ENABLED = os.getenv('DOCUMENT_EXPLORER_ENABLED', 'False').lower() == 'true'
-DOCUMENT_NATIVE_AI_ENABLED = os.getenv('DOCUMENT_NATIVE_AI_ENABLED', 'False').lower() == 'true'
 DOCUMENT_INDEXING_PIPELINE_ENABLED = os.getenv('DOCUMENT_INDEXING_PIPELINE_ENABLED', 'False').lower() == 'true'
 DOCUMENT_EXPLORER_API_URL = os.getenv('DOCUMENT_EXPLORER_API_URL', '')
 DOCUMENT_EXPLORER_API_KEY = os.getenv('DOCUMENT_EXPLORER_API_KEY', '')
@@ -296,7 +300,31 @@ DOCUMENT_EXPLORER_MAX_TEXT_CHARS = int(os.getenv('DOCUMENT_EXPLORER_MAX_TEXT_CHA
 DOCUMENT_EXPLORER_MAX_RESULT_BYTES = int(os.getenv('DOCUMENT_EXPLORER_MAX_RESULT_BYTES', str(32 * 1024 * 1024)))
 DOCUMENT_EXPLORER_LEASE_SECONDS = int(os.getenv('DOCUMENT_EXPLORER_LEASE_SECONDS', '300'))
 DOCUMENT_EXPLORER_MAX_ATTEMPTS = int(os.getenv('DOCUMENT_EXPLORER_MAX_ATTEMPTS', '3'))
-DOCUMENT_EXPLORER_ANSWER_TIMEOUT = int(os.getenv('DOCUMENT_EXPLORER_ANSWER_TIMEOUT', '220'))
+# Document Analyzer: DataGov's door to luccy (the original document question engine).
+# luccy holds ONE company's corpus, so only members of LUCCY_ORGANIZATION_ID (an
+# Organization pk) may use it; empty means nobody. The key never reaches the browser.
+# LUCCY_MAX_ASKS_PER_HOUR is per user across the page and the assistant tool (0 = no cap).
+LUCCY_ENABLED = os.getenv('LUCCY_ENABLED', 'False').lower() == 'true'
+# Keep document questions on the standalone page during the initial rollout.
+# The token-protected comparison can still exercise the full chat integration.
+LUCCY_CHAT_ENABLED = os.getenv('LUCCY_CHAT_ENABLED', 'False').lower() == 'true'
+LUCCY_API_URL = os.getenv('LUCCY_API_URL', '')
+LUCCY_API_KEY = os.getenv('LUCCY_API_KEY', '')
+LUCCY_ORGANIZATION_ID = os.getenv('LUCCY_ORGANIZATION_ID', '')
+LUCCY_STREAM_TIMEOUT = int(os.getenv('LUCCY_STREAM_TIMEOUT', '330'))
+LUCCY_TOOL_TIMEOUT = int(os.getenv('LUCCY_TOOL_TIMEOUT', '120'))
+LUCCY_MAX_ASKS_PER_HOUR = int(os.getenv('LUCCY_MAX_ASKS_PER_HOUR', '60'))
+# luccy's sync job reads DataGov's document list (only collections every member may read)
+# with this bearer token (empty = off). Each token must be 32+ characters, and the sync
+# and eval tokens must differ from the other two; a weak or shared one closes only its own
+# endpoints (document_analyzer.permissions.token_problem).
+LUCCY_SYNC_TOKEN = os.getenv('LUCCY_SYNC_TOKEN', '')
+# Evaluation endpoints for the luccy/DataGov comparison: off unless both are set. They
+# answer as LUCCY_EVAL_USER_ID (a user pk), who must be an active member of
+# LUCCY_ORGANIZATION_ID.
+LUCCY_EVAL_ENABLED = os.getenv('LUCCY_EVAL_ENABLED', 'False').lower() == 'true'
+LUCCY_EVAL_TOKEN = os.getenv('LUCCY_EVAL_TOKEN', '')
+LUCCY_EVAL_USER_ID = os.getenv('LUCCY_EVAL_USER_ID', '')
 SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET', '')
 
 # Password validation

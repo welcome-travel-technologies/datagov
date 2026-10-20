@@ -1,0 +1,46 @@
+"""luccy source pins: sha256[:16] of `inspect.getsource` for every function a hook replaces,
+wraps or mirrors, taken from luccy 0.19.1 (welcome-rag-new c0f50f3, the luccy:local image).
+The image build checks them (hooks.py). LUCCY_VERSION only names the reviewed release; the
+hashes decide. Re-pin only after re-reviewing each hook against the new source:
+    python -m luccy_qdrant.hooks --print
+"""
+LUCCY_VERSION = "0.19.1"
+PINS = {
+    "retrieve:Retriever.__init__": "bb55ebda346dc633",
+    "retrieve:Retriever.retrieve": "e5210798e77be128",
+    "retrieve:Retriever._source_keep": "3be6c2005b7d3e28",
+    "retrieve:bundle_identity": "8ab43300f63c2859",
+    "serving.rqb:page_meta": "b9079e68d6af3f04",
+    "serving.rqb:ticket_line": "cb113d59033d0fb1",
+    "ingest.redact:page_owners": "eb67c6ecf9983ba7",
+    "serving.driver:AnswerService._pages_from_ids": "36ba8b8691ef5796",
+    "serving.driver:section_read": "40b7ea521da78ba3",
+    "serving.deep:jira_tickets": "fe86841dda609e50",
+    "serving.api.page_routes:_catalog_row": "1ba5d0b1c759e180",
+    "ingest.qdrant_index:bundle_problem": "66c2f08c544cf3f7",
+    "ingest.qdrant_index:replacement_collection": "e5c7a3c835ecead6",
+    "serving.api.app:health": "4468e3fa525494de",
+    "retrieve:KwStem.scores": "b4b236454b6372a3",
+    "retrieve:write_kw_stem": "b00465203ffba9e1",
+    "retrieve:stem_encoder": "3be37a84ccf6ea8e",
+    "retrieve:corpus_signature": "0f96a3490b1250ad",
+    "retrieve:chunk_body": "09a7ab4a2e3c5564",
+    "retrieve:source_of": "856ef4fe629628c0",
+    "retrieve:parse_page": "312f395fe4f7e2f4",
+    "retrieve:cache_key": "a212ae7eb49f57f7",
+    "retrieve:Retriever._recency": "37992a5654e69a65",
+    "retrieve:Retriever.reranker": "9e180a861445f1c6",
+    "retrieve:Retriever.query_vectors": "c27d1ee4ff47d8d6",
+    "serving.rqb:page_body": "23563e141830b8c8",
+    "serving.rqb:fill_whole_pages": "5fc228d11068e91a",
+    "serving.rqb:batch_retrieve": "b6ae6c7bdb3e35d5",
+    "serving.rqb:render": "645e2c0ad29b7c32",
+    "serving.driver:AnswerService.retriever": "3eed6c63412b07fe",
+    "serving.driver:AnswerService._retrieve": "e117cdb1c4f12f0b",
+    "serving.driver:AnswerService._deep_fallback": "a66fc29335a88db3",
+    "serving.deep:DeepDeps": "c7fbbf3ee0df9a4d",
+    "serving.api.page_routes:document": "4fe687b89897c12b",
+    "serving.jobs:_load_models": "eed94e540c328232",
+    "serving.jobs:_bundle_moved": "e18e8117236923f1",
+    "ingest.qdrant_index:QdrantVectors.search": "f0240e27f3dc718b",
+}

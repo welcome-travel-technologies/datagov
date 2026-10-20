@@ -67,7 +67,6 @@ def status(request):
     org = resolve_org(request.user)
     return Response({
         'enabled': enabled(),
-        'native_ai_enabled': enabled() and settings.DOCUMENT_NATIVE_AI_ENABLED,
         'configured': bool(settings.DOCUMENT_EXPLORER_API_URL and settings.DOCUMENT_EXPLORER_API_KEY and settings.DOCUMENT_EXPLORER_WORKER_TOKEN),
         'can_manage': can_manage(org, request.user),
         'supported_sources': ['upload', 'snapshot'],

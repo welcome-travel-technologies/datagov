@@ -28,6 +28,7 @@ from catalog.mcp.oauth import (
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/knowledge/', include('knowledge.urls')),
+    path('api/document-analyzer/', include('document_analyzer.urls')),
     path('api/', include('catalog.urls')),
 
     # OAuth 2.1 discovery metadata for the MCP server (M5). RFC 8414 / RFC 9728

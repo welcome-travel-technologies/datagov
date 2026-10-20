@@ -1,0 +1,164 @@
+# Opt-in overlay: the Document Analyzer. The colleagues' luccy app, with its code unchanged,
+# answers from DataGov's own documents in the Document Explorer's Qdrant. There are no page
+# files, no document volume and no second embedding of the corpus: Qdrant is the only store.
+# It sits on top of the Document Explorer overlay and reuses its Qdrant (document-vectors):
+#   docker compose --env-file .env.documents --env-file .env.analyzer -f docker-compose.yml \
+#     -f docker-compose.documents.yml -f docker-compose.analyzer.yml up -d
+# One-off jobs (profile analyzer-jobs, so `up` never starts them):
+#   ... --profile analyzer-jobs run --rm analyzer-sync      # luccy_kw + chunk metadata; run after document runs
+#   ... --profile analyzer-jobs run --rm analyzer-compare   # luccy vs DataGov on the gold questions
+# Runbook: docs/document-analyzer.md. Nothing here publishes a port. Network `analyzer` joins
+# DataGov's web and worker to the luccy containers and is their way out to Gemini; network
+# `analyzer-vectors` (internal, no way out) joins Qdrant to the two luccy containers that read it.
+# Each luccy container gets only the secrets it needs (the runbook lists who holds which):
+#   analyzer          LUCCY_API_KEY, Gemini, Qdrant read-only key
+#   analyzer-sync     LUCCY_SYNC_TOKEN, Qdrant write key
+#   analyzer-compare  LUCCY_API_KEY, LUCCY_EVAL_TOKEN, LUCCY_SYNC_TOKEN, Gemini (no Qdrant)
+# Not on a host whose base Compose publishes db:5432 (as the development one does): the
+# `analyzer` network reaches the host's published ports. Remove that mapping first.
+
+# DataGov's side (web: the page and its API; worker: the AI Assistant tool).
+x-datagov-analyzer: &datagov-analyzer
+  # False hides the page and the assistant tool again (rollback); the analyzer may keep running.
+  LUCCY_ENABLED: ${LUCCY_ENABLED:-True}
+  LUCCY_API_URL: http://analyzer:8787
+  LUCCY_API_KEY: ${LUCCY_API_KEY:?Set LUCCY_API_KEY in .env.analyzer (openssl rand -hex 32)}
+  LUCCY_ORGANIZATION_ID: ${LUCCY_ORGANIZATION_ID:?Set LUCCY_ORGANIZATION_ID in .env.analyzer to the DataGov organization id}
+  LUCCY_SYNC_TOKEN: ${LUCCY_SYNC_TOKEN:?Set LUCCY_SYNC_TOKEN in .env.analyzer (openssl rand -hex 32, not the API key)}
+  # The comparison only (off by default); DataGov keeps its endpoints closed without a token.
+  LUCCY_EVAL_ENABLED: ${LUCCY_EVAL_ENABLED:-False}
+  LUCCY_EVAL_TOKEN: ${LUCCY_EVAL_TOKEN:-}
+  LUCCY_EVAL_USER_ID: ${LUCCY_EVAL_USER_ID:-}
+
+x-analyzer-logging: &analyzer-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+# Every container runs one image: luccy's published serving image plus the storage adapter
+# (analyzer/Dockerfile, FROM the pinned LUCCY_IMAGE). Built once, shared by the jobs.
+x-analyzer: &analyzer
+  build:
+    context: ./analyzer
+    args:
+      # luccy:local by default (built in the luccy repository from feat/engine-whole-pages).
+      LUCCY_IMAGE: ${LUCCY_IMAGE:-luccy:local}
+  image: ${ANALYZER_IMAGE:-datagov-document-analyzer:local}
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *analyzer-logging
+
+services:
+  # Both networks listed: naming one alone would take a service off `default`.
+  web:
+    environment: *datagov-analyzer
+    networks: [default, analyzer]
+
+  worker:
+    environment: *datagov-analyzer
+    networks: [default, analyzer]
+
+  # The Document Explorer's Qdrant, unchanged, also joined to the analyzer's private network.
+  document-vectors:
+    networks: [default, analyzer-vectors]
+
+  analyzer:
+    <<: *analyzer
+    # No command: the image's own, python -m luccy_qdrant.serve (luccy's web app on 8787).
+    # LUCCY_DEV_UI stays unset, so only luccy's bearer-keyed API answers.
+    environment:
+      PORT: "8787"
+      SERVING_GEMINI_API_KEY: ${LUCCY_GEMINI_API_KEY:?Set LUCCY_GEMINI_API_KEY in .env.analyzer}
+      LUCCY_API_KEY: ${LUCCY_API_KEY:?Set LUCCY_API_KEY in .env.analyzer (openssl rand -hex 32)}
+      # It only searches: Qdrant's read-only key, which Qdrant refuses for any write.
+      LUCCY_QDRANT_URL: http://document-vectors:6333
+      LUCCY_QDRANT_API_KEY: ${DOCUMENT_EXPLORER_QDRANT_READ_ONLY_KEY:?Set DOCUMENT_EXPLORER_QDRANT_READ_ONLY_KEY in .env.documents (openssl rand -hex 32, not the Qdrant key) and pass --env-file .env.documents too}
+      DATAGOV_URL: http://web:8000
+      # luccy's default is 4, and four at once peaked at 6.7 GiB, above mem_limit (the image says 2).
+      LUCCY_MAX_CONCURRENT_ANSWERS: ${LUCCY_MAX_CONCURRENT_ANSWERS:-2}
+      # luccy's spend caps in USD over its own ledger in analyzer_logs; 0 turns one off.
+      LUCCY_SPEND_DAY_CAP_USD: ${LUCCY_SPEND_DAY_CAP_USD:-25}
+      LUCCY_SPEND_MONTH_CAP_USD: ${LUCCY_SPEND_MONTH_CAP_USD:-300}
+    expose:
+      - "8787"
+    volumes:
+      # luccy's operational logs only: answer records, feedback and the spend ledger.
+      - analyzer_logs:/app/serving/logs
+    networks: [analyzer, analyzer-vectors]
+    depends_on:
+      document-vectors:
+        condition: service_healthy
+    # Alive once luccy's web process answers /health: 200, or 503 with its reasons (before the
+    # first analyzer-sync there is no luccy_kw yet). Start-up loads the reranker first. The
+    # /health body and DataGov's status page say whether it can answer.
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.error as e, urllib.request as u\ntry: u.urlopen('http://127.0.0.1:8787/health', timeout=8)\nexcept e.HTTPError as x: raise SystemExit(x.code != 503)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 3
+    mem_limit: 6g
+    # gunicorn waits up to 300 s after a stop for open answer streams.
+    stop_grace_period: 310s
+    restart: unless-stopped
+
+  # Builds the luccy_kw keyword collection and the chunks' "luccy" metadata in the same Qdrant
+  # from DataGov's published documents. Exits quickly when nothing changed.
+  analyzer-sync:
+    <<: *analyzer
+    profiles: [analyzer-jobs]
+    command: ["python", "-m", "luccy_qdrant.sync"]
+    environment:
+      DATAGOV_URL: http://web:8000
+      LUCCY_SYNC_TOKEN: ${LUCCY_SYNC_TOKEN:?Set LUCCY_SYNC_TOKEN in .env.analyzer (openssl rand -hex 32, not the API key)}
+      # The only luccy container that writes Qdrant: the Document Explorer's own key.
+      LUCCY_QDRANT_URL: http://document-vectors:6333
+      LUCCY_QDRANT_SYNC_API_KEY: ${DOCUMENT_EXPLORER_QDRANT_KEY:?Pass --env-file .env.documents too, the sync writes the Document Explorer Qdrant}
+      # Link for uploaded documents (they have no source URL): DataGov's own reader.
+      # Empty falls back to luccy's Drive title search.
+      LUCCY_LIVE_UPLOAD_URL_TEMPLATE: ${LUCCY_LIVE_UPLOAD_URL_TEMPLATE:-}
+    networks: [analyzer, analyzer-vectors]
+    depends_on:
+      web:
+        condition: service_started
+      document-vectors:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    mem_limit: 4g
+
+  # Asks the gold questions of luccy and of DataGov's arms, scores every answer with luccy's own
+  # judge and posts the results to DataGov's Comparison view. Paid: see the runbook first.
+  analyzer-compare:
+    <<: *analyzer
+    profiles: [analyzer-jobs]
+    command: ["python", "-m", "luccy_qdrant.compare"]
+    environment:
+      LUCCY_URL: http://analyzer:8787
+      DATAGOV_URL: http://web:8000
+      # luccy's judge model.
+      SERVING_GEMINI_API_KEY: ${LUCCY_GEMINI_API_KEY:?Set LUCCY_GEMINI_API_KEY in .env.analyzer}
+      LUCCY_API_KEY: ${LUCCY_API_KEY:?Set LUCCY_API_KEY in .env.analyzer (openssl rand -hex 32)}
+      LUCCY_EVAL_TOKEN: ${LUCCY_EVAL_TOKEN:-}
+      # Reads DataGov's document list (the corpus luccy holds) with the sync's token.
+      LUCCY_SYNC_TOKEN: ${LUCCY_SYNC_TOKEN:?Set LUCCY_SYNC_TOKEN in .env.analyzer (openssl rand -hex 32, not the API key)}
+    networks: [analyzer]
+    depends_on:
+      analyzer:
+        condition: service_healthy
+      web:
+        condition: service_started
+    healthcheck:
+      disable: true
+    mem_limit: 2g
+    # One question takes minutes across five arms; a stop lets the ones in flight finish.
+    stop_grace_period: 600s
+
+networks:
+  analyzer:
+  analyzer-vectors:
+    internal: true
+
+volumes:
+  analyzer_logs:

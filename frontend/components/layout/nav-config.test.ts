@@ -47,3 +47,19 @@ describe("nav config", () => {
     expect(NAV_GROUPS[0].items[0].href).toBe("/dashboard");
   });
 });
+
+describe("Document Analyzer nav item", () => {
+  const analyzer = NAV_GROUPS.find((g) => g.label === "Company")?.items.find((i) => i.href === "/document-analyzer");
+  it("sits in the Company group behind its own permission", () => {
+    expect(analyzer).toMatchObject({ label: "Document Analyzer", perm: "can_view_document_analyzer" });
+    expect(analyzer?.orAdmin).toBeFalsy();
+    expect(LABEL_BY_HREF["/document-analyzer"]).toBe("Document Analyzer");
+  });
+  it("is hidden when the permission is false, even for admins", () => {
+    expect(canSee(analyzer!, { ...ALL_FALSE, can_view_document_analyzer: false })).toBe(false);
+    expect(canSee(analyzer!, { ...ALL_FALSE, is_admin: true, can_view_document_analyzer: false })).toBe(false);
+  });
+  it("is shown when the permission is true", () => {
+    expect(canSee(analyzer!, { ...ALL_FALSE, can_view_document_analyzer: true })).toBe(true);
+  });
+});

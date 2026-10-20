@@ -6,6 +6,7 @@
   "gateway_bind": "127.0.0.1:8080",
   "local_qdrant": true,
   "initial_engine_image": "yourregistry.azurecr.io/document-explorer@sha256:REPLACE_WITH_PUBLISHED_DIGEST",
+  "analyzer": {"enabled": false, "logs_volume": "datagov_platform_analyzer_logs"},
   "volumes": {
     "static": "datagov_platform_static_volume",
     "media": "datagov_platform_media_volume",

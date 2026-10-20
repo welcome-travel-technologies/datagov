@@ -29,6 +29,29 @@ def slack_settings():
         cache.clear()
 
 
+@pytest.fixture
+def analyzer(org):
+    """The Document Analyzer on and bound to ``org``."""
+    with override_settings(LUCCY_ENABLED=True, LUCCY_CHAT_ENABLED=True, LUCCY_API_URL='http://luccy:8787/',
+                           LUCCY_API_KEY='test-luccy-key-with-no-real-access', LUCCY_ORGANIZATION_ID=str(org.pk)):
+        yield
+
+
+@pytest.fixture
+def luccy(monkeypatch):
+    """luccy's ``POST /ask``, recorded; it answers ``state['body']`` (an exception is raised)."""
+    from document_analyzer import client
+    state = {'body': {'answer': 'Luccy answer', 'citations': [], 'log': '0a1b2c3d'}, 'asked': []}
+
+    def request_json(method, path, user, **kwargs):
+        state['asked'].append((path, user, kwargs['json']))
+        if isinstance(state['body'], Exception):
+            raise state['body']
+        return state['body']
+    monkeypatch.setattr(client, 'request_json', request_json)
+    return state
+
+
 def _signed_request(data, timestamp=None, signature=None):
     body = json.dumps(data).encode()
     timestamp = str(int(time.time()) if timestamp is None else timestamp)
@@ -97,37 +120,49 @@ def test_queue_failure_allows_signed_retry(org, monkeypatch):
     {'channel_type': 'mpim', 'channel': 'G123', 'user': 'U123'},
     {'channel_type': 'im', 'channel': 'D123', 'user': 'UNMAPPED'},
 ])
-def test_document_channel_and_unmapped_requests_never_retrieve(org, event, monkeypatch):
-    import knowledge.chat
-    retrieve = Mock(side_effect=AssertionError('Private retrieval must not run'))
-    monkeypatch.setattr(knowledge.chat, 'answer_document_question', retrieve)
+def test_document_channel_and_unmapped_requests_never_ask_the_analyzer(org, rw_user, analyzer, luccy, event):
+    DataPerson.objects.create(organization=org, user=rw_user, name='Mapped', slack_user_id='U123')
     output = slack_views._slack_document_reply(org, event, 'private question')
-    assert 'https://datagov.example/knowledge' in output
-    retrieve.assert_not_called()
+    assert 'https://datagov.example/document-analyzer' in output
+    assert luccy['asked'] == []
 
 
-def test_dm_identity_and_citations_are_rechecked(org, rw_user, monkeypatch):
-    import knowledge.chat
-    import knowledge.permissions
+def test_dm_needs_the_analyzer_for_that_user(org, rw_user, luccy, settings):
+    from document_analyzer.assistant import NO_ACCESS
     DataPerson.objects.create(organization=org, user=rw_user, name='Mapped', slack_user_id='U123')
-    retrieve = Mock(return_value={'answer': 'Private answer', 'citations': [{'version_id': 'revoked'}]})
-    monkeypatch.setattr(knowledge.chat, 'answer_document_question', retrieve)
-    monkeypatch.setattr(knowledge.permissions, 'filter_citations', Mock(return_value=[]))
-    output = slack_views._slack_document_reply(org, {'channel_type': 'im', 'channel': 'D123', 'user': 'U123'}, 'question')
-    assert 'Private answer' not in output
-    assert retrieve.call_args.args == (org, rw_user, 'question')
+    dm = {'channel_type': 'im', 'channel': 'D123', 'user': 'U123'}
+    assert slack_views._slack_document_reply(org, dm, 'question').startswith(NO_ACCESS)    # analyzer off
+    with override_settings(LUCCY_ENABLED=True, LUCCY_API_URL='http://luccy:8787/',
+                           LUCCY_API_KEY='test-luccy-key-with-no-real-access', LUCCY_ORGANIZATION_ID=str(org.pk)):
+        OrganizationMembership.objects.filter(user=rw_user, organization=org).update(assistant_tool_access={'analyzer': False})
+        assert slack_views._slack_document_reply(org, dm, 'question').startswith(NO_ACCESS)
+        rw_user.groups.clear()
+        OrganizationMembership.objects.filter(user=rw_user, organization=org).update(assistant_tool_access={})
+        assert slack_views._slack_document_reply(org, dm, 'question').startswith(NO_ACCESS)
+    assert luccy['asked'] == []
 
 
-def test_dm_uses_only_validated_datagov_citation_urls(org, rw_user, monkeypatch):
-    import knowledge.chat
-    import knowledge.permissions
+def test_dm_answer_is_luccys_with_only_safe_source_links(org, rw_user, analyzer, luccy):
     DataPerson.objects.create(organization=org, user=rw_user, name='Mapped', slack_user_id='U123')
-    citations = [{'datagov_url': '/knowledge/documents/abc?version=xyz&page=2', 'source_url': 'https://source.example/private'}]
-    monkeypatch.setattr(knowledge.chat, 'answer_document_question', Mock(return_value={'answer': 'Grounded answer', 'citations': citations}))
-    monkeypatch.setattr(knowledge.permissions, 'filter_citations', Mock(return_value=citations))
+    luccy['body'] = {'answer': 'Refunds take **five days**.', 'log': '0a1b2c3d', 'citations': [
+        {'id': 'conf-1', 'title': 'Refund policy', 'url': 'https://wiki.example/refunds'},
+        {'id': 'jira-9', 'title': 'Old <b>ticket</b>', 'url': 'javascript:alert(1)'}]}
+    output = slack_views._slack_document_reply(org, {'channel_type': 'im', 'channel': 'D123', 'user': 'U123'}, 'refunds?')
+    assert output.startswith('Refunds take **five days**.')
+    assert '[Refund policy](https://wiki.example/refunds)' in output
+    assert 'javascript' not in output
+    assert output.endswith('Answered by the Document Analyzer · ref 0a1b2c3d')
+    [(path, user, body)] = luccy['asked']
+    assert (path, user, body) == ('/ask', rw_user, {'question': 'refunds?'})
+
+
+def test_dm_when_the_analyzer_cannot_answer_says_so(org, rw_user, analyzer, luccy):
+    from document_analyzer.assistant import UNAVAILABLE
+    from document_analyzer.client import UpstreamError
+    DataPerson.objects.create(organization=org, user=rw_user, name='Mapped', slack_user_id='U123')
+    luccy['body'] = UpstreamError(502, 'secret upstream detail')
     output = slack_views._slack_document_reply(org, {'channel_type': 'im', 'channel': 'D123', 'user': 'U123'}, 'question')
-    assert 'https://datagov.example/knowledge/documents/abc?version=xyz&page=2' in output
-    assert 'source.example' not in output
+    assert output.startswith(UNAVAILABLE) and 'secret' not in output
 
 
 def test_worker_dispatches_document_dm_without_catalog_model_or_history(org, monkeypatch):
@@ -136,13 +171,16 @@ def test_worker_dispatches_document_dm_without_catalog_model_or_history(org, mon
     slack = Mock()
     slack.auth_test.return_value = {'team_id': 'TONE', 'user_id': 'UBOT'}
     monkeypatch.setattr(slack_views, 'WebClient', Mock(return_value=slack))
-    monkeypatch.setattr(slack_views, '_slack_document_reply', Mock(return_value='Verified answer'))
+    monkeypatch.setattr(slack_views, '_slack_document_reply', Mock(return_value='Verified **answer**'))
     catalog = Mock(side_effect=AssertionError('No catalog rewrite'))
     monkeypatch.setattr(slack_views, 'build_chatbot_agent_for_org', catalog)
     event = _event()['event'] | {'_slack_team_id': 'TONE'}
-    assert slack_views.process_slack_event(event, 'token-one') == 'Document Explorer reply sent.'
-    assert slack.chat_postMessage.call_args.kwargs['text'] == 'Verified answer'
-    assert slack.chat_postMessage.call_args.kwargs['unfurl_links'] is False
+    assert slack_views.process_slack_event(event, 'token-one') == 'Document Analyzer reply sent.'
+    posted = slack.chat_postMessage.call_args.kwargs
+    assert posted['text'] == 'Document Analyzer replied:'
+    assert 'Verified *answer*' in json.dumps(posted['blocks'])
+    assert posted['unfurl_links'] is False and posted['unfurl_media'] is False
+    assert posted['metadata']['event_type'] == 'document_explorer_answer'
     slack.conversations_replies.assert_not_called()
     catalog.assert_not_called()
 

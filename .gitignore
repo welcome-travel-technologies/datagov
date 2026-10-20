@@ -5,6 +5,7 @@
 .env.*
 !.env.sample
 !.env.documents.sample
+!.env.analyzer.sample
 !.env.local.example
 *.env
 credentials.txt

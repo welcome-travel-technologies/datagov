@@ -191,7 +191,7 @@ class PublicReadinessTests(unittest.TestCase):
             return self.response(body=b'{"name":"DataGov"}', content_type='application/json')
         if request.full_url.endswith('/api/knowledge/documents/'):
             raise urllib.error.HTTPError(request.full_url, 403, 'Forbidden', {'Content-Type': 'application/json'}, io.BytesIO(b'{"detail":"Forbidden"}'))
-        if request.full_url.endswith('/api/knowledge/internal/jobs/claim/'):
+        if '/internal/' in request.full_url.lower():
             raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, io.BytesIO(b'Not Found'))
         return self.response()
 
@@ -201,9 +201,19 @@ class PublicReadinessTests(unittest.TestCase):
             calls.append(request)
             return self.healthy_response(request, timeout)
         result = deploy.verify_public_routes('datagov.example.com', open_url=open_url)
-        self.assertEqual([r['status'] for r in result], [200, 200, 200, 403, 404])
+        self.assertEqual([r['status'] for r in result], [200, 200, 200, 403] + [404] * 6)
         self.assertTrue(all(r.full_url.startswith('https://datagov.example.com/') for r in calls))
         self.assertTrue(all('Authorization' not in r.headers and 'Cookie' not in r.headers for r in calls))
+
+    def test_internal_routes_are_probed_in_lower_upper_and_mixed_case(self):
+        paths = [r['path'] for r in deploy.verify_public_routes(
+            'datagov.example.com', open_url=lambda request, timeout: self.healthy_response(request, timeout))]
+        for prefix in ('/api/knowledge/internal/', '/api/document-analyzer/internal/'):
+            probed = [p for p in paths if p.lower().startswith(prefix)]
+            with self.subTest(prefix=prefix):
+                self.assertIn(prefix, [p[:len(prefix)] for p in probed])
+                self.assertIn(prefix.upper(), [p[:len(prefix)] for p in probed])
+                self.assertTrue(any(p[:len(prefix)] not in (prefix, prefix.upper()) for p in probed))
 
     def test_redirects_are_not_followed_or_accepted_as_readiness(self):
         self.assertIsNone(deploy.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://elsewhere.example'))
@@ -211,7 +221,8 @@ class PublicReadinessTests(unittest.TestCase):
             deploy.verify_public_routes('datagov.example.com', open_url=lambda *a, **k: self.response(302))
 
     def test_public_exposure_or_non_json_branding_fails(self):
-        for bad_path in ('/api/knowledge/documents/', '/api/knowledge/internal/jobs/claim/', '/api/branding/'):
+        # A private route answered in any one spelling (here: by a case-insensitive rewrite) fails.
+        for bad_path in ('/api/knowledge/documents/', '/api/branding/', *deploy.INTERNAL_PROBES):
             def open_url(request, timeout):
                 return self.response() if request.full_url.endswith(bad_path) else self.healthy_response(request, timeout)
             with self.subTest(path=bad_path), self.assertRaises(RuntimeError):

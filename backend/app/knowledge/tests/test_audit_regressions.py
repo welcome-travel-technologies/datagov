@@ -8,9 +8,8 @@ import pytest
 
 from knowledge.jobs import enqueue, reconcile_expired
 from knowledge.models import Document, DocumentVersion, IngestionRun
-from knowledge import chat, views
-from catalog.models import ChatMessage, ChatSession
-from .test_document_explorer import setup, claim, completion, publish, citation, upload
+from knowledge import views
+from .test_document_explorer import setup, claim, completion, upload
 
 pytestmark = pytest.mark.django_db
 
@@ -222,43 +221,3 @@ def test_retry_of_old_failed_upload_does_not_replace_newer_published_revision(se
     retry_job = claim(setup)
     assert setup['worker'].post(f"/api/knowledge/internal/jobs/{retry_job['id']}/complete/", completion(retry_job, 'Old content'), format='json').status_code == 200
     assert str(Document.objects.get(pk=document_id).current_version_id) == new_version_id
-
-
-def test_document_followup_history_keeps_authorized_evidence_without_current_prompt(setup):
-    version, _, _ = publish(setup)
-    session = ChatSession.objects.create(user=setup['user'], organization=setup['org'], mode='documents')
-    ChatMessage.objects.create(session=session, role='user', content='Explain the refunds guide')
-    ChatMessage.objects.create(session=session, role='assistant', content='Refunds explanation [1]', citations=[citation(version)])
-    ChatMessage.objects.create(session=session, role='user', content='Who approves it?')
-    history = chat._history(setup['org'], setup['user'], session, 'Who approves it?', {str(version.id)})
-    assert history == [
-        {'role': 'user', 'content': 'Explain the refunds guide'},
-        {'role': 'assistant', 'content': 'Refunds explanation [1]'},
-    ]
-
-
-def test_revoked_or_superseded_evidence_is_removed_from_followup_history(setup):
-    version, _, _ = publish(setup)
-    session = ChatSession.objects.create(user=setup['user'], organization=setup['org'], mode='documents')
-    ChatMessage.objects.create(session=session, role='user', content='Explain private refunds')
-    ChatMessage.objects.create(session=session, role='assistant', content='Private refunds explanation', citations=[citation(version)])
-    ChatMessage.objects.create(session=session, role='user', content='Who approves it?')
-    assert chat._history(setup['org'], setup['user'], session, 'Who approves it?', set()) == []
-    setup['source'].allowed_users.remove(setup['user'])
-    assert chat._history(setup['org'], setup['user'], session, 'Who approves it?', {str(version.id)}) == []
-
-
-def test_document_history_cannot_read_another_users_session(setup):
-    session = ChatSession.objects.create(user=setup['admin'], organization=setup['org'], mode='documents')
-    ChatMessage.objects.create(session=session, role='user', content='Private administrator prompt')
-    assert chat._history(setup['org'], setup['user'], session, 'Question', set()) == []
-
-
-def test_document_history_is_bounded_before_sending_to_engine(setup):
-    session = ChatSession.objects.create(user=setup['user'], organization=setup['org'], mode='documents')
-    for index in range(12):
-        ChatMessage.objects.create(session=session, role='user', content=f'{index}:' + ('x' * 10000))
-    history = chat._history(setup['org'], setup['user'], session, 'Question', set())
-    assert len(history) <= 8
-    assert sum(len(turn['content']) for turn in history) <= 16000
-    assert history[-1]['content'].startswith('11:')

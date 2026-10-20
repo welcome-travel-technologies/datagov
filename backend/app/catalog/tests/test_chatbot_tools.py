@@ -84,6 +84,21 @@ def test_agent_registers_dbt_and_bigquery_tools_conditionally():
     assert 'safe_bigquery_execute_query' not in catalog_only
 
 
+def test_document_analyzer_is_the_only_document_tool(settings):
+    settings.LUCCY_CHAT_ENABLED = True
+    class Analyzer:
+        def ask_document_analyzer(self, question: str) -> dict:
+            """Ask the Document Analyzer."""
+            return {}
+
+    on = {name.removeprefix('safe_') for name in _registered_tool_names(get_agent(document_analyzer=Analyzer()))}
+    assert 'ask_document_analyzer' in on and 'search_evidence' not in on
+    # Switched off for the member: no document tool at all, never DataGov's own search.
+    off = {name.removeprefix('safe_') for name in _registered_tool_names(
+        get_agent(document_analyzer=Analyzer(), tool_policy={'lineage': True}))}
+    assert off == {'get_lineage'}
+
+
 def test_bigquery_sql_guardrails_reject_write_queries():
     ok, cleaned = validate_read_only_sql('SELECT 1')
     assert ok is True
