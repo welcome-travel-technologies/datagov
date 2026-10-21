@@ -42,12 +42,16 @@ BLOCKED = INTERNAL_PROBES + (
     "/api/document-analyzer//internal/eval/answer/",
     "/api/document-analyzer/internal",
     "/api/document-analyzer/%69nternal/documents/",
+    # The Luccy page location never shadows a private route.
+    "/api/document-analyzer/luccy/../internal/documents/",
 )
 TO_WEB = (
     "/api/document-analyzer/status/",
-    "/api/document-analyzer/ask/stream/",
-    "/api/document-analyzer/ask/stream/job-1/",
-    "/api/document-analyzer/documents/42/",
+    # luccy's own page and its routes, behind DataGov's sign-in gate (page_gate).
+    "/api/document-analyzer/luccy/",
+    "/api/document-analyzer/luccy/chats",
+    "/api/document-analyzer/luccy/ask/stream/job-1",
+    "/api/document-analyzer/luccy/documents/42",
     "/api/branding/",
     "/api/knowledge/documents/",
     "/api/knowledge/uploads/",

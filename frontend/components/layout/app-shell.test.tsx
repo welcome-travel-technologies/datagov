@@ -34,6 +34,7 @@ describe("Luccy app shell", () => {
     mocks.pathname = pathname;
     render(<AppShell><p>Luccy app</p></AppShell>);
     expect(screen.getByRole("main")).toHaveClass("h-dvh", "overflow-hidden");
+    expect(screen.getByRole("main").className).not.toMatch(/(^|\s)(sm:)?p[xy]?-/); // edge to edge: luccy's page fills it
     expect(screen.getByText("Luccy app")).toBeInTheDocument();
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
     expect(screen.queryByRole("banner")).not.toBeInTheDocument();

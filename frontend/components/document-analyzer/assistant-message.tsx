@@ -6,7 +6,7 @@ import { isVerbatimAnalyzerAnswer, splitClosingLine, withoutImages, type ChatAna
 /** An assistant message in the web chat. When the API marks it as a verbatim
  *  Document Analyzer answer (`analyzer.verbatim`), its last line ("Answered by
  *  the Document Analyzer · ref …") shows as a small plain-text footnote and the
- *  answer's images stay off, as on the analyzer page. The text itself never
+ *  answer's images stay off, as on luccy's own page. The text itself never
  *  decides: every other message renders exactly as before, whatever it says. */
 export function AssistantMessage({ content, analyzer }: { content: string; analyzer?: ChatAnalyzerMeta | null }) {
   if (!isVerbatimAnalyzerAnswer(analyzer)) return <Markdown>{content}</Markdown>;

@@ -80,7 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === "/document-analyzer" || pathname?.startsWith("/document-analyzer/")) {
     return (
       <AuthGuard>
-        <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background px-4 py-5 sm:px-7 sm:py-7">{children}</main>
+        <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">{children}</main>
       </AuthGuard>
     );
   }

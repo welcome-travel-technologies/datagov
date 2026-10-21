@@ -31,7 +31,10 @@ services:
     environment:
       PORT: "8787"
       DATAGOV_URL: http://web:8000
-    # luccy's operational logs only: answer records, feedback and the spend ledger.
+      # luccy's own chat page, served to people only through DataGov's sign-in gate
+      # (/api/document-analyzer/luccy/, which names the person in Remote-User).
+      LUCCY_DEV_UI: "1"
+    # luccy's operational logs: answer records, feedback, the spend ledger and saved chats.
     volumes: ["analyzer-logs:/app/serving/logs"]
     # No published host port. Healthy once luccy's web process answers /health: 200, or 503
     # with its reasons (before the first analyzer-sync there is no luccy_kw yet). A release

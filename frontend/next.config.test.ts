@@ -56,7 +56,8 @@ describe("next.config rewrites", () => {
     expect(await proxiedTo("/api/me/")).toBe(`${backend}/api/me/`);
     expect(await proxiedTo("/api/me")).toBe(`${backend}/api/me`);
     expect(await proxiedTo("/api/document-analyzer/comparisons/2026-10-16T10%3A00/")).toBe(`${backend}/api/document-analyzer/comparisons/2026-10-16T10%3A00/`);
-    expect(await proxiedTo("/api/document-analyzer/ask/stream/job-1/")).toBe(`${backend}/api/document-analyzer/ask/stream/job-1/`);
+    expect(await proxiedTo("/api/document-analyzer/luccy/")).toBe(`${backend}/api/document-analyzer/luccy/`);
+    expect(await proxiedTo("/api/document-analyzer/luccy/ask/stream/job-1")).toBe(`${backend}/api/document-analyzer/luccy/ask/stream/job-1`);
     expect(await proxiedTo("/api/knowledge/internals/")).toBe(`${backend}/api/knowledge/internals/`);           // only a whole "internal" segment is private
     expect(await proxiedTo("/api/knowledge/international/x/")).toBe(`${backend}/api/knowledge/international/x/`);
     expect(await proxiedTo("/media/org/logo.png")).toBe(`${backend}/media/org/logo.png`);

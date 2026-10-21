@@ -37,7 +37,6 @@ TOKEN_DOORS = {'LUCCY_API_KEY': 'every analyzer endpoint', 'LUCCY_SYNC_TOKEN': '
                'LUCCY_EVAL_TOKEN': 'the comparison endpoints'}
 _reported_token_problems = set()
 ASK_WINDOW_SECONDS = 3600
-JOB_OWNER_SECONDS = 6 * 3600  # Far longer than an answer takes; luccy keeps few jobs.
 RATE_LIMITED = 'You have reached the hourly limit of Document Analyzer questions. Please try again later.'
 
 
@@ -170,17 +169,3 @@ def return_ask(user):
     except ValueError:  # Its hour has ended.
         return
     cache.touch(key, ASK_WINDOW_SECONDS)
-
-
-def _job_key(job):
-    return f'document_analyzer:job:{job}'
-
-
-def remember_job(job, user):
-    """Record who started luccy job ``job``: luccy does not check the owner of a bearer
-    re-attach, so DataGov does."""
-    cache.set(_job_key(job), user.pk, timeout=JOB_OWNER_SECONDS)
-
-
-def owns_job(user, job):
-    return cache.get(_job_key(job)) == user.pk

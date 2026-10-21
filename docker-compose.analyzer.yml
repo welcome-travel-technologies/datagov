@@ -66,9 +66,11 @@ services:
   analyzer:
     <<: *analyzer
     # No command: the image's own, python -m luccy_qdrant.serve (luccy's web app on 8787).
-    # LUCCY_DEV_UI stays unset, so only luccy's bearer-keyed API answers.
     environment:
       PORT: "8787"
+      # luccy's own chat page, served to people only through DataGov's sign-in gate
+      # (/api/document-analyzer/luccy/, which names the person in Remote-User).
+      LUCCY_DEV_UI: "1"
       SERVING_GEMINI_API_KEY: ${LUCCY_GEMINI_API_KEY:?Set LUCCY_GEMINI_API_KEY in .env.analyzer}
       LUCCY_API_KEY: ${LUCCY_API_KEY:?Set LUCCY_API_KEY in .env.analyzer (openssl rand -hex 32)}
       # It only searches: Qdrant's read-only key, which Qdrant refuses for any write.
@@ -83,7 +85,7 @@ services:
     expose:
       - "8787"
     volumes:
-      # luccy's operational logs only: answer records, feedback and the spend ledger.
+      # luccy's operational logs: answer records, feedback, the spend ledger and saved chats.
       - analyzer_logs:/app/serving/logs
     networks: [analyzer, analyzer-vectors]
     depends_on:

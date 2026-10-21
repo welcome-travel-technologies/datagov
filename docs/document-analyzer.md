@@ -15,9 +15,10 @@ is the only place the documents live.
   The protected admin comparison still exercises the full chat integration without
   enabling it for users or changing their preferences.
 - **Open the independent app in a new window.** **Luccy (Beta)** is the last entry
-  in the Company menu. It opens with its own title and full-height interface,
-  using the same sign-in and access checks. The comparison is an operator script;
-  it has no frontend, menu item or browser results endpoint.
+  in the Company menu. It opens in its own tab, without DataGov's sidebar, and shows
+  **luccy's own chat page** exactly as the standalone app does (its look, chats and history,
+  sources, feedback) behind DataGov's sign-in and access checks. The comparison is an
+  operator script; it has no frontend, menu item or browser results endpoint.
 - **When chat is enabled, the Document Analyzer answers every document question in DataGov**: on its
   `/document-analyzer` page, in the AI Assistant chat (its only document tool), in earlier
   documents-mode chats and in Slack's `documents:` direct messages. The Document Explorer
@@ -40,7 +41,7 @@ flowchart LR
     B[Browser] --> N[nginx]
     N -->|/api/document-analyzer/*| W[DataGov web]
     K[DataGov worker<br/>AI Assistant tool]
-    W -->|Bearer LUCCY_API_KEY| A[analyzer<br/>luccy + adapter :8787]
+    W -->|page routes: Remote-User<br/>API: Bearer LUCCY_API_KEY| A[analyzer<br/>luccy + adapter :8787]
     K -->|Bearer LUCCY_API_KEY| A
     E[document-worker<br/>the engine] -->|chunks, vectors, ordinal| C
     subgraph Q[Qdrant: document-vectors, the only document store]
@@ -81,14 +82,25 @@ flowchart LR
 
 What DataGov does around each answer:
 
-- **The browser never talks to luccy.** DataGov's web process checks the user, then calls
-  luccy's bearer API (`POST /ask/stream`, `GET /ask/stream/{job}`, `GET /documents/{id}`,
-  `POST /feedback`) with `Authorization: Bearer LUCCY_API_KEY` and
-  `Remote-User: datagov-<user id>`.
+- **Luccy (Beta) is luccy's own page behind DataGov's sign-in gate.** The analyzer runs with
+  `LUCCY_DEV_UI=1`, which opens luccy's chat page (`serving/chat.html`) and its page routes.
+  `/document-analyzer` shows that page in a full-window frame from
+  `/api/document-analyzer/luccy/` (`backend/app/document_analyzer/page_gate.py`). For every
+  request the gate checks the DataGov session and analyzer access, then relays it with
+  `Remote-User` set to the person's email (else their username, else `datagov-<user id>`) and
+  no cookie or origin of the browser. luccy saves each person's chats under that name in the
+  analyzer's logs volume.
+- **The gate relays only luccy's page routes** (the page, its fonts, chats, ask/stream,
+  cancel, feedback, notes, documents, records); anything else answers 404. Writes must come
+  from DataGov's own origin (the page sends no CSRF token, so the `Origin` check stands in for
+  it), and each question (`POST chats/<id>/ask`) counts against `LUCCY_MAX_ASKS_PER_HOUR`
+  per person (60; a question luccy refuses does not count).
+- **The AI Assistant tool** calls luccy's bearer API with `Authorization: Bearer
+  LUCCY_API_KEY` and `Remote-User: datagov-<user id>`; DataGov keeps that chat's history and
+  sends it with each question.
 - **Answers stream as server-sent events.** luccy sends a `: ping` every 15 s. The nginx
-  location for `/api/document-analyzer/ask/stream` passes each event through at once, with a
+  location for `/api/document-analyzer/luccy/` passes each event through at once, with a
   360 s read timeout. DataGov waits up to `LUCCY_STREAM_TIMEOUT` (330 s).
-- **DataGov keeps the conversation history** and sends it with each question.
 - **luccy's own messages reach the reader**, for example a reached spend cap (429) or "busy"
   (503 with `Retry-After`). The AI Assistant tool waits out a "busy" of up to 15 s once, and
   never asks past its chat turn's own time limit.
@@ -147,13 +159,13 @@ the analyzer searches with its read-only key `DOCUMENT_EXPLORER_QDRANT_READ_ONLY
   or remove that mapping first (delete the `ports:` of `db`, or add an override file with
   `services: {db: {ports: !reset []}}`).
 - **One volume, for logs only.** `analyzer_logs` at `/app/serving/logs` holds luccy's answer
-  records, feedback and spend ledger. It holds no document data.
+  records, feedback, spend ledger and each person's saved chats. It holds no document data.
 - **luccy talks REST to Qdrant** on 6333: `analyzer` with Qdrant's read-only key, which Qdrant
   answers with 403 for any write; `analyzer-sync` with the write key. `analyzer-compare` gets
   no Qdrant key and is not on `analyzer-vectors`.
 - **Hardened containers.** Every luccy container drops all Linux capabilities and runs with
-  `no-new-privileges`. `LUCCY_DEV_UI` is never set, so luccy's own chat page and page-only
-  routes stay closed.
+  `no-new-privileges`. Only `analyzer` sets `LUCCY_DEV_UI=1` (luccy's chat page); with no
+  host port, people reach it only through DataGov's gate.
 
 ## Set it up with Compose
 
@@ -242,7 +254,7 @@ except e.HTTPError as x: print(x.code, x.read().decode())"
 
 As a member of the organization, `GET /api/document-analyzer/status/` should say the analyzer
 is available and healthy. Open **Luccy (Beta)** at the bottom of the Company menu;
-the independent app opens in a new window.
+luccy's own chat page opens in a new window.
 
 ## Keep it in sync
 
@@ -384,7 +396,7 @@ tokens. From the public edge those paths answer 404, in three independent layers
    `~* ^/+api/+(document-analyzer|knowledge)/+internal(/|$)`, matched on nginx's decoded and
    normalized path, so upper or mixed case, repeated slashes, `%`-escapes and `.`/`..`
    segments do not slip past. It is the first regex in `nginx.conf` and no `^~` prefix covers
-   `/api/`, so it wins over `location /api/` and the answer-stream location.
+   `/api/`, so it wins over `location /api/` and the Luccy page location.
 2. **The frontend** never proxies a path with an `internal` segment, in any letter case or
    percent-encoding, so a private path that reaches the SPA in any spelling cannot reach
    Django through a Next.js rewrite.
@@ -396,7 +408,7 @@ tokens. From the public edge those paths answer 404, in three independent layers
 HTTPS in lower, upper and mixed case (`INTERNAL_PROBES`) and fails unless each answers 404.
 CI also runs `deploy/azure/check_gateway.py`: it starts the gateway's nginx with `nginx.conf`
 against a dummy upstream and proves that every probed spelling gets nginx's own 404 while the
-API, the answer stream and the SPA still reach their upstreams.
+API, the Luccy page routes and the SPA still reach their upstreams.
 
 ### Who holds which secret
 
@@ -405,7 +417,7 @@ in the overlays) and on the VM (one env file per container in `/opt/datagov/shar
 
 | Secret | Held by | What it opens |
 |---|---|---|
-| `LUCCY_API_KEY` | `web`, `worker`, `analyzer`, `analyzer-compare` | luccy's API. luccy refuses any request without it. DataGov asks with it; the comparison asks luccy directly (arms A and A2). |
+| `LUCCY_API_KEY` | `web`, `worker`, `analyzer`, `analyzer-compare` | luccy's API. luccy refuses any API request without it. DataGov asks with it; the comparison asks luccy directly (arms A and A2). luccy's page routes (`LUCCY_DEV_UI`) take `Remote-User` instead and are reached only through DataGov's gate. |
 | `LUCCY_SYNC_TOKEN` | `web`, `worker`, `analyzer-sync`, `analyzer-compare` | DataGov's document list for the bound organization (identities, no document text). The comparison reads the list to know luccy's corpus. |
 | `LUCCY_EVAL_TOKEN` | `web`, `worker`, `analyzer-compare` (only for the comparison) | DataGov's answer paths for the comparison and its results store. They answer 404 unless `LUCCY_EVAL_ENABLED=True`. |
 | luccy's Gemini key (`SERVING_GEMINI_API_KEY`) | `analyzer`, `analyzer-compare` | Paid model calls: answers and query embeddings; the comparison's judge. |
@@ -441,8 +453,8 @@ stay as they are.
 ### No host ports, no browser access
 
 Only DataGov's backend reaches luccy, and it sets `Remote-User` itself, so a browser cannot
-forge it. luccy's keyless routes (`/health`, `/docs`, `/openapi.json`) are reachable only
-inside the Compose networks.
+forge it or open another person's chats. luccy's keyless routes (`/health`, `/docs`,
+`/openapi.json` and its page routes) are reachable only inside the Compose networks.
 
 ### Secrets stay in ignored files
 
@@ -582,7 +594,8 @@ Steps:
 - **Logs grow.** luccy writes one JSON record per answer into a day folder of
   `analyzer_logs` and never deletes them. Check `du -sh` on the volume after the first week. To
   prune, delete only day folders from before the current month (keep the last day of the
-  previous month, which the monthly spend cap reads), and keep `feedback/`.
+  previous month, which the monthly spend cap reads), and keep `feedback/` and the saved
+  chats.
 
 ## Rollback
 
@@ -635,7 +648,7 @@ Steps:
    - VM: set `"analyzer": {"enabled": false}` in `deployment.json` and release. A release does
      not remove containers it no longer runs, so then remove it by hand:
      `docker rm -f datagov_platform-analyzer-1` (the project name from `deployment.json`).
-4. **Optional:** remove the `analyzer_logs` volume (it holds answer records and feedback) and,
+4. **Optional:** remove the `analyzer_logs` volume (it holds answer records, feedback and saved chats) and,
    on a Compose host, the networks `datagov_platform_analyzer` and
    `datagov_platform_analyzer-vectors`.
 
@@ -657,6 +670,8 @@ analyzer`; on the VM, revert on `main` and release.
 | A release log says `analyzer not healthy; DataGov release complete` | DataGov is released; the analyzer did not become healthy in 10 minutes. See `docker logs` of the analyzer, fix, and release again. |
 | The status page says "not set up" | `LUCCY_ORGANIZATION_ID` is not a number, or `LUCCY_API_URL` or `LUCCY_API_KEY` is empty on `web`. |
 | Answers miss a document DataGov has | The document arrived after the last sync (run the sync), its collection is restricted (never synced), or the sync left its version out (`skipped_versions` in the sync's report). |
+| Luccy (Beta) shows a bare "not found" instead of luccy's chat page | The analyzer runs without `LUCCY_DEV_UI=1`, so luccy's page routes are closed. Set it on `analyzer` and recreate it. |
+| "hourly limit of Document Analyzer questions" | That person asked `LUCCY_MAX_ASKS_PER_HOUR` questions this hour (page and assistant tool together). |
 | 429 for everyone | luccy's spend cap is reached. `/health` shows the totals under `spend`. |
 | 503 "busy" | Two answers are already running. |
 | A deploy fails with "ANALYZER_IMAGE_ENABLED" | `deployment.json` enables the analyzer, but no release has built its image yet. Set the variables and release. |

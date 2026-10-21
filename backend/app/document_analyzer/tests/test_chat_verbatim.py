@@ -415,8 +415,8 @@ def test_chat_conversation_ids_are_unguessable_and_per_session(setup):
     assert one != views._analyzer_turn(second, setup['org'], 'Q').conversation
     assert one.startswith('dgchat-') and len(one) == 47 <= 64
     assert one != f'dgchat-{first.pk}'
-    # A page thread of the same number is another conversation.
-    assert analyzer_views.page_conversation(setup['reader'], str(first.pk)) != one
+    # Another kind of thread with the same number is another conversation.
+    assert analyzer_views.conversation_id('page', first.pk) != one
 
 
 def test_condense_history_matches_luccys_page():
