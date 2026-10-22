@@ -107,7 +107,7 @@ def test_signed_out_and_no_access(setup, luccy):
     assert response.status_code == 302 and response['Location'] == '/login?next=/document-analyzer'
     assert call(None, 'GET', GATE + 'chats', headers=SAME)[0].status_code == 401
     response, body = call(setup['plain'], 'GET', GATE + 'chats', headers=SAME)
-    assert response.status_code == 403 and 'Company access' in json.loads(body)['error']
+    assert response.status_code == 403 and 'Analytics access' in json.loads(body)['error']
     # Another organization's member, and a superuser who is not a member, find nothing.
     for who in ('outsider', 'superuser'):
         for path in ('', 'chats'):
