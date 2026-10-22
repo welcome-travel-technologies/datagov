@@ -293,9 +293,10 @@ def test_tool_settings_report_availability_by_organization(setup):
     # The analyzer is the one documents tool: the former document search group is gone.
     assert 'documents' not in [tool['id'] for tool in client_tools(setup['reader'])]
     assert reader['available'] is True and reader['effective'] is True
-    # A member without Company access sees "not enabled", never a switch that does nothing.
-    plain = analyzer(setup['plain'])
-    assert plain['available'] is False and plain['effective'] is False
+    # A member without Analytics access sees "not enabled", never a switch that does nothing.
+    for who in ('plain', 'company_only'):
+        denied = analyzer(setup[who])
+        assert denied['available'] is False and denied['effective'] is False
     outsider = analyzer(setup['outsider'])
     assert outsider['available'] is False and outsider['effective'] is False
 

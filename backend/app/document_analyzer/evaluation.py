@@ -238,7 +238,7 @@ def _chat_analyzer_only(org, user, question, conversation):
     from catalog import views as chat
     if assistant.tool_for(org, user) is None:
         raise Unavailable('The eval user cannot use the Document Analyzer: it must be on and set up, and the user '
-                          'an organization admin or in the Company group.')
+                          'an organization admin or in the Analytics group.')
     timeout = int(settings.LUCCY_STREAM_TIMEOUT)
     turn = assistant.ChatTurn(question, conversation=conversation, capped=False, tool_timeout=timeout)
     outcome = chat.run_agent_turn(org, user, question, [], analyzer_turn=turn, tool_policy=_only('analyzer'),

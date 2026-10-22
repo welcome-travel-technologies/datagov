@@ -116,7 +116,7 @@ def tool_settings(org, membership):
         'lineage': True, 'powerbi_live': org.powerbi_live_tools_enabled and org.powerbi_tools_enabled,
         'bigquery_live': org.bigquery_live_tools_enabled,
         # luccy holds one company's corpus: only its bound organization gets the tool,
-        # and only for members with page access there (admin or Company group).
+        # and only for members with page access there (admin or Analytics group).
         'analyzer': settings.LUCCY_CHAT_ENABLED and _analyzer_available(org, membership.user),
     }
     effective = member_policy(org, membership.user)

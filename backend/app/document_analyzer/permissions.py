@@ -2,8 +2,7 @@
 
 luccy holds ONE company's corpus and knows nothing of DataGov organizations, so the
 binding lives here: only active members of ``LUCCY_ORGANIZATION_ID`` who are that
-organization's admins or in the Company group may ask (the same rule as
-``knowledge.permissions.can_read``). An empty organization id means nobody, and
+organization's admins or in the Analytics group may ask. An empty organization id means nobody, and
 superusers are not exempt from the binding or the access rule.
 
 luccy has no per-document access, so it only ever holds the organization's collections
@@ -25,6 +24,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.cache import cache
 
+from catalog.access import ANALYTICS
 from catalog.models import OrganizationMembership
 
 logger = logging.getLogger(__name__)
@@ -118,9 +118,9 @@ def evaluate(user):
     ).select_related('organization').first()
     if membership is None:
         return None, 404, "The Document Analyzer only answers for the organization whose documents it holds."
-    if not (membership.is_admin or user.groups.filter(name='Company').exists()):
+    if not (membership.is_admin or user.groups.filter(name=ANALYTICS).exists()):
         return (membership.organization, 403,
-                'You need Company access to use the Document Analyzer. Ask an organization administrator.')
+                'You need Analytics access to use the Document Analyzer. Ask an organization administrator.')
     return membership.organization, 200, ''
 
 

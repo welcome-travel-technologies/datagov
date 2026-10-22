@@ -15,7 +15,7 @@ is the only place the documents live.
   The protected admin comparison still exercises the full chat integration without
   enabling it for users or changing their preferences.
 - **Open the independent app in a new window.** **Luccy (Beta)** is the last entry
-  in the Company menu. It opens in its own tab, without DataGov's sidebar, and shows
+  in the Analytics menu. It opens in its own tab, without DataGov's sidebar, and shows
   **luccy's own chat page** exactly as the standalone app does (its look, chats and history,
   sources, feedback) behind DataGov's sign-in and access checks. The comparison is an
   operator script; it has no frontend, menu item or browser results endpoint.
@@ -253,7 +253,7 @@ except e.HTTPError as x: print(x.code, x.read().decode())"
 ```
 
 As a member of the organization, `GET /api/document-analyzer/status/` should say the analyzer
-is available and healthy. Open **Luccy (Beta)** at the bottom of the Company menu;
+is available and healthy. Open **Luccy (Beta)** at the bottom of the Analytics menu;
 luccy's own chat page opens in a new window.
 
 ## Keep it in sync
@@ -434,7 +434,7 @@ the read-only key.
 ### Bound to one organization
 
 luccy has no idea of DataGov organizations. DataGov serves it only to active members of
-`LUCCY_ORGANIZATION_ID` who are its organization admins or in its **Company** group.
+`LUCCY_ORGANIZATION_ID` who are its organization admins or in its **Analytics** group (the Company group alone is not enough).
 Superusers are not exempt. Every endpoint checks this on the server, and `/api/me/` reports it
 as `can_view_document_analyzer`.
 
@@ -541,7 +541,7 @@ How the arms are compared (`analyzer/luccy_qdrant/compare/metrics.py`):
 Steps:
 
 1. Set `LUCCY_EVAL_ENABLED=True`, `LUCCY_EVAL_TOKEN` and `LUCCY_EVAL_USER_ID` (an active member
-   of the organization, an admin or in the Company group), then recreate `web` and `worker`
+   of the organization, an admin or in the Analytics group), then recreate `web` and `worker`
    (`$C up -d web worker`, or a release on the VM; there `analyzer-compare.env` too).
 2. Make sure the last sync is current, and that luccy's day cap leaves room: luccy's answers in
    arms A, A2 and C count against `LUCCY_SPEND_DAY_CAP_USD`. Raise it for the day if needed

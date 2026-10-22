@@ -23,21 +23,23 @@ def setup(settings, db):
     settings.LUCCY_API_KEY = 'test-luccy-key-with-no-real-access'
     settings.LUCCY_ORGANIZATION_ID = str(org.pk)
     settings.LUCCY_MAX_ASKS_PER_HOUR = 60
+    analytics, _ = Group.objects.get_or_create(name='Analytics')
     company, _ = Group.objects.get_or_create(name='Company')
 
-    def make(name, organization=None, admin=False, in_company=False, **extra):
+    def make(name, organization=None, admin=False, groups=(), **extra):
         user = CustomUser.objects.create_user(username=name, email=f'{name}@analyzer.test', password='pw', **extra)
         if organization is not None:
             OrganizationMembership.objects.create(organization=organization, user=user, is_admin=admin)
-        if in_company:
-            user.groups.add(company)
+        user.groups.add(*groups)
         return user
 
     users = {
-        'reader': make('reader', org, in_company=True),
+        'reader': make('reader', org, groups=[analytics]),
         'admin': make('orgadmin', org, admin=True),
         'plain': make('plain', org),
-        'outsider': make('outsider', other, admin=True, in_company=True),
+        # Company tier only: the old rule let these in, Luccy is Analytics-only now.
+        'company_only': make('companyonly', org, groups=[company]),
+        'outsider': make('outsider', other, admin=True, groups=[analytics]),
         'superuser': make('root', is_superuser=True, is_staff=True),
     }
     yield {'org': org, 'other': other, **users}

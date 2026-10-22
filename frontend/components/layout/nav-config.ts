@@ -55,7 +55,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/powerbi/catalog", label: "PowerBI Catalog", icon: Database, perm: "can_view_powerbi", orAdmin: true },
       { href: "/powerbi/reports", label: "Report Health & Usage", icon: BarChart3, perm: "can_view_reports" },
       { href: "/powerbi/metrics-map", label: "Metrics Map", icon: Sigma, perm: "can_view_powerbi", orAdmin: true },
-      { href: "/document-analyzer", label: "Luccy (Beta)", icon: FileSearch, perm: "can_view_document_analyzer", openInNewTab: true },
     ],
   },
   {
@@ -67,6 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dbt/catalog", label: "dbt Catalog", icon: Boxes, perm: "can_view_dbt", orAdmin: true },
       { href: "/dbt/cleanup", label: "dbt Cleanup", icon: Trash2, perm: "can_view_dbt", orAdmin: true },
       { href: "/dbt/top-assets", label: "dbt Top Assets", icon: TrendingUp, perm: "can_view_dbt", orAdmin: true },
+      { href: "/document-analyzer", label: "Luccy (Beta)", icon: FileSearch, perm: "can_view_document_analyzer", openInNewTab: true },
     ],
   },
 ];

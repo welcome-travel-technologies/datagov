@@ -74,11 +74,12 @@ def test_other_organization_and_unbound_superuser_get_404(setup, luccy, who):
     assert luccy['requests'] == []
 
 
-def test_member_without_company_access_gets_403(setup, luccy):
+@pytest.mark.parametrize('who', ['plain', 'company_only'])
+def test_member_without_analytics_access_gets_403(setup, luccy, who):
     luccy['handler'] = chats_reply
-    status, body = gate(setup['plain'])
-    assert status == 403 and 'Company access' in body['error']
-    assert 'Company access' in api(setup['plain']).get(f'{BASE}/status/').json()['reason']
+    status, body = gate(setup[who])
+    assert status == 403 and 'Analytics access' in body['error']
+    assert 'Analytics access' in api(setup[who]).get(f'{BASE}/status/').json()['reason']
     assert luccy['requests'] == []
 
 
@@ -90,12 +91,12 @@ def test_unauthenticated_is_refused(setup, luccy):
     assert luccy['requests'] == []
 
 
-def test_org_admin_without_company_group_may_use_it(setup, luccy):
+def test_org_admin_without_analytics_group_may_use_it(setup, luccy):
     luccy['handler'] = chats_reply
     assert gate(setup['admin']) == (200, {'chats': []})
 
 
-def test_bound_superuser_member_needs_company_access_like_anyone(setup, luccy):
+def test_bound_superuser_member_needs_analytics_access_like_anyone(setup, luccy):
     from catalog.models import OrganizationMembership
     membership = OrganizationMembership.objects.create(organization=setup['org'], user=setup['superuser'])
     luccy['handler'] = chats_reply
@@ -106,7 +107,7 @@ def test_bound_superuser_member_needs_company_access_like_anyone(setup, luccy):
     assert gate(setup['superuser'])[0] == 200
 
 
-@pytest.mark.parametrize('who', ['reader', 'admin', 'plain', 'outsider', 'superuser'])
+@pytest.mark.parametrize('who', ['reader', 'admin', 'plain', 'company_only', 'outsider', 'superuser'])
 def test_status_and_the_gate_agree(setup, luccy, who):
     luccy['handler'] = chats_reply
     available = api(setup[who]).get(f'{BASE}/status/').json()['available']
@@ -229,7 +230,8 @@ def test_status_reports_unhealthy_and_member_tool_policy(setup, luccy):
 
 
 @pytest.mark.parametrize('who, change, reason_part', [
-    ('plain', {}, 'Company access'),
+    ('plain', {}, 'Analytics access'),
+    ('company_only', {}, 'Analytics access'),
     ('outsider', {}, 'organization'),
     ('reader', {'LUCCY_ENABLED': False}, 'turned off'),
     ('reader', {'LUCCY_ORGANIZATION_ID': ''}, 'not set up'),
